@@ -1,0 +1,8 @@
+{
+  "name": "مبيعات",
+  "description": "نظام مبيعات وإدارة مخازن متكامل مع تقارير وإحصائيات متقدمة مدعومة بالذكاء الاصطناعي.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">نظام المبيعات</string>
+    <string name="title_activity_main">نظام المبيعات</string>
+    <string name="package_name">com.sales.app</string>
+    <string name="custom_url_scheme">com.sales.app</string>
+</resources>

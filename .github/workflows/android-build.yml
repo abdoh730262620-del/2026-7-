@@ -1,0 +1,67 @@
+name: Build Android APK
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Android APK (Capacitor)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install NPM Dependencies
+        run: |
+          rm -f package-lock.json
+          npm install --no-audit --no-fund --legacy-peer-deps
+
+      - name: Build Web Application
+        run: npm run build
+
+      - name: Sync Capacitor with Android Platform
+        run: npx cap sync android
+
+      - name: Set up JDK 21 (Required for modern Android builds)
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'zulu'
+          cache: 'gradle'
+
+      - name: Generate Gradle Wrapper JAR (Isolated from Android build evaluation)
+        run: |
+          mkdir temp-gradle-wrapper
+          cd temp-gradle-wrapper
+          touch settings.gradle
+          gradle wrapper --gradle-version 8.14.3
+          cp gradle/wrapper/gradle-wrapper.jar ../android/gradle/wrapper/
+          cd ..
+          rm -rf temp-gradle-wrapper
+          chmod +x android/gradlew
+
+      - name: Build Debug APK
+        run: |
+          cd android
+          ./gradlew assembleDebug
+
+      - name: Upload Compiled Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: sales-system-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 7

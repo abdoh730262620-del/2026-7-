@@ -1,0 +1,287 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "System user with roles",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" },
+        "name": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "cashier", "inventory"] },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["email", "name", "role", "isActive", "createdAt"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Product in inventory",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "barcode": { "type": "string" },
+        "price": { "type": "number" },
+        "cost": { "type": "number" },
+        "quantity": { "type": "number" },
+        "lowStockAlert": { "type": "number" },
+        "expiryDate": { "type": "string" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["name", "barcode", "price", "cost", "quantity", "createdAt"]
+    },
+    "Customer": {
+      "title": "Customer",
+      "description": "Customer entity",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "balance": { "type": "number" },
+        "points": { "type": "number" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["name", "phone", "balance", "createdAt"]
+    },
+    "Supplier": {
+      "title": "Supplier",
+      "description": "Supplier entity",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "balance": { "type": "number" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["name", "phone", "balance", "createdAt"]
+    },
+    "SaleInvoice": {
+      "title": "Sale Invoice",
+      "description": "Sales invoice",
+      "type": "object",
+      "properties": {
+        "invoiceNumber": { "type": "string" },
+        "date": { "type": "number" },
+        "customerId": { "type": "string" },
+        "customerName": { "type": "string" },
+        "items": { "type": "array" },
+        "subtotal": { "type": "number" },
+        "discountPercent": { "type": "number" },
+        "discountAmount": { "type": "number" },
+        "total": { "type": "number" },
+        "paymentType": { "type": "string", "enum": ["cash", "credit"] },
+        "status": { "type": "string", "enum": ["active", "cancelled"] },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "commissionPercent": { "type": "number" },
+        "commissionAmount": { "type": "number" }
+      },
+      "required": ["invoiceNumber", "date", "items", "total", "paymentType", "status", "createdBy", "createdAt"]
+    },
+    "PurchaseInvoice": {
+      "title": "Purchase Invoice",
+      "description": "Purchase invoice",
+      "type": "object",
+      "properties": {
+        "invoiceNumber": { "type": "string" },
+        "date": { "type": "number" },
+        "supplierId": { "type": "string" },
+        "items": { "type": "array" },
+        "total": { "type": "number" },
+        "paymentType": { "type": "string", "enum": ["cash", "credit"] },
+        "status": { "type": "string", "enum": ["active", "cancelled"] },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["invoiceNumber", "date", "items", "total", "paymentType", "status", "createdBy", "createdAt"]
+    },
+    "Quotation": {
+      "title": "Quotation",
+      "description": "Price quotation",
+      "type": "object",
+      "properties": {
+        "quotationNumber": { "type": "string" },
+        "date": { "type": "number" },
+        "customerId": { "type": "string" },
+        "customerName": { "type": "string" },
+        "items": { "type": "array" },
+        "total": { "type": "number" },
+        "discountPercent": { "type": "number" },
+        "status": { "type": "string", "enum": ["draft", "converted"] },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["quotationNumber", "date", "items", "total", "status", "createdBy", "createdAt"]
+    },
+    "CashTransaction": {
+      "title": "Cash Transaction",
+      "description": "Transaction in cash drawer",
+      "type": "object",
+      "properties": {
+        "date": { "type": "number" },
+        "amount": { "type": "number" },
+        "type": { "type": "string", "enum": ["in", "out"] },
+        "category": { "type": "string" },
+        "description": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["date", "amount", "type", "category", "createdBy", "createdAt"]
+    },
+    "Voucher": {
+      "title": "Voucher",
+      "description": "Payment or receipt voucher",
+      "type": "object",
+      "properties": {
+        "date": { "type": "number" },
+        "amount": { "type": "number" },
+        "type": { "type": "string", "enum": ["receipt", "payment"] },
+        "partyId": { "type": "string" },
+        "partyType": { "type": "string", "enum": ["customer", "supplier"] },
+        "partyName": { "type": "string" },
+        "description": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["date", "amount", "type", "partyId", "partyType", "partyName", "createdBy", "createdAt"]
+    },
+    "InventoryLog": {
+      "title": "Inventory Log",
+      "description": "Log of inventory changes",
+      "type": "object",
+      "properties": {
+        "date": { "type": "number" },
+        "productId": { "type": "string" },
+        "changeAmount": { "type": "number" },
+        "reason": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["date", "productId", "changeAmount", "reason", "createdBy", "createdAt"]
+    },
+    "InventoryAdjustment": {
+      "title": "Inventory Adjustment",
+      "description": "Manual inventory adjustment",
+      "type": "object",
+      "properties": {
+        "productId": { "type": "string" },
+        "productName": { "type": "string" },
+        "oldQuantity": { "type": "number" },
+        "newQuantity": { "type": "number" },
+        "difference": { "type": "number" },
+        "reason": { "type": "string" },
+        "timestamp": { "type": "number" },
+        "createdBy": { "type": "string" }
+      },
+      "required": ["productId", "productName", "oldQuantity", "newQuantity", "difference", "reason", "timestamp", "createdBy"]
+    },
+    "LoyaltyLog": {
+      "title": "Loyalty Log",
+      "description": "Log of loyalty points usage or earning",
+      "type": "object",
+      "properties": {
+        "customerId": { "type": "string" },
+        "customerName": { "type": "string" },
+        "points": { "type": "number" },
+        "type": { "type": "string", "enum": ["earn", "use"] },
+        "reason": { "type": "string" },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["customerId", "customerName", "points", "type", "timestamp"]
+    },
+    "SystemLog": {
+      "title": "System Log",
+      "description": "System operation log",
+      "type": "object",
+      "properties": {
+        "date": { "type": "number" },
+        "action": { "type": "string" },
+        "userId": { "type": "string" }
+      },
+      "required": ["date", "action", "userId"]
+    },
+    "AppSettings": {
+      "title": "App Settings",
+      "description": "Global application configuration",
+      "type": "object",
+      "properties": {
+        "isAiEnabled": { "type": "boolean" },
+        "isAdvancedToolsEnabled": { "type": "boolean" },
+        "isOverdueAlertEnabled": { "type": "boolean" },
+        "overdueDaysThreshold": { "type": "number" },
+        "isLoyaltyEnabled": { "type": "boolean" },
+        "loyaltyPointsPerAmount": { "type": "number" },
+        "includeCreditInLoyalty": { "type": "boolean" },
+        "isVatEnabled": { "type": "boolean" },
+        "vatPercent": { "type": "number" },
+        "isWhatsAppEnabled": { "type": "boolean" },
+        "isExpiryTrackingEnabled": { "type": "boolean" },
+        "expiryAlertMonths": { "type": "number" },
+        "isCommissionEnabled": { "type": "boolean" },
+        "defaultCommissionPercent": { "type": "number" },
+        "isQuotationsEnabled": { "type": "boolean" },
+        "isMultiCurrencyEnabled": { "type": "boolean" },
+        "exchangeRate": { "type": "number" }
+      },
+      "required": ["isAiEnabled", "isAdvancedToolsEnabled", "isOverdueAlertEnabled", "overdueDaysThreshold", "isLoyaltyEnabled"]
+    }
+  },
+  "firestore": {
+    "/settings/app_config": {
+      "schema": "AppSettings",
+      "description": "Global app configuration"
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "System users"
+    },
+    "/products/{productId}": {
+      "schema": { "$ref": "#/entities/Product" },
+      "description": "Inventory products"
+    },
+    "/customers/{customerId}": {
+      "schema": { "$ref": "#/entities/Customer" },
+      "description": "Customers"
+    },
+    "/suppliers/{supplierId}": {
+      "schema": { "$ref": "#/entities/Supplier" },
+      "description": "Suppliers"
+    },
+    "/sales/{saleId}": {
+      "schema": { "$ref": "#/entities/SaleInvoice" },
+      "description": "Sales invoices"
+    },
+    "/purchases/{purchaseId}": {
+      "schema": { "$ref": "#/entities/PurchaseInvoice" },
+      "description": "Purchase invoices"
+    },
+    "/quotations/{quotationId}": {
+      "schema": { "$ref": "#/entities/Quotation" },
+      "description": "Quotations"
+    },
+    "/cash/{transactionId}": {
+      "schema": { "$ref": "#/entities/CashTransaction" },
+      "description": "Cash drawer transactions"
+    },
+    "/vouchers/{voucherId}": {
+      "schema": { "$ref": "#/entities/Voucher" },
+      "description": "Payment or receipt vouchers"
+    },
+    "/inventoryLogs/{logId}": {
+      "schema": { "$ref": "#/entities/InventoryLog" },
+      "description": "Inventory change logs"
+    },
+    "/adjustments/{adjustmentId}": {
+      "schema": { "$ref": "#/entities/InventoryAdjustment" },
+      "description": "Inventory adjustments"
+    },
+    "/loyalty_logs/{logId}": {
+      "schema": { "$ref": "#/entities/LoyaltyLog" },
+      "description": "Loyalty points logs"
+    },
+    "/logs/{logId}": {
+      "schema": { "$ref": "#/entities/SystemLog" },
+      "description": "System operation logs"
+    }
+  }
+}
+
