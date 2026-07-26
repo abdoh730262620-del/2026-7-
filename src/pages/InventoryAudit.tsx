@@ -142,9 +142,9 @@ export default function InventoryAudit() {
 
                         {search && (
                             <div className="space-y-2 mt-4 max-h-[300px] overflow-y-auto pr-1">
-                                {filtered.map(p => (
+                                {filtered.map((p, idx) => (
                                     <button 
-                                        key={p.id}
+                                        key={`audit-search-${p.id || idx}`}
                                         onClick={() => addToAudit(p)}
                                         className="w-full text-right p-3 bg-white dark:bg-slate-900 border border-gray-150 dark:border-slate-800 hover:border-indigo-300 dark:hover:border-indigo-700 rounded-xl transition-all flex justify-between items-center group cursor-pointer shadow-sm hover:shadow-md"
                                     >
@@ -208,10 +208,10 @@ export default function InventoryAudit() {
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-gray-100 dark:divide-slate-800">
-                                    {auditItems.map(item => {
+                                    {auditItems.map((item, idx) => {
                                         const diff = item.actualQuantity - item.systemQuantity;
                                         return (
-                                        <tr key={item.productId} className="hover:bg-gray-50/50 dark:hover:bg-slate-900/50 transition-colors">
+                                        <tr key={`audit-item-${item.productId}-${idx}`} className="hover:bg-gray-50/50 dark:hover:bg-slate-900/50 transition-colors">
                                             <td className="px-4 py-3 font-semibold text-xs md:text-sm text-black dark:text-white border-l border-gray-150 dark:border-slate-800">{item.productName}</td>
                                             <td className="px-4 py-3 text-center font-bold text-gray-600 dark:text-gray-300 border-l border-gray-150 dark:border-slate-800">{item.systemQuantity}</td>
                                             <td className="px-4 py-3 text-center border-l border-gray-150 dark:border-slate-800">

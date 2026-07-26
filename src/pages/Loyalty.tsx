@@ -128,9 +128,9 @@ export default function Loyalty() {
                                             exit={{ opacity: 0, y: 5 }}
                                             className="absolute top-full right-0 left-0 mt-1.5 z-[100] bg-white border border-gray-200 rounded-xl shadow-xl max-h-60 overflow-y-auto p-1.5 flex flex-col gap-1"
                                         >
-                                            {filtered.slice(0, 8).map(c => (
+                                            {filtered.slice(0, 8).map((c, idx) => (
                                                 <button
-                                                    key={c.id}
+                                                    key={`${c.id || 'cust'}-${idx}`}
                                                     type="button"
                                                     onClick={() => {
                                                         setSearch(c.name);
@@ -161,8 +161,8 @@ export default function Loyalty() {
                         </div>
 
                         <div className="flex flex-col gap-2 max-h-[60vh] overflow-y-auto pr-1">
-                            {filtered.map(customer => (
-                                <div key={customer.id} className="p-3 bg-white dark:bg-slate-900 hover:bg-white border border-gray-100 rounded-lg flex items-center justify-between transition-colors">
+                            {filtered.map((customer, idx) => (
+                                <div key={`${customer.id || 'cust'}-${idx}`} className="p-3 bg-white dark:bg-slate-900 hover:bg-white border border-gray-100 rounded-lg flex items-center justify-between transition-colors">
                                     <div className="flex items-center gap-3">
                                         <div className="w-8 h-8 flex-none bg-white rounded-lg flex items-center justify-center font-bold text-black dark:text-gray-200 border border-gray-200 shadow-sm">
                                             {customer.name[0]}

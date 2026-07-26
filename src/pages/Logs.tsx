@@ -61,8 +61,8 @@ export default function Logs() {
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
-                            {logs.map(log => (
-                                <tr key={log.id} className="hover:bg-white">
+                            {logs.map((log, index) => (
+                                <tr key={`${log.id || 'log'}-${index}`} className="hover:bg-white">
                                     <td className="px-4 md:px-6 py-4 text-black font-mono text-sm" dir="ltr">
                                         {format(new Date(log.date), 'yyyy-MM-dd HH:mm:ss')}
                                     </td>

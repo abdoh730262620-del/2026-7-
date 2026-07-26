@@ -6,7 +6,9 @@ import {
     persistentLocalCache, 
     persistentMultipleTabManager,
     CACHE_SIZE_UNLIMITED,
-    onSnapshotsInSync
+    onSnapshotsInSync,
+    disableNetwork,
+    enableNetwork
 } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 import firebaseConfig from "../../firebase-applet-config.json";
@@ -15,6 +17,40 @@ import { updateLastSyncTime } from "./syncTracker";
 const app = initializeApp(firebaseConfig);
 
 let dbInstance;
+
+function setupNetworkSync(dbRef: any) {
+    if (!dbRef) return;
+
+    try {
+        // Global listener to track when snapshots are in sync with server
+        onSnapshotsInSync(dbRef, () => {
+            if (window.navigator.onLine) {
+                updateLastSyncTime();
+            }
+        });
+    } catch (e) {
+        console.warn("onSnapshotsInSync listener setup failed:", e);
+    }
+
+    const handleNetworkChange = () => {
+        if (window.navigator.onLine) {
+            console.log("App is online. Enabling Firestore network...");
+            enableNetwork(dbRef).catch(err => console.warn("Failed to enable Firestore network:", err));
+        } else {
+            console.log("App is offline. Disabling Firestore network...");
+            disableNetwork(dbRef).catch(err => console.warn("Failed to disable Firestore network:", err));
+        }
+    };
+
+    window.addEventListener('online', handleNetworkChange);
+    window.addEventListener('offline', handleNetworkChange);
+
+    // Initial check on startup
+    if (!window.navigator.onLine) {
+        console.log("App is initially offline. Disabling Firestore network...");
+        disableNetwork(dbRef).catch(err => console.warn("Failed to initially disable Firestore network:", err));
+    }
+}
 
 // We use persistence by default to satisfy the "local database" requirement.
 // If persistence fails (e.g. in some iframe environments), we fall back to memory.
@@ -26,22 +62,18 @@ try {
         })
     }, firebaseConfig.firestoreDatabaseId);
     console.log("Firestore initialized with persistent local cache (Offline Support enabled).");
-
-    // Global listener to track when snapshots are in sync with server
-    onSnapshotsInSync(dbInstance, () => {
-        if (window.navigator.onLine) {
-            updateLastSyncTime();
-        }
-    });
+    setupNetworkSync(dbInstance);
 } catch (e) {
     console.warn("Failed to initialize Firestore with persistent cache, falling back to memory cache:", e);
     try {
         dbInstance = initializeFirestore(app, {
             localCache: memoryLocalCache()
         }, firebaseConfig.firestoreDatabaseId);
+        setupNetworkSync(dbInstance);
     } catch (fallbackError) {
         console.error("Firestore initialization critical failure:", fallbackError);
         dbInstance = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+        setupNetworkSync(dbInstance);
     }
 }
 
@@ -58,11 +90,40 @@ export enum OperationType {
   WRITE = 'write',
 }
 
+export interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  }
+}
+
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const errInfo = {
+  const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: (auth.currentUser as any)?.tenantId || null,
+      providerInfo: auth.currentUser?.providerData?.map(provider => ({
+        providerId: provider.providerId,
+        email: provider.email,
+      })) || []
+    },
     operationType,
     path
   };
   console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
 }

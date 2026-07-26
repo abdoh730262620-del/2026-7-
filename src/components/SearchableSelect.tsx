@@ -65,7 +65,7 @@ export default function SearchableSelect({ value, onChange, options, placeholder
                 <div className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-60 overflow-y-auto">
                     {filteredOptions.map((opt, idx) => (
                         <div 
-                            key={idx}
+                            key={`${opt}-${idx}`}
                             onClick={() => {
                                 onChange(opt);
                                 setSearchText(opt);

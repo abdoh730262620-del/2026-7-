@@ -309,7 +309,7 @@ export default function Dashboard() {
                                     <div className="max-h-48 overflow-y-auto modern-scrollbar">
                                         {suggestions.map((s, i) => (
                                             <button 
-                                                key={s}
+                                                key={`${s}-${i}`}
                                                 onClick={() => {
                                                     setAiQuery(s);
                                                     setSuggestions([]);

@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { useAuthStore } from '../store/authStore';
 import { doc, updateDoc } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { db, auth } from '../lib/firebase';
+import { updatePassword } from 'firebase/auth';
 import { ShieldAlert, Key, Eye, EyeOff, Lock, LogOut, CheckCircle, AlertTriangle } from 'lucide-react';
 
 export default function ForcePasswordChangeOverlay() {
@@ -43,6 +44,18 @@ export default function ForcePasswordChangeOverlay() {
 
         setIsSaving(true);
         try {
+            // Update actual Firebase Authentication password if user is currently signed in
+            if (auth.currentUser) {
+                try {
+                    await updatePassword(auth.currentUser, trimmedPass);
+                } catch (authErr: any) {
+                    console.warn('Firebase Auth password update failed:', authErr);
+                    if (authErr.code === 'auth/requires-recent-login') {
+                        throw new Error('انتهت صلاحية الجلسة الأمنية لتحديث كلمة المرور. يرجى تسجيل الخروج والولوج مجدداً لتحديثها.');
+                    }
+                }
+            }
+
             // Update Firestore user document
             await updateDoc(doc(db, 'users', appUser.uid), {
                 password: trimmedPass

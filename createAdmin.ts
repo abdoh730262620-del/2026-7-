@@ -10,7 +10,7 @@ const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 
 async function run() {
     try {
-        const email = 'abdohali@local.app';
+        const email = 'habob19940@gmail.com';
         const pass = 'abdohali1994';
         const res = await createUserWithEmailAndPassword(auth, email, pass);
         const uid = res.user.uid;

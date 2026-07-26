@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { collection, query, onSnapshot, addDoc, updateDoc, doc, deleteDoc, where } from 'firebase/firestore';
+import { collection, query, onSnapshot, addDoc, updateDoc, doc, deleteDoc, where, writeBatch } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { useAuthStore } from '../store/authStore';
 import { Plus, Search, Truck, Edit2, X, Upload, Trash2, ArrowLeft } from 'lucide-react';
@@ -180,6 +180,10 @@ export default function Suppliers() {
         setIsImporting(true);
         let imported = 0;
         try {
+            const batchSize = 500;
+            let batch = writeBatch(db);
+            let batchCount = 0;
+
             for (const row of mappedData) {
                 try {
                     const newSupp = {
@@ -191,12 +195,26 @@ export default function Suppliers() {
                         createdAt: Date.now(),
                         updatedAt: Date.now()
                     };
-                    await addDoc(collection(db, 'suppliers'), newSupp);
+                    
+                    const docRef = doc(collection(db, 'suppliers'));
+                    batch.set(docRef, newSupp);
                     imported++;
+                    batchCount++;
+
+                    if (batchCount >= batchSize) {
+                        await batch.commit();
+                        batch = writeBatch(db);
+                        batchCount = 0;
+                    }
                 } catch (err) {
                     console.error('Error importing row:', row, err);
                 }
             }
+
+            if (batchCount > 0) {
+                await batch.commit();
+            }
+
             await logUserAction('استيراد موردين', `استيراد ${imported} مورد من ملف إكسل`);
             alert(`تم استيراد ${imported} مورد بنجاح`);
         } catch (error) {

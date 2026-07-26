@@ -69,6 +69,14 @@ export default function Purchases() {
     const [isCheckoutModalOpen, setIsCheckoutModalOpen] = useState(false);
     const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
     const [previewInvoiceId, setPreviewInvoiceId] = useState<string | null>(null);
+    const [editingItem, setEditingItem] = useState<{
+        id: string;
+        name: string;
+        barcode: string;
+        buyPrice: number;
+        cartQuantity: number;
+        stock: number;
+    } | null>(null);
 
     const [isNewPartyModalOpen, setIsNewPartyModalOpen] = useState(false);
     const [newPartyPhone, setNewPartyPhone] = useState('');
@@ -353,6 +361,23 @@ export default function Purchases() {
 
     const removeFromCart = (id: string) => {
         setCart(prev => prev.filter(item => item.id !== id));
+    };
+
+    const handleUpdateCartItem = (id: string, newQty: number, newPrice: number) => {
+        if (newQty <= 0) {
+            removeFromCart(id);
+            setEditingItem(null);
+            return;
+        }
+
+        setCart(prev => prev.map(item => {
+            if (item.id === id) {
+                return { ...item, cartQuantity: newQty, buyPrice: newPrice };
+            }
+            return item;
+        }));
+
+        setEditingItem(null);
     };
 
     const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -722,9 +747,9 @@ export default function Purchases() {
                                         exit={{ opacity: 0, y: 5 }}
                                         className="absolute top-full right-0 left-0 mt-2 z-[100] bg-white dark:bg-slate-900 border border-border-main rounded-xl shadow-2xl max-h-80 md:max-h-96 overflow-y-auto p-2 flex flex-col gap-2 w-full"
                                     >
-                                        {filteredProducts.map(p => (
+                                        {filteredProducts.map((p, idx) => (
                                             <button 
-                                                key={p.id} 
+                                                key={`${p.id || 'prod'}-${idx}`} 
                                                 type="button"
                                                 onClick={() => handleSelectProduct(p)}
                                                 className="w-full text-right p-3 bg-card-bg hover:bg-white rounded-xl shadow-sm border border-border-main flex justify-between items-center transition-all hover:scale-[1.01] active:scale-[0.99] group"
@@ -770,30 +795,39 @@ export default function Purchases() {
                     
                     <div className="flex-1 overflow-y-auto bg-bg-main min-h-0 modern-scrollbar p-2 flex flex-col gap-2 relative z-10">
                         {cart.map(item => (
-                                    <div key={item.id} className="bg-card-bg p-2 rounded-lg shadow-sm border border-border-main flex items-center justify-between gap-1.5 group">
-                                        <div className="flex flex-col overflow-hidden min-w-0">
-                                            <span className="font-bold text-text-main text-[11px] truncate">{item.name}</span>
-                                            <span className="text-[9px] font-bold text-text-main/40 uppercase tracking-widest bg-bg-main w-max px-1 rounded-sm mt-0.5">{item.barcode}</span>
+                                    <div key={item.id} className="bg-card-bg p-2 rounded-lg shadow-sm border border-border-main flex items-center justify-between gap-1.5 group hover:border-purple-400 transition-all">
+                                        <div 
+                                            onClick={() => setEditingItem({
+                                                id: item.id,
+                                                name: item.name,
+                                                barcode: item.barcode,
+                                                buyPrice: item.buyPrice || 0,
+                                                cartQuantity: item.cartQuantity,
+                                                stock: item.quantity || 0
+                                            })}
+                                            className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer"
+                                            title="تعديل السعر والكمية"
+                                        >
+                                            <div className="flex flex-col overflow-hidden min-w-0 flex-1">
+                                                <span className="font-bold text-text-main text-[11px] truncate group-hover:text-purple-600 transition-colors">{item.name}</span>
+                                                <span className="text-[9px] font-bold text-text-main/40 uppercase tracking-widest bg-bg-main w-max px-1 rounded-sm mt-0.5">{item.barcode}</span>
+                                            </div>
+                                            <div className="flex flex-col items-end px-1 justify-center shrink-0">
+                                                <span className="text-[9px] text-gray-400 font-bold">السعر</span>
+                                                <span className="font-bold text-purple-600 text-[11px]">{item.buyPrice || 0} <span className="text-[8px] font-normal text-gray-400">ر.س</span></span>
+                                            </div>
                                         </div>
                                         <div className="flex items-center gap-2 shrink-0">
-                                            <div className="flex flex-col items-center px-1">
-                                                <input 
-                                                    type="number" 
-                                                    value={item.buyPrice || 0} 
-                                                    onChange={e => updateCartPrice(item.id, Number(e.target.value))}
-                                                    className="border border-border-main rounded-md p-0.5 w-14 text-center focus:border-purple-500 bg-white block text-[11px] font-bold text-text-main transition-all outline-none"
-                                                    min="0"
-                                                />
-                                            </div>
                                             <div className="flex items-center gap-1.5 bg-bg-main rounded-lg p-0.5 border border-border-main">
-                                                <button onClick={() => updateCartQuantity(item.id, 1)} className="p-1 bg-white shadow-sm text-purple-600 hover:bg-purple-600 hover:text-white rounded-md transition-all"><Plus size={10} /></button>
+                                                <button onClick={(e) => { e.stopPropagation(); updateCartQuantity(item.id, 1); }} className="p-1 bg-white shadow-sm text-purple-600 hover:bg-purple-600 hover:text-white rounded-md transition-all"><Plus size={10} /></button>
                                                 <span className="font-bold w-4 text-center text-[10px] text-text-main">{item.cartQuantity}</span>
-                                                <button onClick={() => updateCartQuantity(item.id, -1)} className="p-1 bg-white shadow-sm text-red-600 hover:bg-red-600 hover:text-white rounded-md transition-all"><Minus size={10} /></button>
+                                                <button onClick={(e) => { e.stopPropagation(); updateCartQuantity(item.id, -1); }} className="p-1 bg-white shadow-sm text-red-600 hover:bg-red-600 hover:text-white rounded-md transition-all"><Minus size={10} /></button>
                                             </div>
-                                            <div className="flex flex-col items-center px-1">
-                                                <span className="font-bold text-purple-700 text-[11px]">{(item.buyPrice || 0) * item.cartQuantity}</span>
+                                            <div className="flex flex-col items-center px-1 justify-center">
+                                                <span className="text-[9px] text-gray-400 font-bold">المجموع</span>
+                                                <span className="font-bold text-purple-700 text-[11px]">{((item.buyPrice || 0) * item.cartQuantity).toLocaleString()} <span className="text-[8px] font-normal text-gray-400">ر.س</span></span>
                                             </div>
-                                            <button onClick={() => removeFromCart(item.id)} className="text-red-400 hover:text-red-600 p-1 bg-white hover:bg-white rounded-lg transition-all"><Trash2 size={12} /></button>
+                                            <button onClick={(e) => { e.stopPropagation(); removeFromCart(item.id); }} className="text-red-400 hover:text-red-600 p-1.5 bg-white hover:bg-white rounded-lg transition-all"><Trash2 size={12} /></button>
                                         </div>
                                     </div>
                                 ))}
@@ -1090,6 +1124,127 @@ export default function Purchases() {
                 }
                 return null;
             })()}
+
+            {editingItem && (
+                <div className="fixed inset-0 bg-black/60 z-[110] flex items-center justify-center p-4 backdrop-blur-xs">
+                    <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-sm shadow-2xl flex flex-col overflow-hidden border border-gray-100 dark:border-slate-800 text-right" dir="rtl">
+                        {/* Header */}
+                        <div className="p-4 md:p-5 border-b border-gray-100 dark:border-slate-800 bg-white dark:bg-slate-900 flex justify-between items-center">
+                            <div className="flex flex-col">
+                                <h3 className="text-base font-black text-black dark:text-white">تعديل الصنف (شراء)</h3>
+                                <span className="text-[10px] font-bold text-gray-400 mt-0.5">{editingItem.name}</span>
+                            </div>
+                            <button 
+                                onClick={() => setEditingItem(null)} 
+                                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 p-1.5 rounded-lg hover:bg-gray-50 dark:hover:bg-slate-800 transition"
+                            >
+                                <X size={18} />
+                            </button>
+                        </div>
+
+                        {/* Body */}
+                        <div className="p-5 flex flex-col gap-4 bg-gray-50/50 dark:bg-slate-900/50 text-right">
+                            {/* Barcode and stock info */}
+                            <div className="grid grid-cols-2 gap-2 text-xs bg-white dark:bg-slate-850 p-3 rounded-xl border border-gray-100 dark:border-slate-800 shadow-xs">
+                                <div className="flex flex-col">
+                                    <span className="text-gray-400 font-bold">الباركود</span>
+                                    <span className="font-mono font-bold text-black dark:text-white mt-0.5">{editingItem.barcode}</span>
+                                </div>
+                                <div className="flex flex-col items-start text-left">
+                                    <span className="text-gray-400 font-bold">المخزون الحالي</span>
+                                    <span className="font-bold text-black dark:text-white mt-0.5">{editingItem.stock}</span>
+                                </div>
+                            </div>
+
+                            {/* Quantity Input */}
+                            <div className="flex flex-col gap-1.5">
+                                <label className="text-xs font-black text-gray-500 dark:text-gray-400">الكمية</label>
+                                <div className="flex items-center gap-2 bg-white dark:bg-slate-850 p-1 rounded-xl border border-gray-200 dark:border-slate-800 shadow-xs">
+                                    <button 
+                                        type="button"
+                                        onClick={() => setEditingItem(prev => prev ? { ...prev, cartQuantity: prev.cartQuantity + 1 } : null)} 
+                                        className="p-2.5 bg-purple-50 dark:bg-slate-800 hover:bg-purple-600 dark:hover:bg-purple-600 text-purple-600 dark:text-purple-400 hover:text-white rounded-lg transition-all"
+                                    >
+                                        <Plus size={14} />
+                                    </button>
+                                    <input 
+                                        type="number" 
+                                        className="flex-1 text-center font-black text-base text-black dark:text-white bg-transparent outline-none border-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                        value={editingItem.cartQuantity}
+                                        min="1"
+                                        onChange={e => {
+                                            const val = parseInt(e.target.value) || 0;
+                                            setEditingItem(prev => prev ? { ...prev, cartQuantity: val } : null);
+                                        }}
+                                    />
+                                    <button 
+                                        type="button"
+                                        onClick={() => setEditingItem(prev => prev ? { ...prev, cartQuantity: Math.max(1, prev.cartQuantity - 1) } : null)} 
+                                        className="p-2.5 bg-red-50 dark:bg-slate-800 hover:bg-red-600 dark:hover:bg-red-600 text-red-600 dark:text-red-400 hover:text-white rounded-lg transition-all"
+                                    >
+                                        <Minus size={14} />
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Buy Price Input */}
+                            <div className="flex flex-col gap-1.5">
+                                <label className="text-xs font-black text-gray-500 dark:text-gray-400">سعر الشراء (ر.س)</label>
+                                <div className="flex items-center bg-white dark:bg-slate-850 px-3 py-1 rounded-xl border border-gray-200 dark:border-slate-800 shadow-xs">
+                                    <input 
+                                        type="number" 
+                                        step="any"
+                                        className="w-full font-black text-base text-black dark:text-white bg-transparent outline-none border-none py-1.5 text-right"
+                                        value={editingItem.buyPrice === 0 ? '' : editingItem.buyPrice}
+                                        onChange={e => {
+                                            const val = parseFloat(e.target.value) || 0;
+                                            setEditingItem(prev => prev ? { ...prev, buyPrice: val } : null);
+                                        }}
+                                    />
+                                </div>
+                            </div>
+
+                            {/* Item Total Display */}
+                            <div className="flex justify-between items-center bg-purple-50/50 dark:bg-slate-800/30 p-3 rounded-xl border border-purple-100/50 dark:border-slate-700 text-sm mt-1">
+                                <span className="font-bold text-gray-500 dark:text-gray-400">إجمالي الصنف:</span>
+                                <span className="font-black text-purple-600 dark:text-purple-400 text-base">
+                                    {(editingItem.buyPrice * editingItem.cartQuantity).toLocaleString()} <small className="text-xs font-normal">ر.س</small>
+                                </span>
+                            </div>
+                        </div>
+
+                        {/* Footer Actions */}
+                        <div className="p-4 border-t border-gray-100 dark:border-slate-800 bg-white dark:bg-slate-900 flex gap-2 shrink-0">
+                            <button 
+                                type="button"
+                                onClick={() => handleUpdateCartItem(editingItem.id, editingItem.cartQuantity, editingItem.buyPrice)} 
+                                className="flex-1 bg-purple-600 hover:bg-purple-700 text-white py-2.5 rounded-xl font-bold text-sm shadow-md active:scale-95 transition-all"
+                            >
+                                حفظ التعديلات
+                            </button>
+                            <button 
+                                type="button"
+                                onClick={() => {
+                                    removeFromCart(editingItem.id);
+                                    setEditingItem(null);
+                                }} 
+                                className="px-4 bg-red-50 hover:bg-red-600 text-red-600 hover:text-white py-2.5 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-1.5"
+                                title="حذف من السلة"
+                            >
+                                <Trash2 size={16} />
+                                <span className="hidden sm:inline">حذف</span>
+                            </button>
+                            <button 
+                                type="button"
+                                onClick={() => setEditingItem(null)} 
+                                className="px-4 bg-gray-100 hover:bg-gray-200 dark:bg-slate-850 dark:hover:bg-slate-800 text-gray-700 dark:text-gray-300 py-2.5 rounded-xl font-bold text-sm transition-all"
+                            >
+                                إلغاء
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

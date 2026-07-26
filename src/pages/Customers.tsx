@@ -335,7 +335,7 @@ export default function Customers() {
                                         const isPartiallyPaid = alreadyPaid > 0 && !isPaid && !isCancelled && !isReturned;
                                         
                                         return (
-                                            <div key={`${invoice.id || idx}-${idx}`} className="bg-white border text-sm border-gray-100 rounded-xl p-3 md:p-4 shadow-sm flex flex-col md:flex-row gap-4 justify-between items-start md:items-center">
+                                            <div key={`cust-invoice-${invoice.id || idx}`} className="bg-white border text-sm border-gray-100 rounded-xl p-3 md:p-4 shadow-sm flex flex-col md:flex-row gap-4 justify-between items-start md:items-center">
                                                 <div className="flex flex-col gap-1 w-full md:w-auto">
                                                     <div className="flex items-center gap-2">
                                                         <span className="font-bold text-text-main">{invoice.invoiceNumber}</span>
@@ -999,6 +999,10 @@ export default function Customers() {
         setIsImporting(true);
         let imported = 0;
         try {
+            const batchSize = 500;
+            let batch = writeBatch(db);
+            let batchCount = 0;
+
             for (const row of mappedData) {
                 try {
                     const newCust = {
@@ -1010,12 +1014,26 @@ export default function Customers() {
                         createdAt: Date.now(),
                         updatedAt: Date.now()
                     };
-                    await addDoc(collection(db, 'customers'), newCust);
+                    
+                    const docRef = doc(collection(db, 'customers'));
+                    batch.set(docRef, newCust);
                     imported++;
+                    batchCount++;
+
+                    if (batchCount >= batchSize) {
+                        await batch.commit();
+                        batch = writeBatch(db);
+                        batchCount = 0;
+                    }
                 } catch (err) {
                     console.error('Error importing row:', row, err);
                 }
             }
+
+            if (batchCount > 0) {
+                await batch.commit();
+            }
+
             await logUserAction('استيراد عملاء', `استيراد ${imported} عميل من ملف إكسل`);
             alert(`تم استيراد ${imported} عميل بنجاح`);
         } catch (error) {
@@ -1089,7 +1107,7 @@ export default function Customers() {
                         list="customers-opening-list"
                     />
                     <datalist id="customers-opening-list">
-                        {customers.map((c, idx) => <option key={`${c.id || idx}-${idx}`} value={c.name} />)}
+                        {customers.map((c, idx) => <option key={`opt-opening-${c.id || idx}`} value={c.name} />)}
                     </datalist>
                     <button 
                         onClick={handleExportHtmlReport}
@@ -1108,7 +1126,7 @@ export default function Customers() {
                 <div className="flex-1 overflow-auto divide-y divide-gray-100">
                     {filtered.map((customer, idx) => (
                         <div 
-                            key={`${customer.id || idx}-${idx}`} 
+                            key={`opening-${customer.id || idx}`} 
                             className="p-2 bg-white flex items-center justify-between cursor-pointer hover:bg-white transition"
                             onClick={() => setSelectedOpeningBalanceCustomer(customer)}
                         >
@@ -1192,7 +1210,7 @@ export default function Customers() {
                 <div className="flex-1 overflow-auto divide-y divide-gray-100 py-1">
                     {creditCustomers.map((customer, idx) => (
                         <div 
-                            key={`${customer.id || idx}-${idx}`} 
+                            key={`credit-${customer.id || idx}`} 
                             className="p-2 bg-white flex items-center justify-between cursor-pointer hover:bg-white transition"
                             onClick={() => openCustomerDetails(customer)}
                         >
@@ -1261,7 +1279,7 @@ export default function Customers() {
                         const owedAmount = customer.balance > 0 ? customer.balance : 0;
                         return (
                         <div 
-                            key={`${customer.id || idx}-${idx}`} 
+                            key={`owed-${customer.id || idx}`} 
                             className="p-2 bg-white flex items-center justify-between cursor-pointer hover:bg-white transition"
                             onClick={() => openCustomerDetails(customer)}
                         >
@@ -1341,7 +1359,7 @@ export default function Customers() {
                                 {filtered.map((c, idx) => {
                                     const totalOwed = c.balance > 0 ? c.balance : 0;
                                     return (
-                                    <tr key={`${c.id || idx}-${idx}`} className="hover:bg-white border-b border-gray-200">
+                                    <tr key={`table-row-${c.id || idx}`} className="hover:bg-white border-b border-gray-200">
                                         <td className="p-3 border-l border-gray-200 font-bold text-sm text-black dark:text-gray-100 whitespace-nowrap">{c.name}</td>
                                         <td className="p-3 border-l border-gray-200 text-sm text-black dark:text-gray-300 whitespace-nowrap">{0} ر.س</td>
                                         <td className="p-3 border-l border-gray-200 text-sm text-black dark:text-gray-300 whitespace-nowrap">{0} ر.س</td>
@@ -1412,7 +1430,7 @@ export default function Customers() {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 md:gap-4">
                  {filtered.map((customer, idx) => (
-                    <div key={`${customer.id || idx}-${idx}`} className="bg-white rounded-xl p-3 border border-gray-100 shadow-sm hover:shadow-md transition group">
+                    <div key={`grid-card-${customer.id || idx}`} className="bg-white rounded-xl p-3 border border-gray-100 shadow-sm hover:shadow-md transition group">
                         <div className="flex items-start justify-between mb-2">
                             <div className="flex items-center gap-2 cursor-pointer" onClick={() => openEditModal(customer)}>
                                 <div className="w-10 h-10 bg-gradient-to-br from-blue-50 to-indigo-50 text-blue-600 border border-gray-200 rounded-full flex items-center justify-center shrink-0">

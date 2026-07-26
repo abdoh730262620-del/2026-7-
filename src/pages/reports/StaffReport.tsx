@@ -66,7 +66,7 @@ export default function StaffReport({ dateRange }: { dateRange: { startDate: str
         <div className="flex flex-col h-full overflow-y-auto">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6 mb-4 md:mb-6">
                 {performance.slice(0, 3).map((s, i) => (
-                    <div key={s.name} className={`p-4 md:p-6 rounded-2xl md:rounded-3xl border shadow-sm flex flex-col gap-4 relative overflow-hidden
+                    <div key={`${s.name || 'staff'}-${i}`} className={`p-4 md:p-6 rounded-2xl md:rounded-3xl border shadow-sm flex flex-col gap-4 relative overflow-hidden
                         ${i === 0 ? 'bg-gradient-to-br from-yellow-50 to-orange-50 border-yellow-200' : 'bg-white border-gray-100'}
                     `}>
                         <div className="flex items-center justify-between">
@@ -104,7 +104,7 @@ export default function StaffReport({ dateRange }: { dateRange: { startDate: str
                     </thead>
                     <tbody className="divide-y divide-gray-100">
                         {performance.map((s, index) => (
-                            <tr key={s.name} className="hover:bg-white transition">
+                            <tr key={`${s.name || 'staff'}-${index}`} className="hover:bg-white transition">
                                 <td className="p-4 text-center font-bold text-gray-400">{index + 1}</td>
                                 <td className="p-4 font-bold text-black dark:text-gray-100">{s.name}</td>
                                 <td className="p-4 text-center">

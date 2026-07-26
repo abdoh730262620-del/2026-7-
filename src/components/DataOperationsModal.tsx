@@ -7,7 +7,7 @@ import ImportMapper from './ImportMapper';
 import { restoreFromBackupData, BackupData } from '../lib/backupService';
 import { useSettingsStore } from '../store/settingsStore';
 import { useProgressStore } from '../store/progressStore';
-import { collection, addDoc, getDocs, query, where } from 'firebase/firestore';
+import { collection, addDoc, getDocs, query, where, writeBatch, doc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuthStore } from '../store/authStore';
 
@@ -78,6 +78,10 @@ export default function DataOperationsModal({ isOpen, onClose }: DataOperationsM
                 if(doc.data().barcode) existingBarcodes.add(String(doc.data().barcode).toLowerCase());
             });
 
+            const batchSize = 500;
+            let batch = writeBatch(db);
+            let batchCount = 0;
+
             for (let i = 0; i < mappedData.length; i++) {
                 const row = mappedData[i];
                 try {
@@ -89,7 +93,6 @@ export default function DataOperationsModal({ isOpen, onClose }: DataOperationsM
                         continue;
                     }
 
-                    const productId = Math.random().toString(36).substring(2);
                     const newProd = {
                         name: name,
                         barcode: barcode || Math.random().toString().substring(2, 10),
@@ -102,15 +105,29 @@ export default function DataOperationsModal({ isOpen, onClose }: DataOperationsM
                         createdAt: Date.now()
                     };
 
-                    await addDoc(collection(db, 'products'), newProd);
+                    const docRef = doc(collection(db, 'products'));
+                    batch.set(docRef, newProd);
+
                     existingNames.add(name.toLowerCase());
                     if (newProd.barcode) existingBarcodes.add(newProd.barcode.toLowerCase());
                     imported++;
+                    batchCount++;
+
+                    if (batchCount >= batchSize) {
+                        await batch.commit();
+                        batch = writeBatch(db);
+                        batchCount = 0;
+                    }
                 } catch (err) {
                     console.error('Error importing row:', row, err);
                 }
                 update(i + 1);
             }
+
+            if (batchCount > 0) {
+                await batch.commit();
+            }
+
             alert(`تم استيراد ${imported} منتج بنجاح. وتم تجاوز ${skipped} منتج متكرر.`);
         } catch (error) {
             console.error(error);

@@ -478,7 +478,7 @@ export default function SalesReport({ dateRange }: { dateRange: { startDate: str
                         </thead>
                         <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                             {items.map((item, itemIdx) => (
-                                <tr key={item.id || itemIdx} className="hover:bg-slate-50/50 dark:hover:bg-slate-850/50 transition-colors">
+                                <tr key={`sales-report-row-${item.id || itemIdx}-${itemIdx}`} className="hover:bg-slate-50/50 dark:hover:bg-slate-850/50 transition-colors">
                                     {headers.map((header, headIdx) => (
                                         <td key={headIdx} className="p-3 font-extrabold text-text-main align-middle whitespace-nowrap">
                                             {getRowValue(item, header, itemIdx)}

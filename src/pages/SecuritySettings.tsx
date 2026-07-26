@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom';
 import { ShieldCheck, ChevronRight, Key } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
 import { doc, updateDoc } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { db, auth } from '../lib/firebase';
+import { updatePassword } from 'firebase/auth';
 
 export default function SecuritySettings() {
     const { appUser } = useAuthStore();
@@ -25,9 +26,27 @@ export default function SecuritySettings() {
 
         setIsSaving(true);
         try {
+            // Update password in actual Firebase Authentication if user is signed in
+            if (auth.currentUser) {
+                try {
+                    await updatePassword(auth.currentUser, newPassword);
+                } catch (authErr: any) {
+                    console.warn('Firebase Auth password update failed:', authErr);
+                    if (authErr.code === 'auth/requires-recent-login') {
+                        alert('انتهت صلاحية الجلسة الأمنية لتحديث كلمة المرور. يرجى تسجيل الخروج والولوج مجدداً لتغييرها.');
+                        setIsSaving(false);
+                        return;
+                    }
+                }
+            }
+
             await updateDoc(doc(db, 'users', appUser.uid), {
                 password: newPassword
             });
+
+            // Update local remembered password
+            localStorage.setItem('remembered_password', newPassword);
+
             alert('تم تغيير كلمة المرور بنجاح. قد تحتاج إلى تسجيل الدخول مرة أخرى.');
             setCurrentPassword('');
             setNewPassword('');

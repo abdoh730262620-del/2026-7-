@@ -104,7 +104,7 @@ export default function BestSellersReport({ dateRange }: { dateRange: { startDat
                     </thead>
                     <tbody className="divide-y divide-gray-100">
                         {itemStats.map((item, index) => (
-                            <tr key={item.id} className="hover:bg-white transition">
+                            <tr key={`${item.id || 'bestseller'}-${index}`} className="hover:bg-white transition">
                                 <td className="p-4 text-center font-bold text-black">#{index + 1}</td>
                                 <td className="p-4 font-mono text-black text-xs">{item.barcode}</td>
                                 <td className="p-4 font-bold text-black dark:text-gray-100">{item.name}</td>

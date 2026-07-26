@@ -670,8 +670,8 @@ export default function Products() {
                                     <h3 className="text-xs font-black text-gray-400 uppercase tracking-wider">التصنيفات الحالية ({categories.length})</h3>
                                 </div>
                                 <div className="space-y-2">
-                                    {categories.sort((a, b) => parseInt(a.num) - parseInt(b.num)).map((c) => (
-                                        <div key={c.id} className="flex items-center justify-between p-2.5 bg-white dark:bg-slate-900/50 rounded-xl border border-gray-100 group hover:bg-white hover:border-gray-200 transition-all">
+                                    {categories.sort((a, b) => parseInt(a.num) - parseInt(b.num)).map((c, idx) => (
+                                        <div key={`${c.id || 'cat'}-${idx}`} className="flex items-center justify-between p-2.5 bg-white dark:bg-slate-900/50 rounded-xl border border-gray-100 group hover:bg-white hover:border-gray-200 transition-all">
                                             <div className="flex items-center gap-3">
                                                 <span className="w-7 h-7 bg-white rounded-lg flex items-center justify-center text-[10px] font-black text-gray-400 border border-gray-100 shadow-sm">{c.num}</span>
                                                 <span className="font-bold text-sm text-black dark:text-gray-200 group-hover:text-blue-600 transition-colors">{c.name}</span>
