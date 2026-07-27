@@ -37,30 +37,7 @@ jobs:
         run: npx cap sync android
 
       - name: Sync and Configure Android App Name
-        run: |
-          node -e "
-            const fs = require('fs');
-            // Extract appName from capacitor.config.ts
-            const capConfig = fs.readFileSync('capacitor.config.ts', 'utf8');
-            const match = capConfig.match(/appName:\s*['\"`](.*?)['\"`]/);
-            const appName = match ? match[1] : 'نظام المبيعات';
-            console.log('Extracted App Name:', appName);
-            
-            // Save app name for subsequent steps
-            fs.writeFileSync('app_name.txt', appName);
-            
-            // Update android/app/src/main/res/values/strings.xml
-            const stringsPath = 'android/app/src/main/res/values/strings.xml';
-            if (fs.existsSync(stringsPath)) {
-              let stringsXml = fs.readFileSync(stringsPath, 'utf8');
-              stringsXml = stringsXml.replace(/<string name=\"app_name\">.*?<\/string>/, '<string name=\"app_name\">' + appName + '</string>');
-              stringsXml = stringsXml.replace(/<string name=\"title_activity_main\">.*?<\/string>/, '<string name=\"title_activity_main\">' + appName + '</string>');
-              fs.writeFileSync(stringsPath, stringsXml);
-              console.log('Updated Android strings.xml with app name:', appName);
-            } else {
-              console.log('strings.xml not found, skipping XML update');
-            }
-          "
+        run: node .github/scripts/configure-app-name.cjs
 
       - name: Set up JDK 21 (Required for modern Android builds)
         uses: actions/setup-java@v4
@@ -86,24 +63,7 @@ jobs:
           ./gradlew assembleDebug
 
       - name: Rename and Prepare APK Artifact
-        run: |
-          node -e "
-            const fs = require('fs');
-            const path = require('path');
-            const appName = fs.existsSync('app_name.txt') ? fs.readFileSync('app_name.txt', 'utf8').trim() : 'نظام_المبيعات';
-            const safeAppName = appName.replace(/[\s\/\\?%*:|\"<>\s]+/g, '_');
-            const apkDir = 'android/app/build/outputs/apk/debug';
-            const srcApk = path.join(apkDir, 'app-debug.apk');
-            const destApk = path.join(apkDir, safeAppName + '.apk');
-            
-            if (fs.existsSync(srcApk)) {
-              fs.copyFileSync(srcApk, destApk);
-              console.log('Successfully renamed APK to:', destApk);
-            } else {
-              console.error('Source app-debug.apk was not found!');
-              process.exit(1);
-            }
-          "
+        run: node .github/scripts/prepare-apk.cjs
 
       - name: Upload Compiled Debug APK
         uses: actions/upload-artifact@v4
