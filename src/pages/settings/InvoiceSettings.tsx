@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSettingsStore } from '../../store/settingsStore';
-import { FileSignature, ChevronRight, Save, Loader2, CheckCircle2 } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { FileSignature, ChevronRight, Save, Loader2, CheckCircle2, Eye, X } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 
 export default function InvoiceSettings() {
     const navigate = useNavigate();
@@ -10,6 +10,7 @@ export default function InvoiceSettings() {
     const [isSaving, setIsSaving] = useState(false);
     const [localSettings, setLocalSettings] = useState(settings);
     const [showSuccess, setShowSuccess] = useState(false);
+    const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
 
     useEffect(() => {
         setLocalSettings(settings);
@@ -124,8 +125,15 @@ export default function InvoiceSettings() {
                         <label className="text-[11px] font-bold text-black dark:text-gray-300">شعار المؤسسة (صورة)</label>
                         <div className="flex items-center gap-3 bg-white dark:bg-slate-900 p-3 rounded-xl border border-gray-150 dark:border-slate-800">
                             {localSettings.businessLogoUrl && (
-                                <div className="w-12 h-12 rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-0.5 shrink-0 flex items-center justify-center overflow-hidden">
+                                <div 
+                                    onClick={() => setIsPreviewModalOpen(true)}
+                                    className="w-16 h-16 rounded-xl border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-1 shrink-0 flex items-center justify-center overflow-hidden cursor-zoom-in hover:scale-105 transition-all shadow-sm group relative"
+                                    title="انقر لتكبير الشعار ومُشاهدته بوضوح"
+                                >
                                     <img src={localSettings.businessLogoUrl} alt="Logo" className="max-w-full max-h-full object-contain" referrerPolicy="no-referrer" />
+                                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity rounded-xl">
+                                        <Eye size={16} className="text-white" />
+                                    </div>
                                 </div>
                             )}
                             <div className="flex-1">
@@ -146,18 +154,85 @@ export default function InvoiceSettings() {
                                 />
                             </div>
                             {localSettings.businessLogoUrl && (
-                                <button 
-                                    onClick={() => setLocalSettings(prev => ({ ...prev, businessLogoUrl: '' }))}
-                                    className="px-3 py-1.5 bg-red-50 dark:bg-red-950/30 text-red-600 dark:text-red-400 rounded-lg text-xs hover:bg-red-100 font-bold shrink-0 transition"
-                                >
-                                    حذف
-                                </button>
+                                <div className="flex flex-col gap-1.5 shrink-0">
+                                    <button 
+                                        onClick={() => setIsPreviewModalOpen(true)}
+                                        className="px-2.5 py-1.5 bg-blue-50 dark:bg-blue-950/30 text-blue-600 dark:text-blue-400 rounded-lg text-xs hover:bg-blue-100 dark:hover:bg-blue-900/40 font-bold transition cursor-pointer"
+                                    >
+                                        معاينة
+                                    </button>
+                                    <button 
+                                        onClick={() => setLocalSettings(prev => ({ ...prev, businessLogoUrl: '' }))}
+                                        className="px-2.5 py-1.5 bg-red-50 dark:bg-red-950/30 text-red-600 dark:text-red-400 rounded-lg text-xs hover:bg-red-100 dark:hover:bg-red-900/40 font-bold shrink-0 transition cursor-pointer"
+                                    >
+                                        حذف
+                                    </button>
+                                </div>
                             )}
                         </div>
-                        <p className="text-[9px] text-gray-400 dark:text-gray-500 mt-1 font-bold">* الشعار يظهر أعلى الفاتورة (متاح للطابعات العادية والحرارية).</p>
+                        <p className="text-[9px] text-gray-400 dark:text-gray-500 mt-1 font-bold">* الشعار يظهر أعلى الفاتورة (متاح للطابعات العادية والحرارية). اضغط على الصورة لمشاهدتها بالحجم الكامل.</p>
                     </div>
                 </div>
             </div>
+
+            {/* Premium Full-Screen Image Preview Modal */}
+            <AnimatePresence>
+                {isPreviewModalOpen && localSettings.businessLogoUrl && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" dir="rtl">
+                        {/* Backdrop */}
+                        <motion.div 
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            onClick={() => setIsPreviewModalOpen(false)}
+                            className="absolute inset-0 bg-black/75 backdrop-blur-sm"
+                        />
+                        
+                        {/* Modal Container */}
+                        <motion.div 
+                            initial={{ opacity: 0, scale: 0.95, y: 15 }}
+                            animate={{ opacity: 1, scale: 1, y: 0 }}
+                            exit={{ opacity: 0, scale: 0.95, y: 15 }}
+                            className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-gray-100 dark:border-slate-800 w-full max-w-lg overflow-hidden relative z-10 flex flex-col"
+                        >
+                            {/* Header */}
+                            <div className="p-4 border-b border-gray-100 dark:border-slate-800 flex items-center justify-between bg-gray-50 dark:bg-slate-950/40">
+                                <h3 className="font-bold text-sm text-black dark:text-white flex items-center gap-2">
+                                    <Eye size={16} className="text-rose-500" />
+                                    <span>معاينة شعار المتجر والمؤسسة</span>
+                                </h3>
+                                <button 
+                                    onClick={() => setIsPreviewModalOpen(false)}
+                                    className="p-1.5 hover:bg-gray-150 dark:hover:bg-slate-800 rounded-lg text-gray-500 dark:text-gray-400 transition cursor-pointer"
+                                >
+                                    <X size={16} />
+                                </button>
+                            </div>
+                            
+                            {/* Image Body */}
+                            <div className="p-8 flex items-center justify-center bg-gray-100/50 dark:bg-slate-950/20 min-h-[250px] max-h-[60vh] overflow-auto">
+                                <img 
+                                    src={localSettings.businessLogoUrl} 
+                                    alt="Full Store Logo" 
+                                    className="max-w-full max-h-[50vh] object-contain rounded-lg shadow-md border border-gray-100 dark:border-slate-800 bg-white dark:bg-slate-900 p-2"
+                                    referrerPolicy="no-referrer"
+                                />
+                            </div>
+
+                            {/* Footer */}
+                            <div className="p-4 border-t border-gray-100 dark:border-slate-800 flex items-center justify-between bg-gray-50 dark:bg-slate-950/40 text-[11px] text-gray-500 dark:text-gray-400 font-bold">
+                                <span>اسم النشاط: {localSettings.businessName || 'لم يحدد بعد'}</span>
+                                <button 
+                                    onClick={() => setIsPreviewModalOpen(false)}
+                                    className="px-4 py-2 bg-black hover:bg-gray-800 dark:bg-white dark:text-black dark:hover:bg-gray-100 text-white rounded-lg font-bold transition cursor-pointer"
+                                >
+                                    إغلاق المعاينة
+                                </button>
+                            </div>
+                        </motion.div>
+                    </div>
+                )}
+            </AnimatePresence>
         </div>
     );
 }

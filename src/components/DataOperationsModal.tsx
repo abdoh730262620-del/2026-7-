@@ -10,10 +10,22 @@ import { useProgressStore } from '../store/progressStore';
 import { collection, addDoc, getDocs, query, where, writeBatch, doc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuthStore } from '../store/authStore';
+import { logUserAction } from '../lib/logger';
 
 interface DataOperationsModalProps {
     isOpen: boolean;
     onClose: () => void;
+}
+
+interface ImportReport {
+    isOpen: boolean;
+    total: number;
+    added: number;
+    skipped: number;
+    updated: number;
+    addedDetails: string[];
+    skippedDetails: string[];
+    updatedDetails: string[];
 }
 
 export default function DataOperationsModal({ isOpen, onClose }: DataOperationsModalProps) {
@@ -22,6 +34,9 @@ export default function DataOperationsModal({ isOpen, onClose }: DataOperationsM
     const { settings } = useSettingsStore();
     const { start, update, finish, show } = useProgressStore();
     const isProcessing = show;
+
+    // Report state
+    const [report, setReport] = useState<ImportReport | null>(null);
 
     // Mapping state
     const [mapperState, setMapperState] = useState<{ isOpen: boolean; headers: string[]; rows: any[] }>({
@@ -65,17 +80,42 @@ export default function DataOperationsModal({ isOpen, onClose }: DataOperationsM
 
         setMapperState(prev => ({ ...prev, isOpen: false }));
         start(mappedData.length, "جاري استيراد المنتجات...");
-        let imported = 0;
-        let skipped = 0;
+        
+        let addedCount = 0;
+        let skippedCount = 0;
+        let updatedCount = 0;
+
+        const addedDetails: string[] = [];
+        const skippedDetails: string[] = [];
+        const updatedDetails: string[] = [];
 
         try {
-            // Fetch existing products to check for duplicates
-            const existingNames = new Set<string>();
-            const existingBarcodes = new Set<string>();
+            // Fetch existing products to check for duplicates by Name and Barcode
+            const existingProductsMap = new Map<string, { id: string; name: string; price: number; quantity: number; cost: number; barcode: string; category: string }>();
+            const existingProductsByBarcode = new Map<string, { id: string; name: string; price: number; quantity: number; cost: number; barcode: string; category: string }>();
+            
             const prodSnapshot = await getDocs(query(collection(db, 'products'), where('tenantId', '==', tenantId)));
-            prodSnapshot.forEach(doc => {
-                existingNames.add(doc.data().name.toLowerCase());
-                if(doc.data().barcode) existingBarcodes.add(String(doc.data().barcode).toLowerCase());
+            prodSnapshot.forEach(docSnap => {
+                const data = docSnap.data();
+                const nameKey = String(data.name || '').toLowerCase().trim();
+                const barcodeKey = String(data.barcode || '').trim();
+                
+                const productObj = {
+                    id: docSnap.id,
+                    name: String(data.name || ''),
+                    price: parseFloat(data.price) || 0,
+                    quantity: parseInt(data.quantity) || 0,
+                    cost: parseFloat(data.cost) || 0,
+                    barcode: barcodeKey,
+                    category: String(data.category || 'General')
+                };
+
+                if (nameKey) {
+                    existingProductsMap.set(nameKey, productObj);
+                }
+                if (barcodeKey) {
+                    existingProductsByBarcode.set(barcodeKey, productObj);
+                }
             });
 
             const batchSize = 500;
@@ -85,33 +125,93 @@ export default function DataOperationsModal({ isOpen, onClose }: DataOperationsM
             for (let i = 0; i < mappedData.length; i++) {
                 const row = mappedData[i];
                 try {
-                    const name = String(row.name || 'بدون اسم');
-                    const barcode = String(row.barcode || '');
+                    const name = String(row.name || 'بدون اسم').trim();
+                    const barcode = String(row.barcode || '').trim();
+                    const price = parseFloat(row.price) || 0;
+                    const cost = parseFloat(row.cost) || 0;
+                    const quantity = parseInt(row.quantity) || 0;
+                    const category = String(row.category || 'General');
+
+                    const nameKey = name.toLowerCase();
+                    const barcodeKey = barcode;
                     
-                    if (existingNames.has(name.toLowerCase()) || (barcode && existingBarcodes.has(barcode.toLowerCase()))) {
-                        skipped++;
-                        continue;
+                    // Match by barcode first if available, then by name
+                    const existingByBarcode = barcodeKey ? existingProductsByBarcode.get(barcodeKey) : null;
+                    const existingByName = existingProductsMap.get(nameKey);
+                    const existing = existingByBarcode || existingByName;
+
+                    if (existing) {
+                        // If both price and quantity are identical, skip/bypass it
+                        if (existing.price === price && existing.quantity === quantity) {
+                            skippedCount++;
+                            skippedDetails.push(`المنتج "${name}" (تطابق تام في السعر: ${price} ر.س والكمية: ${quantity})`);
+                        } else {
+                            // Update quantity and price if there is a difference
+                            const updatedFields: any = {
+                                price: price,
+                                quantity: quantity
+                            };
+                            
+                            // Optionally update cost and category if they are valid
+                            if (cost > 0 && cost !== existing.cost) updatedFields.cost = cost;
+                            if (category && category !== 'General' && category !== existing.category) updatedFields.category = category;
+
+                            const docRef = doc(db, 'products', existing.id);
+                            batch.update(docRef, updatedFields);
+                            
+                            const changes: string[] = [];
+                            if (existing.price !== price) changes.push(`تعديل السعر من ${existing.price} إلى ${price}`);
+                            if (existing.quantity !== quantity) changes.push(`تعديل الكمية من ${existing.quantity} إلى ${quantity}`);
+                            if (cost > 0 && existing.cost !== cost) changes.push(`تعديل التكلفة من ${existing.cost} إلى ${cost}`);
+
+                            updatedDetails.push(`المنتج "${name}" (${changes.join(' | ') || 'تحديث الحقول'})`);
+
+                            // Update in local maps for subsequent checks
+                            existing.price = price;
+                            existing.quantity = quantity;
+                            if (cost > 0) existing.cost = cost;
+                            existing.category = category;
+
+                            updatedCount++;
+                            batchCount++;
+                        }
+                    } else {
+                        // Brand new product
+                        const newProd = {
+                            name: name,
+                            barcode: barcode || Math.random().toString().substring(2, 10),
+                            price,
+                            cost,
+                            quantity,
+                            category,
+                            lowStockAlert: 5,
+                            tenantId,
+                            createdAt: Date.now()
+                        };
+
+                        const docRef = doc(collection(db, 'products'));
+                        batch.set(docRef, newProd);
+
+                        addedDetails.push(`المنتج "${name}" (السعر: ${price} ر.س | الكمية: ${quantity})`);
+
+                        // Update local maps to prevent duplication within the same Excel sheet
+                        const newProdObj = {
+                            id: docRef.id,
+                            name,
+                            price,
+                            quantity,
+                            cost,
+                            barcode: newProd.barcode,
+                            category
+                        };
+                        existingProductsMap.set(nameKey, newProdObj);
+                        if (newProd.barcode) {
+                            existingProductsByBarcode.set(newProd.barcode, newProdObj);
+                        }
+
+                        addedCount++;
+                        batchCount++;
                     }
-
-                    const newProd = {
-                        name: name,
-                        barcode: barcode || Math.random().toString().substring(2, 10),
-                        price: parseFloat(row.price) || 0,
-                        cost: parseFloat(row.cost) || 0,
-                        quantity: parseInt(row.quantity) || 0,
-                        category: String(row.category || 'General'),
-                        lowStockAlert: 5,
-                        tenantId,
-                        createdAt: Date.now()
-                    };
-
-                    const docRef = doc(collection(db, 'products'));
-                    batch.set(docRef, newProd);
-
-                    existingNames.add(name.toLowerCase());
-                    if (newProd.barcode) existingBarcodes.add(newProd.barcode.toLowerCase());
-                    imported++;
-                    batchCount++;
 
                     if (batchCount >= batchSize) {
                         await batch.commit();
@@ -128,7 +228,21 @@ export default function DataOperationsModal({ isOpen, onClose }: DataOperationsM
                 await batch.commit();
             }
 
-            alert(`تم استيراد ${imported} منتج بنجاح. وتم تجاوز ${skipped} منتج متكرر.`);
+            // Log import action
+            await logUserAction('استيراد منتجات', `استيراد ${addedCount} جديد، تحديث ${updatedCount}، تجاوز ${skippedCount} مكرر متطابق`);
+
+            // Save results to report state to show beautiful report UI
+            setReport({
+                isOpen: true,
+                total: mappedData.length,
+                added: addedCount,
+                skipped: skippedCount,
+                updated: updatedCount,
+                addedDetails,
+                skippedDetails,
+                updatedDetails
+            });
+
         } catch (error) {
             console.error(error);
             alert("حدث خطأ أثناء الحفظ");
@@ -220,6 +334,110 @@ export default function DataOperationsModal({ isOpen, onClose }: DataOperationsM
                                     <h3 className="font-bold text-blue-900 dark:text-blue-100">استعادة بيانات من ملف مضغوط (ZIP)</h3>
                                     <p className="text-xs text-blue-700 dark:text-blue-300">استعادة كاملة لقاعدة البيانات من أرشيف</p>
                                 </div>
+                            </button>
+                        </div>
+                    </motion.div>
+                </motion.div>
+            )}
+            
+            {report && report.isOpen && (
+                <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className="fixed inset-0 bg-black/65 z-[60] flex items-center justify-center p-4 backdrop-blur-sm"
+                    dir="rtl"
+                >
+                    <motion.div
+                        initial={{ scale: 0.95 }}
+                        animate={{ scale: 1 }}
+                        exit={{ scale: 0.95 }}
+                        className="bg-white dark:bg-slate-900 w-full max-w-2xl rounded-3xl p-6 shadow-2xl flex flex-col max-h-[85vh]"
+                    >
+                        <div className="flex items-center justify-between mb-4 pb-2 border-b border-gray-100 dark:border-slate-800">
+                            <h2 className="text-xl font-black text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                                <Database className="text-emerald-600" size={24} />
+                                تقرير استيراد المنتجات
+                            </h2>
+                            <button 
+                                onClick={() => setReport(null)} 
+                                className="p-2 hover:bg-gray-100 dark:hover:bg-slate-800 rounded-full"
+                            >
+                                <X size={20} className="text-gray-500" />
+                            </button>
+                        </div>
+
+                        {/* Summary Grid */}
+                        <div className="grid grid-cols-4 gap-3 mb-6">
+                            <div className="bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl text-center">
+                                <div className="text-xs text-gray-500 dark:text-gray-400 font-medium">إجمالي السجلات</div>
+                                <div className="text-xl font-bold text-gray-800 dark:text-white mt-1">{report.total}</div>
+                            </div>
+                            <div className="bg-emerald-50 dark:bg-emerald-950/30 p-3 rounded-xl text-center">
+                                <div className="text-xs text-emerald-600 dark:text-emerald-400 font-medium">المنتجات المضافة</div>
+                                <div className="text-xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">{report.added}</div>
+                            </div>
+                            <div className="bg-amber-50 dark:bg-amber-950/30 p-3 rounded-xl text-center">
+                                <div className="text-xs text-amber-600 dark:text-amber-400 font-medium">المنتجات المحدثة</div>
+                                <div className="text-xl font-bold text-amber-600 dark:text-amber-400 mt-1">{report.updated}</div>
+                            </div>
+                            <div className="bg-blue-50 dark:bg-blue-950/30 p-3 rounded-xl text-center">
+                                <div className="text-xs text-blue-600 dark:text-blue-400 font-medium">تم تجاوزها (تطابق)</div>
+                                <div className="text-xl font-bold text-blue-600 dark:text-blue-400 mt-1">{report.skipped}</div>
+                            </div>
+                        </div>
+
+                        {/* Details Lists with scrolling */}
+                        <div className="flex-1 overflow-y-auto space-y-4 pr-1">
+                            {report.updatedDetails.length > 0 && (
+                                <div>
+                                    <h4 className="font-bold text-amber-700 dark:text-amber-400 mb-2 text-sm flex items-center gap-1.5">
+                                        <span className="w-2.5 h-2.5 rounded-full bg-amber-500" />
+                                        المنتجات المحدثة ({report.updatedDetails.length}):
+                                    </h4>
+                                    <ul className="bg-amber-50/50 dark:bg-amber-950/10 rounded-xl p-3 text-xs space-y-1.5 text-amber-900 dark:text-amber-300 border border-amber-100/50 dark:border-amber-950/30 max-h-48 overflow-y-auto">
+                                        {report.updatedDetails.map((detail, idx) => (
+                                            <li key={idx} className="list-disc list-inside">{detail}</li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            )}
+
+                            {report.addedDetails.length > 0 && (
+                                <div>
+                                    <h4 className="font-bold text-emerald-700 dark:text-emerald-400 mb-2 text-sm flex items-center gap-1.5">
+                                        <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
+                                        المنتجات الجديدة المضافة ({report.addedDetails.length}):
+                                    </h4>
+                                    <ul className="bg-emerald-50/50 dark:bg-emerald-950/10 rounded-xl p-3 text-xs space-y-1.5 text-emerald-900 dark:text-emerald-300 border border-emerald-100/50 dark:border-emerald-950/30 max-h-48 overflow-y-auto">
+                                        {report.addedDetails.map((detail, idx) => (
+                                            <li key={idx} className="list-disc list-inside">{detail}</li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            )}
+
+                            {report.skippedDetails.length > 0 && (
+                                <div>
+                                    <h4 className="font-bold text-blue-700 dark:text-blue-400 mb-2 text-sm flex items-center gap-1.5">
+                                        <span className="w-2.5 h-2.5 rounded-full bg-blue-500" />
+                                        منتجات تم تجاوزها لتطابقها التام ({report.skippedDetails.length}):
+                                    </h4>
+                                    <ul className="bg-blue-50/50 dark:bg-blue-950/10 rounded-xl p-3 text-xs space-y-1.5 text-blue-900 dark:text-blue-300 border border-blue-100/50 dark:border-blue-950/30 max-h-48 overflow-y-auto">
+                                        {report.skippedDetails.map((detail, idx) => (
+                                            <li key={idx} className="list-disc list-inside">{detail}</li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="mt-6 pt-4 border-t border-gray-100 dark:border-slate-800 flex justify-end">
+                            <button
+                                onClick={() => setReport(null)}
+                                className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold transition duration-200"
+                            >
+                                إغلاق التقرير
                             </button>
                         </div>
                     </motion.div>

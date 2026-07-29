@@ -108,8 +108,11 @@ export interface FirestoreErrorInfo {
 }
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  const errCode = (error as any)?.code;
+  
   const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
+    error: errorMessage,
     authInfo: {
       userId: auth.currentUser?.uid,
       email: auth.currentUser?.email,
@@ -124,6 +127,14 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     operationType,
     path
   };
+
+  // If the error indicates a network offline state or unavailable service,
+  // we do not throw an exception. We log it gracefully so Firestore can continue offline.
+  if (errCode === 'unavailable' || errorMessage.includes('unavailable') || errorMessage.includes('Could not reach Cloud Firestore backend')) {
+    console.warn('Firestore is running in Offline Mode (Network Unavailable): ', JSON.stringify(errInfo));
+    return; // Silent failover - let Firestore use local persistent cache
+  }
+
   console.error('Firestore Error: ', JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
 }

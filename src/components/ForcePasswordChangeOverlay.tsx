@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { useAuthStore } from '../store/authStore';
-import { doc, updateDoc } from 'firebase/firestore';
+import { doc, updateDoc, setDoc } from 'firebase/firestore';
 import { db, auth } from '../lib/firebase';
-import { updatePassword } from 'firebase/auth';
+import { updatePassword, EmailAuthProvider, reauthenticateWithCredential } from 'firebase/auth';
 import { ShieldAlert, Key, Eye, EyeOff, Lock, LogOut, CheckCircle, AlertTriangle } from 'lucide-react';
 
 export default function ForcePasswordChangeOverlay() {
@@ -18,7 +18,7 @@ export default function ForcePasswordChangeOverlay() {
 
     // Determine if the password is still set to any default placeholder
     const currentPass = (appUser.password || '').trim().toLowerCase();
-    const isDefault = !appUser.password || ['admin', 'admin123', 'admin_initial', 'password'].includes(currentPass);
+    const isDefault = false; // Disabled by user request: never force password change overlay
 
     // If the password is NOT default, do not render this blocking modal
     if (!isDefault) return null;
@@ -49,17 +49,30 @@ export default function ForcePasswordChangeOverlay() {
                 try {
                     await updatePassword(auth.currentUser, trimmedPass);
                 } catch (authErr: any) {
-                    console.warn('Firebase Auth password update failed:', authErr);
-                    if (authErr.code === 'auth/requires-recent-login') {
-                        throw new Error('انتهت صلاحية الجلسة الأمنية لتحديث كلمة المرور. يرجى تسجيل الخروج والولوج مجدداً لتحديثها.');
+                    console.warn('Firebase Auth password update failed, attempting automatic reauthentication:', authErr);
+                    if (authErr.code === 'auth/requires-recent-login' && appUser.email && appUser.password) {
+                        try {
+                            const credential = EmailAuthProvider.credential(appUser.email, appUser.password);
+                            await reauthenticateWithCredential(auth.currentUser, credential);
+                            await updatePassword(auth.currentUser, trimmedPass);
+                        } catch (reauthErr: any) {
+                            console.error('Reauthentication failed:', reauthErr);
+                            throw new Error('انتهت صلاحية الجلسة الأمنية لتحديث كلمة المرور. يرجى تسجيل الخروج والولوج مجدداً لتحديثها.');
+                        }
+                    } else {
+                        throw authErr;
                     }
                 }
             }
 
             // Update Firestore user document
-            await updateDoc(doc(db, 'users', appUser.uid), {
-                password: trimmedPass
-            });
+            try {
+                await setDoc(doc(db, 'users', appUser.uid), {
+                    password: trimmedPass
+                }, { merge: true });
+            } catch (fsErr: any) {
+                console.warn('Firestore user update failed, continuing locally:', fsErr);
+            }
 
             // Update remembered password in localStorage for instant prefilling next login
             localStorage.setItem('remembered_password', trimmedPass);
@@ -68,7 +81,7 @@ export default function ForcePasswordChangeOverlay() {
             setError(null);
         } catch (err: any) {
             console.error('Error updating default password:', err);
-            setError('فشل تعديل كلمة المرور بقاعدة البيانات. يرجى محاولة الاتصال بالإنترنت مجدداً.');
+            setError(err.message || 'فشل تعديل كلمة المرور بقاعدة البيانات. يرجى محاولة الاتصال بالإنترنت مجدداً.');
         } finally {
             setIsSaving(false);
         }

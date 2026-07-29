@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { BrowserRouter as Router, HashRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { doc, onSnapshot } from 'firebase/firestore';
+import { doc, onSnapshot, setDoc, collection, getDocs, updateDoc } from 'firebase/firestore';
 import { db } from './lib/firebase';
 import { useAuthStore, AppUser } from './store/authStore';
 import { useSettingsStore } from './store/settingsStore';
@@ -96,6 +96,14 @@ export default function App() {
             clearTimeout(timeoutId);
             if (userDoc.exists()) {
               const fullUser = { uid, ...userDoc.data() } as AppUser;
+              
+              // Automatically ensure existing accounts are migrated to 'single_store' in Firestore
+              if (fullUser.tenantId !== 'single_store') {
+                setDoc(doc(db, 'users', uid), { tenantId: 'single_store' }, { merge: true })
+                  .catch(e => console.warn("Failed to set tenantId: 'single_store' on restore:", e));
+                fullUser.tenantId = 'single_store';
+              }
+              
               useAuthStore.getState().setAppUser(fullUser);
               try {
                 localStorage.setItem('last_logged_in_user', JSON.stringify(fullUser));
@@ -162,6 +170,77 @@ export default function App() {
       initSettings();
     }
   }, [appUser, initSettings]);
+
+  useEffect(() => {
+    if (appUser) {
+      // Background migration to unify all tenant data to 'single_store'
+      const migrateTenantIdsToSingleStore = async () => {
+        try {
+          const migrationDone = localStorage.getItem('tenant_migration_single_store_done_v2');
+          if (migrationDone === 'true') return;
+
+          console.log('Starting background Tenant ID migration to single_store...');
+          const collectionsToMigrate = [
+            'products',
+            'categories',
+            'sales',
+            'purchases',
+            'expenses',
+            'vouchers',
+            'customers',
+            'suppliers',
+            'cash',
+            'quotations',
+            'loyalty_logs'
+          ];
+
+          for (const collName of collectionsToMigrate) {
+            try {
+              const snap = await getDocs(collection(db, collName));
+              for (const docSnap of snap.docs) {
+                const data = docSnap.data();
+                if (data && data.tenantId !== 'single_store') {
+                  await updateDoc(docSnap.ref, { tenantId: 'single_store' });
+                  console.log(`Migrated ${collName} document ${docSnap.id} to single_store`);
+                }
+              }
+            } catch (e) {
+              console.warn(`Error migrating collection ${collName}:`, e);
+            }
+          }
+
+          // Migrate settings document
+          try {
+            const settingsSnap = await getDocs(collection(db, 'settings'));
+            let hasSingleStoreConfig = false;
+            let fallbackConfigData: any = null;
+            
+            for (const docSnap of settingsSnap.docs) {
+              if (docSnap.id === 'app_config_single_store') {
+                hasSingleStoreConfig = true;
+              } else if (docSnap.id.startsWith('app_config_')) {
+                fallbackConfigData = docSnap.data();
+              }
+            }
+            
+            if (!hasSingleStoreConfig && fallbackConfigData) {
+              await setDoc(doc(db, 'settings', 'app_config_single_store'), fallbackConfigData);
+              console.log('Migrated settings configuration to app_config_single_store');
+            }
+          } catch (e) {
+            console.warn('Error migrating settings config:', e);
+          }
+
+          localStorage.setItem('tenant_migration_single_store_done_v2', 'true');
+          console.log('Tenant ID migration to single_store completed successfully.');
+        } catch (err) {
+          console.error('Failed tenantId migration:', err);
+        }
+      };
+      
+      migrateTenantIdsToSingleStore();
+    }
+  }, [appUser]);
 
   useEffect(() => {
     // Perform auto backup check on load

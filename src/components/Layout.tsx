@@ -1,7 +1,7 @@
 import React from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
-import { Home, Package, ShoppingCart, Users, Truck, DollarSign, FileText, Settings, LogOut, Menu, X, RefreshCw, Sparkles, Database, BrainCircuit, Wrench, Moon, Sun, ClipboardCheck, Gift, FileSignature, ArrowRight, Wifi, WifiOff } from 'lucide-react';
+import { Home, Package, ShoppingCart, Users, Truck, DollarSign, FileText, Settings, LogOut, Menu, X, RefreshCw, Sparkles, Database, BrainCircuit, Wrench, Moon, Sun, ClipboardCheck, Gift, FileSignature, ArrowRight, Wifi, WifiOff, Cloud, CloudOff } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { useInvoiceStore } from '../store/invoiceStore';
 import { useTheme } from '../context/ThemeContext';
@@ -13,6 +13,7 @@ import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import NotificationsMenu from './NotificationsMenu';
 import { getDaysSinceLastSync } from '../lib/syncTracker';
+import { useSyncStore } from '../store/syncStore';
 
 export default function Layout() {
     const { appUser, logout } = useAuthStore();
@@ -23,9 +24,13 @@ export default function Layout() {
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
     const [isOnline, setIsOnline] = useState(window.navigator.onLine);
     const [daysNoSync, setDaysNoSync] = useState(getDaysSinceLastSync());
+    const { isSyncing, syncProgress, triggerSync } = useSyncStore();
 
     useEffect(() => {
-        const handleOnline = () => setIsOnline(true);
+        const handleOnline = () => {
+            setIsOnline(true);
+            triggerSync().catch(err => console.warn("Auto sync on reconnection failed:", err));
+        };
         const handleOffline = () => setIsOnline(false);
 
         window.addEventListener('online', handleOnline);
@@ -40,7 +45,7 @@ export default function Layout() {
             window.removeEventListener('offline', handleOffline);
             clearInterval(syncInterval);
         };
-    }, []);
+    }, [triggerSync]);
 
     const navItems = [
         { path: '/', label: 'الرئيسية', icon: Home, roles: ['admin', 'cashier', 'inventory', 'salesman'] },
@@ -169,19 +174,41 @@ export default function Layout() {
                 </div>
                 
                 <div className="flex items-center gap-2 md:gap-3">
-                    <div className="hidden xs:flex items-center gap-1.5 px-2 py-1 bg-white dark:bg-slate-800 rounded-lg border border-gray-100 dark:border-slate-700">
-                        {isOnline ? (
-                            <>
-                                <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full"></div>
-                                <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400">متصل (قاعدة بيانات محلية نشطة)</span>
-                            </>
+                    {/* Sync Status Icon Button */}
+                    <button
+                        onClick={() => {
+                            if (isOnline && !isSyncing) {
+                                triggerSync();
+                            }
+                        }}
+                        disabled={!isOnline || isSyncing}
+                        className={`p-2 bg-white dark:bg-slate-800 rounded-xl border shadow-sm transition-all duration-300 relative group flex items-center justify-center cursor-pointer ${
+                            !isOnline
+                                ? 'border-red-100 dark:border-red-950/30 text-red-500 dark:text-red-400 bg-red-50/20'
+                                : isSyncing
+                                ? 'border-blue-100 dark:border-blue-950/30 text-blue-500 dark:text-blue-400 bg-blue-50/20'
+                                : 'border-emerald-100 dark:border-emerald-950/30 text-emerald-500 dark:text-emerald-400 hover:scale-105 hover:bg-slate-50 dark:hover:bg-slate-700/50'
+                        }`}
+                        title={
+                            !isOnline
+                                ? 'وضع الأوفلاين (غير متصل بالسحابة)'
+                                : isSyncing
+                                ? `جاري المزامنة... ${syncProgress}%`
+                                : 'متصل بالسحابة • اضغط للمزامنة اليدوية'
+                        }
+                    >
+                        {isSyncing ? (
+                            <RefreshCw size={20} className="animate-spin" />
+                        ) : !isOnline ? (
+                            <CloudOff size={20} className="animate-pulse" />
                         ) : (
-                            <>
-                                <div className="w-1.5 h-1.5 bg-amber-500 rounded-full animate-pulse"></div>
-                                <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400">وضع الأوفلاين (الحفظ محلي فقط)</span>
-                            </>
+                            <Cloud size={20} />
                         )}
-                    </div>
+                        {/* Dot Indicator */}
+                        <span className={`absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full border border-white dark:border-slate-800 ${
+                            !isOnline ? 'bg-red-500 animate-pulse' : isSyncing ? 'bg-blue-500 animate-bounce' : 'bg-emerald-500'
+                        }`} />
+                    </button>
 
                     <NotificationsMenu />
 

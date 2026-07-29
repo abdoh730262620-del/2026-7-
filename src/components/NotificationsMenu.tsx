@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Bell, AlertTriangle, PackageOpen, ClockAlert } from 'lucide-react';
+import { Bell, AlertTriangle, PackageOpen, ClockAlert, FileText } from 'lucide-react';
 import { collection, onSnapshot, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuthStore } from '../store/authStore';
 import { useSettingsStore } from '../store/settingsStore';
+import { printReport } from '../lib/printHelper';
 
 interface LowStockProduct {
     id: string;
@@ -26,7 +27,20 @@ export default function NotificationsMenu() {
     const [lowStockProducts, setLowStockProducts] = useState<LowStockProduct[]>([]);
     const [overdueCustomers, setOverdueCustomers] = useState<OverdueCustomer[]>([]);
     const [cashBalance, setCashBalance] = useState<number | null>(null);
+    const [dismissedAlerts, setDismissedAlerts] = useState<string[]>(() => {
+        try {
+            return JSON.parse(sessionStorage.getItem('dismissed_alerts') || '[]');
+        } catch {
+            return [];
+        }
+    });
     const menuRef = useRef<HTMLDivElement>(null);
+
+    const dismissAlert = (id: string) => {
+        const updated = [...dismissedAlerts, id];
+        setDismissedAlerts(updated);
+        sessionStorage.setItem('dismissed_alerts', JSON.stringify(updated));
+    };
 
     // Only show to admin
     const isAdmin = appUser?.role === 'admin';
@@ -155,7 +169,57 @@ export default function NotificationsMenu() {
 
     if (!isAdmin) return null;
 
-    const totalAlerts = lowStockProducts.length + overdueCustomers.length + (isCashLow ? 1 : 0);
+    const activeCashLow = isCashLow && !dismissedAlerts.includes('low-cash');
+    const activeOverdue = overdueCustomers.filter(c => !dismissedAlerts.includes(`overdue-${c.id}`));
+    const activeLowStock = lowStockProducts.filter(p => !dismissedAlerts.includes(`low-stock-${p.id}`));
+
+    const totalAlerts = activeLowStock.length + activeOverdue.length + (activeCashLow ? 1 : 0);
+
+    const dismissAll = () => {
+        const allIds: string[] = [];
+        if (activeCashLow) allIds.push('low-cash');
+        activeOverdue.forEach(c => allIds.push(`overdue-${c.id}`));
+        activeLowStock.forEach(p => allIds.push(`low-stock-${p.id}`));
+        const updated = Array.from(new Set([...dismissedAlerts, ...allIds]));
+        setDismissedAlerts(updated);
+        sessionStorage.setItem('dismissed_alerts', JSON.stringify(updated));
+    };
+
+    const downloadReport = () => {
+        const headers = ['نوع التنبيه', 'الموضوع / العنوان', 'تفاصيل التنبيه الإرشادية'];
+        const rows: string[][] = [];
+
+        if (activeCashLow) {
+            rows.push([
+                'تحذير سيولة الصندوق',
+                'نقص في السيولة النقدية المطلوبة',
+                `الرصيد الفعلي في الصندوق (${cashBalance?.toFixed(2)} ر.س) أقل من الحد الأدنى المطلوب (${settings.cashMinimumAlertThreshold} ر.س).`
+            ]);
+        }
+
+        activeOverdue.forEach(customer => {
+            rows.push([
+                'تأخر سداد مستحق للعميل',
+                `متابعة ذمة مالية: ${customer.name}`,
+                `الرصيد المتبقي المستحق (${customer.balance.toLocaleString()} ر.س). تجاوز العميل فترة السماح المحددة بـ (${settings.overdueDaysThreshold} أيام).`
+            ]);
+        });
+
+        activeLowStock.forEach(product => {
+            rows.push([
+                'انخفاض كمية المخزون',
+                `طلب تزويد كمية: ${product.name}`,
+                `الكمية الحالية (${product.quantity}) وصلت لحد الأمان المخصص للمنتج (${product.lowStockAlert}) أو أقل منه.`
+            ]);
+        });
+
+        if (rows.length === 0) {
+            alert('لا توجد تنبيهات نشطة لتصديرها حالياً.');
+            return;
+        }
+
+        printReport('تقرير تنبيهات ونواقص النظام الميدانية', headers, rows);
+    };
 
     return (
         <div className="relative" ref={menuRef}>
@@ -174,14 +238,34 @@ export default function NotificationsMenu() {
 
             {isOpen && (
                 <div className="absolute left-0 mt-2 w-72 md:w-80 bg-card-bg rounded-xl shadow-xl border border-border-main z-50 flex flex-col max-h-[80vh] overflow-hidden" dir="rtl">
-                    <div className="p-3 md:p-4 bg-gradient-to-r from-red-50 to-orange-50 dark:from-red-900/40 dark:to-orange-900/20 border-b border-border-main flex items-center justify-between shrink-0">
-                        <h3 className="font-black text-sm text-red-800 dark:text-red-400 flex items-center gap-2">
-                            <Bell size={16} /> تنبيهات النظام
-                        </h3>
+                    <div className="p-3 md:p-4 bg-gradient-to-r from-red-50 to-orange-50 dark:from-red-900/40 dark:to-orange-900/20 border-b border-border-main flex flex-col gap-2 shrink-0">
+                        <div className="flex items-center justify-between">
+                            <h3 className="font-black text-sm text-red-800 dark:text-red-400 flex items-center gap-2">
+                                <Bell size={16} /> تنبيهات النظام
+                            </h3>
+                            {totalAlerts > 0 && (
+                                <span className="text-xs font-bold bg-white dark:bg-black/20 text-red-600 px-2 py-0.5 rounded-full border border-red-200 dark:border-red-800">
+                                    {totalAlerts} تنبيه
+                                </span>
+                            )}
+                        </div>
                         {totalAlerts > 0 && (
-                            <span className="text-xs font-bold bg-white dark:bg-black/20 text-red-600 px-2 py-0.5 rounded-full border border-red-200 dark:border-red-800">
-                                {totalAlerts} تنبيه
-                            </span>
+                            <div className="flex items-center justify-between gap-2 mt-1">
+                                <button 
+                                    onClick={dismissAll}
+                                    className="text-[11px] font-bold text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 text-right cursor-pointer flex items-center gap-1"
+                                >
+                                    قراءة وتجاوز الكل ✓
+                                </button>
+                                <button 
+                                    onClick={downloadReport}
+                                    className="text-[10px] font-black text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 flex items-center gap-1 px-2 py-1 bg-red-50 dark:bg-red-950/25 rounded-lg border border-red-100 dark:border-red-900/40 transition-colors cursor-pointer"
+                                    title="تنزيل كشف التنبيهات كـ PDF"
+                                >
+                                    <FileText size={12} />
+                                    <span>تصدير PDF</span>
+                                </button>
+                            </div>
                         )}
                     </div>
                     
@@ -194,45 +278,68 @@ export default function NotificationsMenu() {
                             </div>
                         ) : (
                             <div className="flex flex-col divide-y divide-border-main">
-                                {isCashLow && (
-                                    <div className="p-3 md:p-4 hover:bg-bg-main transition-colors flex items-start gap-3">
+                                {activeCashLow && (
+                                    <div 
+                                        onClick={() => dismissAlert('low-cash')}
+                                        className="p-3 md:p-4 hover:bg-bg-main transition-colors flex items-start gap-3 cursor-pointer group/item relative"
+                                        title="اضغط للاستبعاد"
+                                    >
                                         <div className="p-2 bg-white dark:bg-red-900/40 text-red-600 dark:text-red-400 rounded-lg shrink-0 sm:mt-1">
                                             <AlertTriangle size={18} />
                                         </div>
                                         <div className="flex-1 min-w-0">
-                                            <p className="text-sm font-bold text-text-main mb-1 truncate">
-                                                تحذير سيولة نقدية
-                                            </p>
+                                            <div className="flex items-center justify-between mb-1">
+                                                <p className="text-sm font-bold text-text-main truncate">
+                                                    تحذير سيولة نقدية
+                                                </p>
+                                                <span className="text-[9px] text-gray-400 group-hover/item:text-red-500 transition-colors">استبعاد ×</span>
+                                            </div>
                                             <p className="text-xs text-text-main/70 leading-relaxed font-semibold">
                                                 الرصيد الفعلي في الصندوق (<span className="text-red-600 font-bold">{cashBalance?.toFixed(2)}</span> ر.س) أقل من الحد الأدنى المطلوب (<span className="text-red-600">{settings.cashMinimumAlertThreshold}</span> ر.س).
                                             </p>
                                         </div>
                                     </div>
                                 )}
-                                {overdueCustomers.map((customer, idx) => (
-                                    <div key={`overdue-${customer.id || idx}-${idx}`} className="p-3 md:p-4 hover:bg-bg-main transition-colors flex items-start gap-3">
+                                {activeOverdue.map((customer, idx) => (
+                                    <div 
+                                        key={`overdue-${customer.id || idx}-${idx}`} 
+                                        onClick={() => dismissAlert(`overdue-${customer.id}`)}
+                                        className="p-3 md:p-4 hover:bg-bg-main transition-colors flex items-start gap-3 cursor-pointer group/item relative"
+                                        title="اضغط للاستبعاد"
+                                    >
                                         <div className="p-2 bg-white dark:bg-red-900/40 text-red-600 dark:text-red-400 rounded-lg shrink-0 sm:mt-1">
                                             <ClockAlert size={18} />
                                         </div>
                                         <div className="flex-1 min-w-0">
-                                            <p className="text-sm font-bold text-text-main mb-1 truncate" title={customer.name}>
-                                                تأخر سداد: {customer.name}
-                                            </p>
+                                            <div className="flex items-center justify-between mb-1">
+                                                <p className="text-sm font-bold text-text-main truncate" title={customer.name}>
+                                                    تأخر سداد: {customer.name}
+                                                </p>
+                                                <span className="text-[9px] text-gray-400 group-hover/item:text-red-500 transition-colors">استبعاد ×</span>
+                                            </div>
                                             <p className="text-xs text-text-main/70 leading-relaxed font-semibold">
                                                 الرصيد المتبقي (<span className="text-red-600 font-bold">{customer.balance.toLocaleString()}</span>). تجاوز العميل فترة السماح المحددة (<span className="text-red-600">{settings.overdueDaysThreshold} أيام</span>). يرجى المتابعة.
                                             </p>
                                         </div>
                                     </div>
                                 ))}
-                                {lowStockProducts.map((product, idx) => (
-                                    <div key={`stock-${product.id || idx}-${idx}`} className="p-3 md:p-4 hover:bg-bg-main transition-colors flex items-start gap-3">
+                                {activeLowStock.map((product, idx) => (
+                                    <div 
+                                        key={`stock-${product.id || idx}-${idx}`} 
+                                        onClick={() => dismissAlert(`low-stock-${product.id}`)}
+                                        className="p-3 md:p-4 hover:bg-bg-main transition-colors flex items-start gap-3 cursor-pointer group/item relative"
+                                        title="اضغط للاستبعاد"
+                                    >
                                         <div className="p-2 bg-white dark:bg-amber-900/40 text-amber-600 dark:text-amber-400 rounded-lg shrink-0 sm:mt-1">
                                             <AlertTriangle size={18} />
                                         </div>
                                         <div className="flex-1 min-w-0">
-                                            <p className="text-sm font-bold text-text-main mb-1 truncate" title={product.name}>
-                                                انخفاض مخزون: {product.name}
-                                            </p>
+                                            <div className="flex items-center justify-between mb-1">
+                                                <p className="text-sm font-bold text-text-main truncate" title={product.name}>
+                                                    انخفاض مخزون: {product.name}
+                                                </p>
+                                                <span className="text-[9px] text-gray-400 group-hover/item:text-red-500 transition-colors">استبعاد ×</span>
+                                            </div>
                                             <p className="text-xs text-text-main/70 leading-relaxed font-semibold">
                                                 الكمية الحالية (<span className="text-red-600 font-bold">{product.quantity}</span>) وصلت لحد الأمان المخصص (<span className="text-amber-600">{product.lowStockAlert}</span>) أو أقل منه. يرجى المراجعة وطلب كميات جديدة.
                                             </p>

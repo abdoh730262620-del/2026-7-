@@ -8,6 +8,7 @@ import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { useSettingsStore } from '../store/settingsStore';
 import { printReport } from '../lib/printHelper';
 import { getDaysSinceLastSync } from '../lib/syncTracker';
+import SyncProgressIndicator from '../components/SyncProgressIndicator';
 
 interface Product {
     id: string;
@@ -258,12 +259,12 @@ export default function Dashboard() {
     
     // Define the cards with roles so we only show what the user is allowed to see
     const cards = [
+        { title: 'إضافة فاتورة مبيعات', path: '/sales', icon: ShoppingCart, roles: ['admin', 'cashier', 'salesman'], bgColor: 'bg-white', textColor: 'text-green-600', borderColor: 'border-green-100', onClick: () => setSalesActiveTab('add') },
         { title: 'إضافة فاتورة مشتريات', path: '/purchases', icon: Truck, roles: ['admin', 'inventory'], bgColor: 'bg-white', textColor: 'text-purple-600', borderColor: 'border-purple-100', onClick: () => setPurchasesActiveTab('add') },
         { title: 'إضافة عرض سعر', path: '/quotations', icon: FileSignature, roles: ['admin', 'cashier'], bgColor: 'bg-white dark:bg-slate-800', textColor: 'text-blue-600', borderColor: 'border-gray-200', enabled: settings.isQuotationsEnabled, onClick: () => setQuotationsActiveTab('add') },
-        { title: 'إضافة فاتورة مبيعات', path: '/sales', icon: ShoppingCart, roles: ['admin', 'cashier', 'salesman'], bgColor: 'bg-white', textColor: 'text-green-600', borderColor: 'border-green-100', onClick: () => setSalesActiveTab('add') },
+        { title: 'العملاء', path: '/customers', icon: Users, roles: ['admin', 'cashier', 'salesman'], bgColor: 'bg-white dark:bg-slate-800', textColor: 'text-blue-600', borderColor: 'border-gray-200' },
         { title: 'المنتجات', path: '/products', icon: Package, roles: ['admin', 'inventory', 'cashier'], bgColor: 'bg-white', textColor: 'text-yellow-600', borderColor: 'border-yellow-100' },
         { title: 'الجرد الميداني', path: '/inventory-audit', icon: ClipboardCheck, roles: ['admin', 'inventory'], bgColor: 'bg-white', textColor: 'text-orange-600', borderColor: 'border-orange-100' },
-        { title: 'العملاء', path: '/customers', icon: Users, roles: ['admin', 'cashier', 'salesman'], bgColor: 'bg-white dark:bg-slate-800', textColor: 'text-blue-600', borderColor: 'border-gray-200' },
         { title: 'برنامج الولاء', path: '/loyalty', icon: Gift, roles: ['admin', 'cashier'], bgColor: 'bg-white', textColor: 'text-yellow-600', borderColor: 'border-yellow-100', enabled: settings.isLoyaltyEnabled },
         { title: 'الصندوق', path: '/cash', icon: DollarSign, roles: ['admin', 'cashier'], bgColor: 'bg-white', textColor: 'text-emerald-600', borderColor: 'border-emerald-100' },
         { title: 'سندات قبض وصرف', path: '/vouchers', icon: Receipt, roles: ['admin', 'cashier', 'salesman'], bgColor: 'bg-white', textColor: 'text-red-600', borderColor: 'border-red-100' },
@@ -278,10 +279,11 @@ export default function Dashboard() {
 
     return (
         <div className="h-[calc(100vh-4rem)] md:h-[calc(100vh-1rem)] flex flex-col overflow-hidden pb-16 md:pb-2 pt-2">
+            <SyncProgressIndicator />
             {/* Intelligent Assistant Section - Hero Search */}
             <div className="mb-3 md:mb-4 shrink-0">
                 <div className="relative group max-w-2xl mx-auto">
-                    <div className="bg-card-bg backdrop-blur-md p-1 sm:p-1.5 rounded-2xl border border-border-main shadow-[0_10px_40px_rgba(0,0,0,0.04)] flex flex-col sm:flex-row items-center gap-1.5 group-focus-within:border-purple-400 group-focus-within:ring-4 group-focus-within:ring-purple-50 transition-all duration-300">
+                    <div className="bg-card-bg backdrop-blur-md p-1 sm:p-1.5 rounded-2xl border-2 border-slate-950 dark:border-slate-100 shadow-[0_10px_40px_rgba(0,0,0,0.04)] flex flex-col sm:flex-row items-center gap-1.5 group-focus-within:border-purple-600 group-focus-within:ring-4 group-focus-within:ring-purple-50 dark:group-focus-within:ring-purple-950/50 transition-all duration-300">
                         <div className="hidden sm:flex p-1.5 bg-white rounded-xl text-purple-600 shrink-0">
                             <BrainCircuit size={16} />
                         </div>
@@ -395,7 +397,7 @@ export default function Dashboard() {
                 </div>
             </div>
             
-            <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-5 gap-3 md:gap-4 mb-3 md:mb-4 shrink-0 px-2 lg:px-4 mx-auto max-w-6xl w-full">
+            <div className="grid grid-cols-3 gap-3 md:gap-4 mb-3 md:mb-4 shrink-0 px-2 lg:px-4 mx-auto max-w-4xl w-full">
                 {accessibleCards.map((card, idx) => (
                     <Link
                         key={card.path}

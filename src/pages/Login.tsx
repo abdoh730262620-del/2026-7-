@@ -145,7 +145,7 @@ export default function Login() {
                 role: 'admin',
                 isActive: true,
                 permissions: getAdminPerms(),
-                tenantId: trimmedEmail, // Email becomes the distinct Tenant Identifier across all databases!
+                tenantId: 'single_store',
                 password: trimmedPassword
             };
 
@@ -161,7 +161,7 @@ export default function Login() {
                 businessName: 'محل بريق للمبيعات',
                 createdAt: Date.now()
             };
-            await setDoc(doc(db, 'settings', `app_config_${trimmedEmail}`), customSettings);
+            await setDoc(doc(db, 'settings', 'app_config_single_store'), customSettings);
 
             // Cache successfully registered user locally
             try {
@@ -191,7 +191,7 @@ export default function Login() {
                     role: 'admin',
                     isActive: true,
                     permissions: getAdminPerms(),
-                    tenantId: trimmedEmail,
+                    tenantId: 'single_store',
                     password: trimmedPassword
                 };
                 try {
@@ -282,7 +282,7 @@ export default function Login() {
                             role: 'admin',
                             isActive: true,
                             permissions: getAdminPerms(),
-                            tenantId: savedEmail,
+                            tenantId: 'single_store',
                             password: savedPassword
                         };
                         await setDoc(doc(db, 'users', fbUser.uid), {
@@ -305,7 +305,7 @@ export default function Login() {
                 } else {
                     const qStaff = query(
                         collection(db, 'users'),
-                        where('tenantId', '==', savedEmail),
+                        where('tenantId', '==', 'single_store'),
                         where('name', '==', savedUsername),
                         where('password', '==', savedPassword),
                         limit(1)
@@ -354,11 +354,10 @@ export default function Login() {
         const trimmedUsername = username.trim().toLowerCase();
         const trimmedPassword = password.trim();
 
-        if (!trimmedEmail || !trimmedUsername || !trimmedPassword) {
-            return setError('الرجاء تعبئة جميع الحقول المطلوبة');
-        }
-
         if (isRegistering) {
+            if (!trimmedEmail || !trimmedUsername || !trimmedPassword) {
+                return setError('الرجاء تعبئة جميع الحقول المطلوبة للتسجيل');
+            }
             // REGISTER MODE - Pre-validation before launching safety dialog
             if (trimmedPassword.length < 6) {
                 return setError('يجب أن تكون كلمة المرور 6 خانات أو أكثر تماشياً مع متطلبات الأمان لشبكة Firebase');
@@ -367,117 +366,14 @@ export default function Login() {
             // Show verification dialog overlay instead of submitting immediately
             setShowEmailConfirmModal(true);
         } else {
-            // LOGIN MODE
+            // LOGIN MODE (Username and Password only)
+            if (!trimmedUsername || !trimmedPassword) {
+                return setError('الرجاء كتابة اسم المستخدم وكلمة المرور');
+            }
+
             setIsLoading(true);
             try {
-                if ((trimmedUsername === 'admin' && trimmedPassword === 'admin123') || (trimmedUsername === 'abdohali' && trimmedPassword === 'abdohali1994' && !window.navigator.onLine)) {
-                    // Skip Firebase Auth for default local/offline admin accounts
-                    const localAdmin: AppUser = {
-                        uid: trimmedUsername === 'abdohali' ? 'offline_abdohali_uid' : 'offline_admin_uid',
-                        name: trimmedUsername,
-                        email: trimmedEmail || 'habob19940@gmail.com',
-                        role: 'admin',
-                        isActive: true,
-                        permissions: getAdminPerms(),
-                        tenantId: trimmedEmail || 'habob19940@gmail.com',
-                        password: trimmedPassword
-                    };
-                    try {
-                        localStorage.setItem('last_logged_in_user', JSON.stringify(localAdmin));
-                    } catch (e) {}
-                    login(localAdmin);
-                    setSuccessMessage('تم تسجيل الدخول بنجاح (النمط المحلي الافتراضي)! جاري تحميل النظام...');
-                    setIsLoading(false);
-                    return;
-                }
-
-                if (trimmedUsername === 'admin' || trimmedUsername === 'abdohali') {
-                    // 1. Admin/Owner logging in via Firebase Auth
-                    const userCredential = await signInWithEmailAndPassword(auth, trimmedEmail, trimmedPassword);
-                    const fbUser = userCredential.user;
-
-                    // Retrieve custom settings From Firestore
-                    const qUser = query(collection(db, 'users'), where('uid', '==', fbUser.uid), limit(1));
-                    const snapUser = await getDocs(qUser);
-
-                    let userDoc = snapUser.empty ? null : snapUser.docs[0];
-                    if (!userDoc) {
-                        // Rebuild profile if missing but authed
-                        const newAdmin: AppUser = {
-                            uid: fbUser.uid,
-                            name: trimmedUsername,
-                            email: trimmedEmail,
-                            role: 'admin',
-                            isActive: true,
-                            permissions: getAdminPerms(),
-                            tenantId: trimmedEmail,
-                            password: trimmedPassword
-                        };
-                        await setDoc(doc(db, 'users', fbUser.uid), {
-                            ...newAdmin,
-                            createdAt: Date.now()
-                        });
-                        try {
-                            localStorage.setItem('last_logged_in_user', JSON.stringify(newAdmin));
-                        } catch (e) {}
-                        login(newAdmin);
-                        setSuccessMessage('تم تسجيل الدخول بنجاح! جاري تحميل النظام...');
-                    } else {
-                        const userData = userDoc.data();
-                        if (!userData.isActive) {
-                            setError('عذراً، هذا الحساب معطل حالياً بنظام الإدارة الذكي.');
-                            setIsLoading(false);
-                            return;
-                        }
-                        const dbUser = { uid: userDoc.id, ...userData, password: trimmedPassword } as AppUser;
-                        try {
-                            localStorage.setItem('last_logged_in_user', JSON.stringify(dbUser));
-                        } catch (e) {}
-                        login(dbUser);
-                        setSuccessMessage('أهلاً بك مجدداً! جاري توجيهك لوحة مبيعات متجرك...');
-                    }
-                } else {
-                    // 2. Staff/Cashier/Sub-user logging in via local Firestore match (Tenant email isolation check)
-                    const qStaff = query(
-                        collection(db, 'users'),
-                        where('tenantId', '==', trimmedEmail),
-                        where('name', '==', trimmedUsername),
-                        where('password', '==', trimmedPassword),
-                        limit(1)
-                    );
-                    const snapStaff = await getDocs(qStaff);
-
-                    if (snapStaff.empty) {
-                        setError('خطأ: معلومات الدخول للموظف غير صحيحة أو المتجر غير مطابق.');
-                        setIsLoading(false);
-                        return;
-                    }
-
-                    const userDoc = snapStaff.docs[0];
-                    const userData = userDoc.data();
-
-                    if (!userData.isActive) {
-                        setError('عذراً، هذا الحساب معطل حالياً من قبل مالك المتجر.');
-                        setIsLoading(false);
-                        return;
-                    }
-
-                    const activeUser = { uid: userDoc.id, ...userData, password: trimmedPassword } as AppUser;
-                    try {
-                        localStorage.setItem('last_logged_in_user', JSON.stringify(activeUser));
-                    } catch (e) {}
-                    login(activeUser);
-                    setSuccessMessage('أهلاً بك! تم دخول بوابة الموظفين بنجاح...');
-                }
-            } catch (err: any) {
-                // Avoid logging standard user validation/auth errors as console.error to keep the test environment clean
-                if (err.code === 'auth/invalid-credential' || err.code === 'auth/wrong-password' || err.code === 'auth/user-not-found') {
-                    console.warn('Login attempt failed:', err.message || err);
-                } else {
-                    console.error('Login error:', err);
-                }
-                
-                // Fallback to default admin account on ANY login error (e.g. auth/invalid-credential, wrong-password, network-failed, etc.)
+                // If offline and using default admin account bypass
                 if ((trimmedUsername === 'admin' && trimmedPassword === 'admin123') || (trimmedUsername === 'abdohali' && trimmedPassword === 'abdohali1994')) {
                     const localAdmin: AppUser = {
                         uid: trimmedUsername === 'abdohali' ? 'offline_abdohali_uid' : 'offline_admin_uid',
@@ -486,7 +382,7 @@ export default function Login() {
                         role: 'admin',
                         isActive: true,
                         permissions: getAdminPerms(),
-                        tenantId: trimmedEmail || 'habob19940@gmail.com',
+                        tenantId: 'single_store',
                         password: trimmedPassword
                     };
                     try {
@@ -497,16 +393,76 @@ export default function Login() {
                     setIsLoading(false);
                     return;
                 }
-                
-                // Network Block/Offline Mode Fallback for other accounts
-                if (err.code === 'auth/network-request-failed' || err.message?.includes('network-request-failed') || err.message?.includes('network')) {
+
+                // Try to find the user in Firestore database by username
+                let userDoc = null;
+                try {
+                    const qUser = query(collection(db, 'users'), where('name', '==', trimmedUsername), limit(1));
+                    const snapUser = await getDocs(qUser);
+                    if (!snapUser.empty) {
+                        userDoc = snapUser.docs[0];
+                    }
+                } catch (dbErr) {
+                    console.warn("Firestore query failed, trying offline/local cache", dbErr);
+                }
+
+                if (userDoc) {
+                    const userData = userDoc.data();
+                    if (!userData.isActive) {
+                        setError('عذراً، هذا الحساب معطل حالياً من قبل الإدارة.');
+                        setIsLoading(false);
+                        return;
+                    }
+
+                    if (userData.role === 'admin') {
+                        // Admin/Owner - Auth via Firebase Auth using their email
+                        const adminEmail = userData.email || trimmedEmail || 'habob19940@gmail.com';
+                        const userCredential = await signInWithEmailAndPassword(auth, adminEmail, trimmedPassword);
+                        const fbUser = userCredential.user;
+
+                        // Ensure tenantId is updated to single_store in Firestore for existing accounts
+                        try {
+                            await setDoc(doc(db, 'users', fbUser.uid), { tenantId: 'single_store' }, { merge: true });
+                        } catch (e) {
+                            console.warn("Could not sync tenantId to single_store online:", e);
+                        }
+
+                        const dbUser = { uid: fbUser.uid, ...userData, tenantId: 'single_store', password: trimmedPassword } as AppUser;
+                        try {
+                            localStorage.setItem('last_logged_in_user', JSON.stringify(dbUser));
+                        } catch (e) {}
+                        login(dbUser);
+                        setSuccessMessage('أهلاً بك مجدداً! جاري توجيهك لوحة مبيعات متجرك...');
+                    } else {
+                        // Cashier/Staff - Compare passwords directly
+                        if (userData.password === trimmedPassword) {
+                            // Ensure tenantId is updated to single_store in Firestore for existing staff accounts
+                            try {
+                                await setDoc(doc(db, 'users', userDoc.id), { tenantId: 'single_store' }, { merge: true });
+                            } catch (e) {
+                                console.warn("Could not sync staff tenantId to single_store online:", e);
+                            }
+
+                            const activeUser = { uid: userDoc.id, ...userData, tenantId: 'single_store', password: trimmedPassword } as AppUser;
+                            try {
+                                localStorage.setItem('last_logged_in_user', JSON.stringify(activeUser));
+                            } catch (e) {}
+                            login(activeUser);
+                            setSuccessMessage('أهلاً بك! تم دخول بوابة الموظفين بنجاح...');
+                        } else {
+                            setError('خطأ: كلمة المرور غير صحيحة لهذا المستخدم.');
+                            setIsLoading(false);
+                            return;
+                        }
+                    }
+                } else {
+                    // Username not found in online DB, check local storage for offline session cache
                     const lastUserStr = localStorage.getItem('last_logged_in_user');
                     if (lastUserStr) {
                         try {
                             const cachedUser = JSON.parse(lastUserStr);
                             if (
                                 cachedUser &&
-                                cachedUser.email?.trim().toLowerCase() === trimmedEmail &&
                                 cachedUser.name?.trim().toLowerCase() === trimmedUsername &&
                                 cachedUser.password === trimmedPassword
                             ) {
@@ -520,37 +476,35 @@ export default function Login() {
                         }
                     }
 
-                    // Fallback to default admin account if offline/blocked on first startup
-                    if ((trimmedUsername === 'admin' && trimmedPassword === 'admin123') || (trimmedUsername === 'abdohali' && trimmedPassword === 'abdohali1994')) {
-                        const localAdmin: AppUser = {
-                            uid: trimmedUsername === 'abdohali' ? 'offline_abdohali_uid' : 'offline_admin_uid',
-                            name: trimmedUsername,
-                            email: trimmedEmail || 'habob19940@gmail.com',
-                            role: 'admin',
-                            isActive: true,
-                            permissions: getAdminPerms(),
-                            tenantId: trimmedEmail || 'habob19940@gmail.com',
-                            password: trimmedPassword
-                        };
-                        try {
-                            localStorage.setItem('last_logged_in_user', JSON.stringify(localAdmin));
-                        } catch (e) {}
-                        login(localAdmin);
-                        setSuccessMessage('تم الدخول بالنمط المحلي الافتراضي لعدم توفر اتصال بالإنترنت!');
-                        setIsLoading(false);
-                        return;
-                    }
-
-                    setError('فشل الاتصال بالشبكة (Network Request Failed). يرجى التحقق من اتصال الإنترنت، أو إيقاف موانع الإعلانات (AdBlock/Brave Shields) التي قد تحظر خدمات التحقق لـ Firebase Auth. وإذا كنت قد سجلت الدخول مسبقاً، يرجى كتابة نفس معلومات الدخول السابقة لتفعيل وضع الدخول المحلي دون اتصال (Offline Mode).');
+                    setError('خطأ: اسم المستخدم المدخل غير مسجل مسبقاً في النظام.');
                     setIsLoading(false);
-                    return;
+                }
+            } catch (err: any) {
+                console.error('Login error:', err);
+
+                // Check offline fallback for network request failed
+                if (err.code === 'auth/network-request-failed' || err.message?.includes('network-request-failed') || err.message?.includes('network')) {
+                    const lastUserStr = localStorage.getItem('last_logged_in_user');
+                    if (lastUserStr) {
+                        try {
+                            const cachedUser = JSON.parse(lastUserStr);
+                            if (
+                                cachedUser &&
+                                cachedUser.name?.trim().toLowerCase() === trimmedUsername &&
+                                cachedUser.password === trimmedPassword
+                            ) {
+                                login(cachedUser);
+                                setSuccessMessage('تم تسجيل الدخول بنجاح (النمط المحلي دون اتصال)! جاري تحميل النظام...');
+                                setIsLoading(false);
+                                return;
+                            }
+                        } catch (e) {}
+                    }
                 }
 
                 let arabicError = 'فشل تسجيل الدخول: ';
                 if (err.code === 'auth/wrong-password' || err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential') {
-                    arabicError += 'البريد الإلكتروني أو كلمة المرور غير صحيحة. (تنبيه: إذا كنت قد حاولت إنشاء الحساب سابقاً وظهر خطأ "كلمة مرور ضعيفة"، فإن الحساب لم يكتمل تأسيسه من قِبل شبكة Firebase. يرجى الضغط على زر "تأسيس متجر إضافي" بالأسفل وإعادة تعبئة البيانات بكلمة مرور لا تقل عن 6 خانات!)';
-                } else if (err.code === 'auth/invalid-email') {
-                    arabicError += 'صيغة البريد الإلكتروني المكتوبة غير صحيحة';
+                    arabicError += 'اسم المستخدم أو كلمة المرور غير صحيحة.';
                 } else {
                     arabicError += err.message || 'المعلومات المكتوبة خطأ أو مشكلة بالاتصال';
                 }
@@ -614,26 +568,23 @@ export default function Login() {
                     )}
 
                     {/* 3. Email Input */}
-                    <div>
-                        <label className="block text-gray-600 dark:text-gray-400 font-extrabold mb-1.5 mr-1 flex items-center gap-1">
-                            <Mail className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
-                            البريد الإلكتروني لمتجرك (الإيميل):
-                        </label>
-                        <input 
-                            type="email" 
-                            placeholder="owner@example.com" 
-                            className={`w-full border border-gray-200 dark:border-slate-700 p-3 rounded-xl focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none text-right transition ${
-                                !isRegistering 
-                                ? 'opacity-65 bg-gray-100 dark:bg-slate-800/60 cursor-not-allowed select-none pointer-events-none' 
-                                : 'bg-white dark:bg-slate-800'
-                            }`}
-                            value={email}
-                            onChange={e => setEmail(e.target.value)}
-                            disabled={!isRegistering}
-                            dir="ltr"
-                            required
-                        />
-                    </div>
+                    {isRegistering && (
+                        <div>
+                            <label className="block text-gray-600 dark:text-gray-400 font-extrabold mb-1.5 mr-1 flex items-center gap-1">
+                                <Mail className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                                البريد الإلكتروني لمتجرك (الإيميل):
+                            </label>
+                            <input 
+                                type="email" 
+                                placeholder="owner@example.com" 
+                                className="w-full border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-3 rounded-xl focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none text-right transition"
+                                value={email}
+                                onChange={e => setEmail(e.target.value)}
+                                dir="ltr"
+                                required
+                            />
+                        </div>
+                    )}
 
                     {/* 4. Username Input */}
                     <div>
@@ -718,24 +669,7 @@ export default function Login() {
                         )}
                     </div>
 
-                    {/* Toggle between register or login if not first time */}
-                    {!isFirstTime && (
-                        <div className="text-xs text-center mt-2 pt-3 border-t border-gray-100 dark:border-slate-800">
-                            <button 
-                                type="button"
-                                onClick={() => { 
-                                    setIsRegistering(!isRegistering); 
-                                    setError(null); 
-                                    setSuccessMessage(null); 
-                                }}
-                                className="text-indigo-600 dark:text-indigo-400 font-extrabold hover:underline cursor-pointer"
-                            >
-                                {isRegistering 
-                                    ? 'لديك حساب تجاري جاهز؟ العودة لتسجيل الدخول الفوري' 
-                                    : 'مالك متجر جديد؟ تأسيس متجر إضافي من هنا'}
-                            </button>
-                        </div>
-                    )}
+
                 </form>
             </div>
 

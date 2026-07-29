@@ -63,7 +63,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     setUser: (user) => set({ user }),
     setAppUser: (user) => {
         if (user) {
-            const resolvedTenantId = user.tenantId || (user.role === 'admin' ? user.uid : 'admin_initial');
+            const resolvedTenantId = 'single_store';
             set({ appUser: { ...user, tenantId: resolvedTenantId } });
         } else {
             set({ appUser: null });
@@ -71,7 +71,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     },
     setLoading: (isLoading) => set({ isLoading }),
     login: (user) => {
-        const resolvedTenantId = user.tenantId || (user.role === 'admin' ? user.uid : 'admin_initial');
+        const resolvedTenantId = 'single_store';
         const userWithTenant = { ...user, tenantId: resolvedTenantId };
         try {
             localStorage.setItem('app_session', JSON.stringify({ uid: user.uid, timestamp: Date.now() }));

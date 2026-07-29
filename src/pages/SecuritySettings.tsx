@@ -2,9 +2,9 @@ import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ShieldCheck, ChevronRight, Key } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
-import { doc, updateDoc } from 'firebase/firestore';
+import { doc, updateDoc, setDoc } from 'firebase/firestore';
 import { db, auth } from '../lib/firebase';
-import { updatePassword } from 'firebase/auth';
+import { updatePassword, EmailAuthProvider, reauthenticateWithCredential } from 'firebase/auth';
 
 export default function SecuritySettings() {
     const { appUser } = useAuthStore();
@@ -31,18 +31,33 @@ export default function SecuritySettings() {
                 try {
                     await updatePassword(auth.currentUser, newPassword);
                 } catch (authErr: any) {
-                    console.warn('Firebase Auth password update failed:', authErr);
-                    if (authErr.code === 'auth/requires-recent-login') {
-                        alert('انتهت صلاحية الجلسة الأمنية لتحديث كلمة المرور. يرجى تسجيل الخروج والولوج مجدداً لتغييرها.');
+                    console.warn('Firebase Auth password update failed, attempting automatic reauthentication:', authErr);
+                    if (authErr.code === 'auth/requires-recent-login' && appUser.email && currentPassword) {
+                        try {
+                            const credential = EmailAuthProvider.credential(appUser.email, currentPassword);
+                            await reauthenticateWithCredential(auth.currentUser, credential);
+                            await updatePassword(auth.currentUser, newPassword);
+                        } catch (reauthErr: any) {
+                            console.error('Reauthentication failed:', reauthErr);
+                            alert('انتهت صلاحية الجلسة الأمنية لتحديث كلمة المرور. يرجى تسجيل الخروج والولوج مجدداً لتغييرها.');
+                            setIsSaving(false);
+                            return;
+                        }
+                    } else {
+                        alert('حدث خطأ أثناء تحديث كلمة المرور سحابياً: ' + (authErr.message || authErr));
                         setIsSaving(false);
                         return;
                     }
                 }
             }
 
-            await updateDoc(doc(db, 'users', appUser.uid), {
-                password: newPassword
-            });
+            try {
+                await setDoc(doc(db, 'users', appUser.uid), {
+                    password: newPassword
+                }, { merge: true });
+            } catch (fsErr: any) {
+                console.warn('Firestore user update failed, continuing locally:', fsErr);
+            }
 
             // Update local remembered password
             localStorage.setItem('remembered_password', newPassword);

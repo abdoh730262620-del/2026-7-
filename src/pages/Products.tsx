@@ -146,10 +146,27 @@ export default function Products() {
 
     const filtered = useMemo(() => {
         const lowerSearch = search.toLowerCase();
-        return products.filter(p => 
+        
+        // Remove duplicate product names (case-insensitive and trimmed)
+        const uniqueProducts: Product[] = [];
+        const seenNames = new Set<string>();
+        
+        for (const p of products) {
+            const normalizedName = (p.name || '').trim().toLowerCase();
+            if (!seenNames.has(normalizedName)) {
+                seenNames.add(normalizedName);
+                uniqueProducts.push(p);
+            }
+        }
+
+        // Filter by search query
+        const filteredList = uniqueProducts.filter(p => 
             (p.name || '').toLowerCase().includes(lowerSearch) || 
             (p.barcode || '').includes(lowerSearch)
         );
+
+        // Sort alphabetically by name
+        return filteredList.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'ar'));
     }, [products, search]);
 
     const [editingProduct, setEditingProduct] = useState<Product | null>(null);
@@ -214,6 +231,17 @@ export default function Products() {
         e.preventDefault();
         try {
             const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+            
+            // Check for duplicate product names (excluding the product currently being edited)
+            const isDuplicate = products.some(p => 
+                p.name.trim().toLowerCase() === name.trim().toLowerCase() && 
+                (!editingProduct || p.id !== editingProduct.id)
+            );
+            if (isDuplicate) {
+                alert('عذراً، هذا الاسم موجود مسبقاً! يرجى استخدام اسم فريد ومميز للمنتج لتجنب التكرار.');
+                return;
+            }
+
             const productId = editingProduct ? editingProduct.id : Math.random().toString(36).substring(2);
             const productPayload = {
                 id: productId,
@@ -340,14 +368,20 @@ export default function Products() {
 
                     </div>
                 </>
-            ) : (
-                <div className="flex flex-col h-full overflow-hidden">
-                    <div className="p-2 flex flex-col gap-2 shrink-0 bg-[#FDFDFD]">
-                        <div className="flex items-center gap-2">
-                            <h1 className="text-lg md:text-xl font-black text-text-main">قائمة المنتجات</h1>
-                        </div>
+             ) : (
+                 <div className="flex flex-col h-full overflow-hidden">
+                     <div className="p-2 flex flex-col gap-2 shrink-0 bg-[#FDFDFD]">
+                         
+                         <div className="flex items-center gap-2">
+                             <h1 className="text-lg md:text-xl font-black text-text-main flex items-center gap-2">
+                                 قائمة المنتجات
+                                 <span className="text-xs bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400 px-2.5 py-0.5 rounded-full font-bold">
+                                     {filtered.length}
+                                 </span>
+                             </h1>
+                         </div>
 
-                        <div className="relative w-full z-20">
+                         <div className="relative w-full z-20">
                             <div className="bg-card-bg flex items-center gap-3 w-full h-12 px-4 rounded-xl border border-border-main focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100 transition-all relative z-20 shadow-sm cursor-text" onClick={(e) => {
                                 const input = e.currentTarget.querySelector('input');
                                 if (input) input.focus();
