@@ -5,12 +5,31 @@ import {
     X, Sparkles, TrendingUp, Wallet, ArrowUpRight, ArrowDownLeft, Search, UserCheck,
     Share2, MessageSquare, Send
 } from 'lucide-react';
-import { collection, query, where, onSnapshot, addDoc, doc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, doc, addDoc as firestoreAddDoc, updateDoc as firestoreUpdateDoc, deleteDoc as firestoreDeleteDoc } from 'firebase/firestore';
+
+// Helper functions for offline-safe writes
+const safeWrite = async (promise: Promise<any>) => {
+    if (!window.navigator.onLine) {
+        promise.catch((e: any) => console.warn('Offline write deferred', e));
+        return Promise.resolve();
+    }
+    return Promise.race([
+        promise,
+        new Promise(resolve => setTimeout(resolve, 800)) // 800ms timeout for UI responsiveness
+    ]);
+};
+
+const addDoc = (ref: any, data: any) => safeWrite(firestoreAddDoc(ref, data));
+const updateDoc = (ref: any, data: any) => safeWrite(firestoreUpdateDoc(ref, data));
+const deleteDoc = (ref: any) => safeWrite(firestoreDeleteDoc(ref));
+
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { useAuthStore } from '../store/authStore';
 import { CardCategory, CardDistributor, CardStockLog, CardSale, CardVoucher, CardCashboxEntry } from '../types/cardTypes';
 import { printReport } from '../lib/printHelper';
 import CardSaleModal from '../components/CardSaleModal';
+
+
 
 export default function CardsManagement() {
     const { appUser, hasPermission } = useAuthStore();
@@ -351,6 +370,10 @@ export default function CardsManagement() {
     const handleSaveDistributor = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!distNameInput.trim()) return;
+        if (!distPhoneInput.trim()) {
+            alert('يرجى إدخال رقم هاتف الموزع');
+            return;
+        }
 
         try {
             const commission = parseFloat(distCommissionInput) || 0;
