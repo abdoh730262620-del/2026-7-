@@ -5,11 +5,12 @@ import { useAuthStore } from '../store/authStore';
 import { useInvoiceStore, CartItem } from '../store/invoiceStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { logUserAction } from '../lib/logger';
-import { ShoppingCart, Plus, Minus, Trash2, Search, FileText, Printer, MessageCircle, Globe, Coins, MoreVertical, ArrowLeft, X } from 'lucide-react';
+import { ShoppingCart, Plus, Minus, Trash2, Search, FileText, Printer, MessageCircle, Globe, Coins, MoreVertical, ArrowLeft, X, Camera } from 'lucide-react';
 import { printInvoice } from '../lib/printHelper';
 import { InvoicePreviewModal } from '../components/InvoicePreviewModal';
 import SearchableSelect from '../components/SearchableSelect';
 import ReturnInvoiceModal from '../components/ReturnInvoiceModal';
+import { BarcodeScannerModal } from '../components/BarcodeScannerModal';
 import { motion, AnimatePresence } from 'framer-motion';
 
 interface Product {
@@ -86,6 +87,28 @@ export default function Sales() {
     const [newPartyPhone, setNewPartyPhone] = useState('');
     const [newPartyAddress, setNewPartyAddress] = useState('');
     const [newPartyBalance, setNewPartyBalance] = useState('');
+
+    const [isScannerOpen, setIsScannerOpen] = useState(false);
+    const [scanNotification, setScanNotification] = useState<string | null>(null);
+
+    const handleBarcodeScanned = (scannedCode: string) => {
+        const cleanCode = scannedCode.trim().toLowerCase();
+        const matchedProduct = products.find(p => 
+            (p.barcode || '').trim().toLowerCase() === cleanCode || 
+            (p.id || '').trim().toLowerCase() === cleanCode
+        );
+
+        if (matchedProduct) {
+            addToCart(matchedProduct);
+            setScanNotification(`تمت إضافة "${matchedProduct.name}" إلى الفاتورة بنجاح`);
+            setTimeout(() => setScanNotification(null), 3000);
+        } else {
+            setSearch(scannedCode);
+            setIsDropdownOpen(true);
+            setScanNotification(`لم يتم العثور على منتج بالباركود (${scannedCode}). تم وضع الرقم في البحث.`);
+            setTimeout(() => setScanNotification(null), 4000);
+        }
+    };
 
     const _reverseInvoice = async (invoice: any, actionType: 'returned' | 'cancelled', providedBatch?: any) => {
         const batch = providedBatch || writeBatch(db);
@@ -871,7 +894,7 @@ export default function Sales() {
                     )}
                     <div className="p-3 border-b border-border-main bg-white dark:bg-slate-800 shrink-0 rounded-t-xl relative z-30">
                         <div className="relative w-full z-20">
-                            <div className="bg-card-bg flex items-center gap-3 w-full h-12 px-4 rounded-xl border border-border-main focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100 transition-all relative z-20 shadow-sm cursor-text" onClick={(e) => {
+                            <div className="bg-card-bg flex items-center gap-2 md:gap-3 w-full h-12 px-3 md:px-4 rounded-xl border border-border-main focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100 transition-all relative z-20 shadow-sm cursor-text" onClick={(e) => {
                                 const input = e.currentTarget.querySelector('input');
                                 if (input) input.focus();
                             }}>
@@ -879,7 +902,7 @@ export default function Sales() {
                                 <input 
                                     type="text" 
                                     placeholder="ابحث عن منتج بالاسم أو الباركود..." 
-                                    className="flex-1 h-full outline-none font-extrabold text-sm text-text-main placeholder:text-gray-400 bg-transparent"
+                                    className="flex-1 h-full outline-none font-extrabold text-xs md:text-sm text-text-main placeholder:text-gray-400 bg-transparent"
                                     value={search}
                                     onChange={handleSearchChange}
                                     onFocus={() => { if(search.length > 0) setIsDropdownOpen(true); }}
@@ -891,7 +914,36 @@ export default function Sales() {
                                         <X size={18} />
                                     </button>
                                 )}
+                                <button
+                                    type="button"
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        setIsScannerOpen(true);
+                                    }}
+                                    className="bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white px-2.5 py-1.5 rounded-lg flex items-center gap-1.5 font-extrabold transition shadow-sm text-xs shrink-0 cursor-pointer"
+                                    title="مسح الباركود بالكاميرا"
+                                >
+                                    <Camera size={16} />
+                                    <span className="hidden sm:inline">مسح بالكاميرا</span>
+                                </button>
                             </div>
+
+                            {/* Toast Notification for Barcode Scanning */}
+                            <AnimatePresence>
+                                {scanNotification && (
+                                    <motion.div
+                                        initial={{ opacity: 0, y: -8 }}
+                                        animate={{ opacity: 1, y: 0 }}
+                                        exit={{ opacity: 0, y: -8 }}
+                                        className="mt-2 p-2.5 bg-indigo-50 dark:bg-indigo-950/50 border border-indigo-200 dark:border-indigo-800 text-indigo-900 dark:text-indigo-200 rounded-xl font-bold text-xs text-right shadow-sm flex items-center justify-between"
+                                    >
+                                        <span>{scanNotification}</span>
+                                        <button onClick={() => setScanNotification(null)} className="text-indigo-400 hover:text-indigo-600 p-0.5">
+                                            <X size={14} />
+                                        </button>
+                                    </motion.div>
+                                )}
+                            </AnimatePresence>
                             
                             <AnimatePresence>
                                 {isDropdownOpen && search.length > 0 && (
@@ -1397,6 +1449,15 @@ export default function Sales() {
                     </div>
                 </div>
             )}
+
+            {/* Barcode Camera Scanner Modal */}
+            <BarcodeScannerModal
+                isOpen={isScannerOpen}
+                onClose={() => setIsScannerOpen(false)}
+                onScan={handleBarcodeScanned}
+                title="مسح باركود المنتج بالكاميرا"
+                subtitle="قم بتوجيه الكاميرا إلى الباركود لإضافته فورياً للفاتورة"
+            />
         </div>
     );
 }

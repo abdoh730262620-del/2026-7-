@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { updateLastSyncTime } from '../lib/syncTracker';
 import { SyncManager } from '../lib/syncManager';
 import { useAuthStore } from './authStore';
+import { notifySyncComplete } from '../lib/pushNotifications';
 
 interface SyncState {
     isSyncing: boolean;
@@ -70,6 +71,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
             });
 
             updateLastSyncTime();
+            notifySyncComplete().catch(err => console.warn("Sync completion push notification notice failed:", err));
 
             // Auto-clear message after 4 seconds
             setTimeout(() => {

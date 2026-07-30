@@ -3,9 +3,11 @@ import { collection, query, getDocs, addDoc, updateDoc, doc, Timestamp, onSnapsh
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { useAuthStore } from '../store/authStore';
 import { useSettingsStore } from '../store/settingsStore';
-import { Plus, Search, Edit2, X, ArrowRight, ArrowLeft } from 'lucide-react';
+import { Plus, Search, Edit2, X, ArrowRight, ArrowLeft, Printer, Filter, Camera, ArrowDownUp, Barcode } from 'lucide-react';
 import { logUserAction } from '../lib/logger';
 import { useNavigate } from 'react-router-dom';
+import { printReport } from '../lib/printHelper';
+import { BarcodeScannerModal } from '../components/BarcodeScannerModal';
 
 interface Product {
     id: string;
@@ -51,6 +53,12 @@ export default function Products() {
     const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
     const [isBulkEditModalOpen, setIsBulkEditModalOpen] = useState(false);
     const [bulkCategory, setBulkCategory] = useState('General');
+
+    // Advanced Filter & Search state
+    const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string>('ALL');
+    const [stockFilter, setStockFilter] = useState<'ALL' | 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK'>('ALL');
+    const [sortBy, setSortBy] = useState<'name_asc' | 'name_desc' | 'quantity_asc' | 'quantity_desc' | 'price_asc' | 'price_desc' | 'newest'>('name_asc');
+    const [isScannerOpen, setIsScannerOpen] = useState(false);
     const [bulkActionType, setBulkActionType] = useState<'category' | 'price_fixed' | 'price_percent'>('category');
     const [bulkPriceValue, setBulkPriceValue] = useState('');
     const [bulkPriceChangeType, setBulkPriceChangeType] = useState<'increase' | 'decrease'>('increase');
@@ -145,7 +153,7 @@ export default function Products() {
     }, [appUser]);
 
     const filtered = useMemo(() => {
-        const lowerSearch = search.toLowerCase();
+        const lowerSearch = search.toLowerCase().trim();
         
         // Remove duplicate product names (case-insensitive and trimmed)
         const uniqueProducts: Product[] = [];
@@ -159,15 +167,77 @@ export default function Products() {
             }
         }
 
-        // Filter by search query
-        const filteredList = uniqueProducts.filter(p => 
+        // Filter by search query (name or barcode)
+        let filteredList = uniqueProducts.filter(p => 
             (p.name || '').toLowerCase().includes(lowerSearch) || 
-            (p.barcode || '').includes(lowerSearch)
+            (p.barcode || '').toLowerCase().includes(lowerSearch)
         );
 
-        // Sort alphabetically by name
-        return filteredList.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'ar'));
-    }, [products, search]);
+        // Filter by Category
+        if (selectedCategoryFilter !== 'ALL') {
+            filteredList = filteredList.filter(p => (p.category || 'General') === selectedCategoryFilter);
+        }
+
+        // Filter by Stock status
+        if (stockFilter === 'IN_STOCK') {
+            filteredList = filteredList.filter(p => p.quantity > (p.lowStockAlert || 5));
+        } else if (stockFilter === 'LOW_STOCK') {
+            filteredList = filteredList.filter(p => p.quantity > 0 && p.quantity <= (p.lowStockAlert || 5));
+        } else if (stockFilter === 'OUT_OF_STOCK') {
+            filteredList = filteredList.filter(p => p.quantity <= 0);
+        }
+
+        // Sort List
+        return filteredList.sort((a, b) => {
+            if (sortBy === 'name_asc') return (a.name || '').localeCompare(b.name || '', 'ar');
+            if (sortBy === 'name_desc') return (b.name || '').localeCompare(a.name || '', 'ar');
+            if (sortBy === 'quantity_asc') return (a.quantity || 0) - (b.quantity || 0);
+            if (sortBy === 'quantity_desc') return (b.quantity || 0) - (a.quantity || 0);
+            if (sortBy === 'price_asc') return (a.price || 0) - (b.price || 0);
+            if (sortBy === 'price_desc') return (b.price || 0) - (a.price || 0);
+            if (sortBy === 'newest') return (b.createdAt || 0) - (a.createdAt || 0);
+            return 0;
+        });
+    }, [products, search, selectedCategoryFilter, stockFilter, sortBy]);
+
+    const handlePrintProductsList = () => {
+        if (filtered.length === 0) {
+            alert('لا توجد منتجات مطابقة في القائمة للطباعة');
+            return;
+        }
+
+        const headers = [
+            '#',
+            'الباركود',
+            'اسم المنتج',
+            'التصنيف',
+            'الكمية بالمخزون',
+            'التكلفة (ر.س)',
+            'سعر البيع (ر.س)',
+            'إجمالي القيمة'
+        ];
+
+        const rows = filtered.map((p, index) => {
+            const totalVal = (p.price || 0) * (p.quantity || 0);
+            return [
+                index + 1,
+                p.barcode || 'بدون باركود',
+                p.name,
+                p.category === 'General' ? 'عام' : (p.category || 'عام'),
+                p.quantity || 0,
+                `${(p.cost || 0).toLocaleString()}`,
+                `${(p.price || 0).toLocaleString()}`,
+                `${totalVal.toLocaleString()}`
+            ];
+        });
+
+        const totalStockQty = filtered.reduce((sum, p) => sum + (p.quantity || 0), 0);
+        const totalStockValue = filtered.reduce((sum, p) => sum + ((p.price || 0) * (p.quantity || 0)), 0);
+
+        const title = `قائمة المنتجات والمخزون (${filtered.length} صنف | إجمالي القطع: ${totalStockQty} | القيمة: ${totalStockValue.toLocaleString()} ر.س)`;
+
+        printReport(title, headers, rows);
+    };
 
     const [editingProduct, setEditingProduct] = useState<Product | null>(null);
 
@@ -370,15 +440,46 @@ export default function Products() {
                 </>
              ) : (
                  <div className="flex flex-col h-full overflow-hidden">
-                     <div className="p-2 flex flex-col gap-2 shrink-0 bg-[#FDFDFD]">
+                     <div className="p-2 md:p-3 flex flex-col gap-2.5 shrink-0 bg-[#FDFDFD] dark:bg-slate-900 border-b border-border-main">
                          
-                         <div className="flex items-center gap-2">
-                             <h1 className="text-lg md:text-xl font-black text-text-main flex items-center gap-2">
+                         <div className="flex flex-wrap items-center justify-between gap-2">
+                             <h1 className="text-base md:text-xl font-black text-text-main flex items-center gap-2">
                                  قائمة المنتجات
                                  <span className="text-xs bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400 px-2.5 py-0.5 rounded-full font-bold">
-                                     {filtered.length}
+                                     {filtered.length} صنف
                                  </span>
                              </h1>
+                             
+                             <div className="flex items-center gap-2 flex-wrap">
+                                 {/* Print Button */}
+                                 <button
+                                     onClick={handlePrintProductsList}
+                                     className="bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white px-3 py-1.5 rounded-xl flex items-center gap-1.5 text-xs font-bold transition shadow-sm cursor-pointer"
+                                     title="طباعة قائمة المنتجات الحالية"
+                                 >
+                                     <Printer size={16} />
+                                     <span>طباعة القائمة</span>
+                                 </button>
+
+                                 {/* Barcode Camera Scanner */}
+                                 <button
+                                     onClick={() => setIsScannerOpen(true)}
+                                     className="bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white px-3 py-1.5 rounded-xl flex items-center gap-1.5 text-xs font-bold transition shadow-sm cursor-pointer"
+                                     title="مسح الباركود بالكاميرا للبحث"
+                                 >
+                                     <Camera size={16} />
+                                     <span className="hidden sm:inline">مسح الباركود</span>
+                                 </button>
+
+                                 {/* Add Product Button */}
+                                 <button
+                                     onClick={openAddModal}
+                                     className="bg-blue-600 hover:bg-blue-700 active:scale-95 text-white px-3 py-1.5 rounded-xl flex items-center gap-1.5 text-xs font-bold transition shadow-sm cursor-pointer"
+                                 >
+                                     <Plus size={16} />
+                                     <span className="hidden sm:inline">إضافة منتج</span>
+                                 </button>
+                             </div>
                          </div>
 
                          <div className="relative w-full z-20">
@@ -431,6 +532,58 @@ export default function Products() {
                                     </div>
                                 </div>
                             )}
+                        </div>
+
+                        {/* Advanced Filter & Sorting Row */}
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-1">
+                            {/* Category Filter */}
+                            <div className="flex items-center gap-1.5 bg-card-bg border border-border-main rounded-xl px-2.5 py-1.5 shadow-xs">
+                                <Filter size={14} className="text-gray-400 shrink-0" />
+                                <select
+                                    value={selectedCategoryFilter}
+                                    onChange={(e) => setSelectedCategoryFilter(e.target.value)}
+                                    className="bg-transparent text-text-main font-bold text-xs outline-none w-full cursor-pointer"
+                                >
+                                    <option value="ALL">جميع التصنيفات</option>
+                                    <option value="General">عام (بدون تصنيف)</option>
+                                    {categories.map((c) => (
+                                        <option key={c.id} value={c.name}>{c.name}</option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            {/* Stock Filter */}
+                            <div className="flex items-center gap-1.5 bg-card-bg border border-border-main rounded-xl px-2.5 py-1.5 shadow-xs">
+                                <Barcode size={14} className="text-gray-400 shrink-0" />
+                                <select
+                                    value={stockFilter}
+                                    onChange={(e) => setStockFilter(e.target.value as any)}
+                                    className="bg-transparent text-text-main font-bold text-xs outline-none w-full cursor-pointer"
+                                >
+                                    <option value="ALL">جميع حالات المخزون</option>
+                                    <option value="IN_STOCK">متوفر في المخزون</option>
+                                    <option value="LOW_STOCK">منخفض المخزون (تنبيه)</option>
+                                    <option value="OUT_OF_STOCK">نفذ من المخزون (0)</option>
+                                </select>
+                            </div>
+
+                            {/* Sorting */}
+                            <div className="flex items-center gap-1.5 bg-card-bg border border-border-main rounded-xl px-2.5 py-1.5 shadow-xs">
+                                <ArrowDownUp size={14} className="text-gray-400 shrink-0" />
+                                <select
+                                    value={sortBy}
+                                    onChange={(e) => setSortBy(e.target.value as any)}
+                                    className="bg-transparent text-text-main font-bold text-xs outline-none w-full cursor-pointer"
+                                >
+                                    <option value="name_asc">الاسم (أ - ي)</option>
+                                    <option value="name_desc">الاسم (ي - أ)</option>
+                                    <option value="quantity_asc">الكمية (الأقل أولاً)</option>
+                                    <option value="quantity_desc">الكمية (الأكثر أولاً)</option>
+                                    <option value="price_asc">سعر البيع (الأقل أولاً)</option>
+                                    <option value="price_desc">سعر البيع (الأعلى أولاً)</option>
+                                    <option value="newest">الأحدث مضافة</option>
+                                </select>
+                            </div>
                         </div>
                     </div>
 
@@ -1072,6 +1225,17 @@ export default function Products() {
                     </div>
                 </div>
             )}
+
+            {/* Barcode Scanner Modal */}
+            <BarcodeScannerModal
+                isOpen={isScannerOpen}
+                onClose={() => setIsScannerOpen(false)}
+                onScan={(barcode) => {
+                    setSearch(barcode);
+                    setIsScannerOpen(false);
+                }}
+                title="مسح باركود المنتج للبحث"
+            />
         </div>
     );
 }

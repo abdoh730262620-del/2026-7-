@@ -24,6 +24,14 @@ export interface AppPermissions {
     reports?: ModulePermissions;
     quotations?: ModulePermissions;
     vouchers?: ModulePermissions;
+    cards?: ModulePermissions;
+    cards_stock?: ModulePermissions;
+    cards_categories?: ModulePermissions;
+    cards_distributors?: ModulePermissions;
+    cards_sellers?: ModulePermissions;
+    cards_sales_report?: ModulePermissions;
+    cards_cashbox?: ModulePermissions;
+    cards_vouchers?: ModulePermissions;
     
     // Legacy mapping support for existing users
     edit?: boolean;

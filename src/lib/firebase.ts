@@ -13,6 +13,7 @@ import {
 import { getAuth } from "firebase/auth";
 import firebaseConfig from "../../firebase-applet-config.json";
 import { updateLastSyncTime } from "./syncTracker";
+import { ErrorNotifier } from "./errorNotifier";
 
 const app = initializeApp(firebaseConfig);
 
@@ -136,5 +137,12 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   }
 
   console.error('Firestore Error: ', JSON.stringify(errInfo));
+  ErrorNotifier.notify(
+    'خطأ في قاعدة البيانات (Firestore)',
+    `حدث خطأ أثناء تنفيذ عملية (${operationType}) على ${path || 'المجموعة'}.`,
+    errorMessage,
+    'firebase',
+    'قاعدة البيانات السحابية'
+  );
   throw new Error(JSON.stringify(errInfo));
 }

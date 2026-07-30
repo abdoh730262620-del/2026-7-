@@ -1,7 +1,7 @@
 import React from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
-import { Home, Package, ShoppingCart, Users, Truck, DollarSign, FileText, Settings, LogOut, Menu, X, RefreshCw, Sparkles, Database, BrainCircuit, Wrench, Moon, Sun, ClipboardCheck, Gift, FileSignature, ArrowRight, Wifi, WifiOff, Cloud, CloudOff } from 'lucide-react';
+import { Home, Package, ShoppingCart, Users, Truck, DollarSign, FileText, Settings, LogOut, Menu, X, RefreshCw, Sparkles, Database, BrainCircuit, Wrench, Moon, Sun, ClipboardCheck, Gift, FileSignature, ArrowRight, Wifi, WifiOff, Cloud, CloudOff, CreditCard, Layers } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { useInvoiceStore } from '../store/invoiceStore';
 import { useTheme } from '../context/ThemeContext';
@@ -59,6 +59,8 @@ export default function Layout() {
         { path: '/cash', label: 'الصندوق', icon: DollarSign, roles: ['admin', 'cashier'] },
         { path: '/vouchers', label: 'قبض وصرف', icon: DollarSign, roles: ['admin', 'cashier', 'salesman'] },
         { path: '/expenses', label: 'المصروفات', icon: DollarSign, roles: ['admin', 'cashier'] },
+        { path: '/network-cards', label: 'كروت الشبكة', icon: CreditCard, roles: ['admin', 'cashier', 'inventory', 'salesman'] },
+        { path: '/cards-management', label: 'إدارة الكروت', icon: Layers, roles: ['admin', 'cashier', 'inventory'] },
         { path: '/reports', label: 'التقارير', icon: FileText, roles: ['admin'] },
         { path: '/ai', label: 'الذكاء الاصطناعي', icon: BrainCircuit, roles: ['admin'] },
         { path: '/logs', label: 'سجل العمليات', icon: FileText, roles: ['admin'] },
@@ -100,6 +102,9 @@ export default function Layout() {
                 }
                 if (item.path === '/settings' || item.path === '/tools' || item.path === '/ai') {
                     if (p.settings?.view !== undefined) hasAccess = p.settings.view;
+                }
+                if (item.path === '/cards-management' || item.path === '/network-cards') {
+                    if (p.cards?.view !== undefined) hasAccess = p.cards.view;
                 }
             }
         }

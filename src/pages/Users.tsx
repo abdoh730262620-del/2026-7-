@@ -31,6 +31,14 @@ export const getInitPerms = (): AppPermissions => ({
     reports: { ...defaultModulePerms },
     quotations: { ...defaultModulePerms },
     vouchers: { ...defaultModulePerms },
+    cards: { ...defaultModulePerms },
+    cards_stock: { ...defaultModulePerms },
+    cards_categories: { ...defaultModulePerms },
+    cards_distributors: { ...defaultModulePerms },
+    cards_sellers: { ...defaultModulePerms },
+    cards_sales_report: { ...defaultModulePerms },
+    cards_cashbox: { ...defaultModulePerms },
+    cards_vouchers: { ...defaultModulePerms },
     backup: false
 });
 
@@ -49,6 +57,14 @@ export const getAdminPerms = (): AppPermissions => {
         reports: { ...adminP },
         quotations: { ...adminP },
         vouchers: { ...adminP },
+        cards: { ...adminP },
+        cards_stock: { ...adminP },
+        cards_categories: { ...adminP },
+        cards_distributors: { ...adminP },
+        cards_sellers: { ...adminP },
+        cards_sales_report: { ...adminP },
+        cards_cashbox: { ...adminP },
+        cards_vouchers: { ...adminP },
         backup: true
     };
 };
@@ -65,7 +81,15 @@ export const modulesMap: Record<keyof Omit<AppPermissions, 'edit' | 'add' | 'del
     suppliers: 'الموردين',
     users: 'المستخدمين',
     settings: 'الإعدادات',
-    reports: 'التقارير'
+    reports: 'التقارير',
+    cards: 'الكروت (عام)',
+    cards_stock: 'مخزون الكروت (إضافة رصيد)',
+    cards_categories: 'فئات كروت الشبكة',
+    cards_distributors: 'موزعي الكروت وحساباتهم',
+    cards_sellers: 'بائعي الكروت وعمولات التجزئة',
+    cards_sales_report: 'تقرير مبيعات الكروت الشهرية',
+    cards_cashbox: 'صندوق مبيعات الكروت',
+    cards_vouchers: 'سندات قبض وصرف الموزعين'
 };
 
 const PermissionsEditor = ({ permissions, onChange }: { permissions: AppPermissions, onChange: (newPerms: AppPermissions) => void }) => {
@@ -275,7 +299,7 @@ export default function Users() {
         'salesman': 'مندوب مبيعات (Salesman)'
     };
 
-    const permissionLabels: Record<keyof AppPermissions, string> = {
+    const permissionLabels: Partial<Record<keyof AppPermissions, string>> = {
         sales: 'المبيعات',
         purchases: 'المشتريات',
         edit: 'التعديل',

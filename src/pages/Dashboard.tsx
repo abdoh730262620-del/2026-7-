@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useAuthStore } from '../store/authStore';
 import { useInvoiceStore } from '../store/invoiceStore';
 import { Link } from 'react-router-dom';
-import { ShoppingCart, Truck, Users, DollarSign, Receipt, Package, RefreshCw, Clock, Sparkles, Loader2, X, ShieldCheck, FileSpreadsheet, Printer, BrainCircuit, ArrowRight, ClipboardCheck, Gift, FileSignature, Coins } from 'lucide-react';
+import { ShoppingCart, Truck, Users, DollarSign, Receipt, Package, RefreshCw, Clock, Sparkles, Loader2, X, ShieldCheck, FileSpreadsheet, Printer, BrainCircuit, ArrowRight, ClipboardCheck, Gift, FileSignature, Coins, Wifi, Layers } from 'lucide-react';
 import { collection, query, onSnapshot, getDocs, where } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { useSettingsStore } from '../store/settingsStore';
@@ -268,7 +268,9 @@ export default function Dashboard() {
         { title: 'برنامج الولاء', path: '/loyalty', icon: Gift, roles: ['admin', 'cashier'], bgColor: 'bg-white', textColor: 'text-yellow-600', borderColor: 'border-yellow-100', enabled: settings.isLoyaltyEnabled },
         { title: 'الصندوق', path: '/cash', icon: DollarSign, roles: ['admin', 'cashier'], bgColor: 'bg-white', textColor: 'text-emerald-600', borderColor: 'border-emerald-100' },
         { title: 'سندات قبض وصرف', path: '/vouchers', icon: Receipt, roles: ['admin', 'cashier', 'salesman'], bgColor: 'bg-white', textColor: 'text-red-600', borderColor: 'border-red-100' },
-        { title: 'المصروفات', path: '/expenses', icon: Coins, roles: ['admin', 'cashier'], bgColor: 'bg-white', textColor: 'text-pink-600', borderColor: 'border-pink-100' }
+        { title: 'المصروفات', path: '/expenses', icon: Coins, roles: ['admin', 'cashier'], bgColor: 'bg-white', textColor: 'text-pink-600', borderColor: 'border-pink-100' },
+        { title: 'كروت الشبكة', path: '/network-cards', icon: Wifi, roles: ['admin', 'cashier', 'salesman', 'inventory'], bgColor: 'bg-white', textColor: 'text-indigo-600', borderColor: 'border-indigo-100' },
+        { title: 'إدارة الكروت', path: '/cards-management', icon: Layers, roles: ['admin', 'cashier', 'inventory'], bgColor: 'bg-white', textColor: 'text-purple-600', borderColor: 'border-purple-100' }
     ];
 
     const accessibleCards = cards.filter(card => {

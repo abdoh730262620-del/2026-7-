@@ -14,8 +14,8 @@ try {
   const destApk = path.join(apkDir, `${safeAppName}.apk`);
 
   if (fs.existsSync(srcApk)) {
-    fs.copyFileSync(srcApk, destApk);
-    console.log('Successfully renamed APK to:', destApk);
+    fs.renameSync(srcApk, destApk);
+    console.log('Successfully renamed APK to single Arabic file:', destApk);
   } else {
     console.error('Source app-debug.apk was not found at:', srcApk);
     process.exit(1);

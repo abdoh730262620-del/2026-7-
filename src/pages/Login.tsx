@@ -50,14 +50,14 @@ export default function Login() {
     const [showPassword, setShowPassword] = useState(false);
 
     // Form inputs (unified)
-    const [email, setEmail] = useState('habob19940@gmail.com');
-    const [username, setUsername] = useState('abdohali');
-    const [password, setPassword] = useState('abdohali1994');
+    const [email, setEmail] = useState('');
+    const [username, setUsername] = useState('');
+    const [password, setPassword] = useState('');
 
     // Toggle registration view (for new store creation)
     const [isRegistering, setIsRegistering] = useState(false);
     const [showEmailConfirmModal, setShowEmailConfirmModal] = useState(false);
-    const [hasSavedEmail, setHasSavedEmail] = useState(true);
+    const [hasSavedEmail, setHasSavedEmail] = useState(false);
 
     useEffect(() => {
         const checkFirstTime = async () => {
@@ -69,47 +69,43 @@ export default function Login() {
                 
                 if (firstTime) {
                     setIsRegistering(true);
-                    setUsername('admin');
-                    setPassword('admin123');
+                    setUsername('');
+                    setPassword('');
                     setEmail('');
                 } else {
-                    // Not first time - load prefilled values from localStorage if they exist!
-                    const savedEmail = localStorage.getItem('remembered_email') || 'habob19940@gmail.com';
-                    const savedUsername = localStorage.getItem('remembered_staff_username') || 'abdohali';
-                    const savedPassword = localStorage.getItem('remembered_password');
+                    // Not first time - load saved values ONLY if user explicitly saved them and not default admin
+                    const savedEmail = localStorage.getItem('remembered_email') || '';
+                    let savedUsername = localStorage.getItem('remembered_staff_username') || '';
+                    let savedPassword = localStorage.getItem('remembered_password') || '';
                     
-                    setEmail(savedEmail);
-                    setHasSavedEmail(true);
-                    setUsername(savedUsername);
-                    if (savedUsername.trim().toLowerCase() === 'admin') {
-                        setPassword(savedPassword || 'admin123');
-                    } else if (savedUsername.trim().toLowerCase() === 'abdohali') {
-                        setPassword(savedPassword || 'abdohali1994');
-                    } else {
-                        setPassword(savedPassword || '');
+                    if (['admin', 'ادمن'].includes(savedUsername.trim().toLowerCase())) {
+                        savedUsername = '';
                     }
+                    if (['admin', 'admin123'].includes(savedPassword.trim().toLowerCase())) {
+                        savedPassword = '';
+                    }
+
+                    setEmail(savedEmail);
+                    setHasSavedEmail(!!savedEmail);
+                    setUsername(savedUsername);
+                    setPassword(savedPassword);
                 }
             } catch (err: any) {
                 console.error("Error checking for existing users:", err);
-                // Offline fallback: check if we have a saved email or cached user
-                const savedEmail = localStorage.getItem('remembered_email') || 'habob19940@gmail.com';
+                // Offline fallback
+                const savedEmail = localStorage.getItem('remembered_email') || '';
                 if (savedEmail) {
                     setIsFirstTime(false);
                     setEmail(savedEmail);
                     setHasSavedEmail(true);
-                    const savedUsername = localStorage.getItem('remembered_staff_username') || 'abdohali';
-                    const savedPassword = localStorage.getItem('remembered_password');
+                    const savedUsername = localStorage.getItem('remembered_staff_username') || '';
+                    const savedPassword = localStorage.getItem('remembered_password') || '';
                     setUsername(savedUsername);
-                    if (savedUsername.trim().toLowerCase() === 'admin') {
-                        setPassword(savedPassword || 'admin123');
-                    } else if (savedUsername.trim().toLowerCase() === 'abdohali') {
-                        setPassword(savedPassword || 'abdohali1994');
-                    } else {
-                        setPassword(savedPassword || '');
-                    }
+                    setPassword(savedPassword);
                 } else {
-                    // No saved session and offline - assume false so user can login with default offline admin or cached users
                     setIsFirstTime(false);
+                    setUsername('');
+                    setPassword('');
                 }
             } finally {
                 setIsCheckingFirstTime(false);
@@ -367,8 +363,9 @@ export default function Login() {
             setShowEmailConfirmModal(true);
         } else {
             // LOGIN MODE (Username and Password only)
-            if (!trimmedUsername || !trimmedPassword) {
-                return setError('الرجاء كتابة اسم المستخدم وكلمة المرور');
+            const isUnchangedDefault = (trimmedUsername === 'admin' || trimmedUsername === 'ادمن') && (trimmedPassword === 'admin' || trimmedPassword === 'admin123' || !trimmedPassword);
+            if (!trimmedUsername || !trimmedPassword || isUnchangedDefault) {
+                return setError('ادخل اسم المستخدم وكلمه المرور');
             }
 
             setIsLoading(true);
@@ -590,21 +587,19 @@ export default function Login() {
                     <div>
                         <label className="block text-gray-600 dark:text-gray-400 font-extrabold mb-1.5 mr-1 flex items-center gap-1">
                             <User className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
-                            {isFirstTime || isRegistering ? 'اسم المستخدم (الافتراضي: admin):' : 'اسم المستخدم:'}
+                            اسم المستخدم:
                         </label>
                         <input 
                             type="text" 
-                            placeholder="admin" 
+                            placeholder="ادمن" 
                             className="w-full border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-3 rounded-xl focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none text-right transition font-bold"
                             value={username}
-                            onChange={e => {
-                                const val = e.target.value;
-                                setUsername(val);
-                                if (val.trim().toLowerCase() !== 'admin') {
-                                    setPassword('');
+                            onFocus={() => {
+                                if (username.trim().toLowerCase() === 'admin' || username.trim() === 'ادمن') {
+                                    setUsername('');
                                 }
                             }}
-                            required
+                            onChange={e => setUsername(e.target.value)}
                         />
                     </div>
 
@@ -612,17 +607,21 @@ export default function Login() {
                     <div>
                         <label className="block text-gray-600 dark:text-gray-400 font-extrabold mb-1.5 mr-1 flex items-center gap-1">
                             <Lock className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
-                            {isFirstTime || isRegistering ? 'كلمة المرور المشفرة (الافتراضية: admin123):' : 'كلمة المرور:'}
+                            كلمة المرور:
                         </label>
                         <div className="relative">
                             <input 
                                 type={showPassword ? 'text' : 'password'} 
-                                placeholder="admin123" 
+                                placeholder="كلمة المرور" 
                                 className="w-full border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-3 pr-3 pl-10 rounded-xl focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition font-bold"
                                 value={password}
+                                onFocus={() => {
+                                    if (password.trim() === 'admin123' || password.trim() === 'admin') {
+                                        setPassword('');
+                                    }
+                                }}
                                 onChange={e => setPassword(e.target.value)}
                                 dir="ltr"
-                                required
                             />
                             <button
                                 type="button"

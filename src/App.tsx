@@ -31,13 +31,17 @@ import Vouchers from './pages/Vouchers';
 import Expenses from './pages/Expenses';
 import Purchases from './pages/Purchases';
 import Reports from './pages/Reports';
+import NetworkCards from './pages/NetworkCards';
+import CardsManagement from './pages/CardsManagement';
 
 import AppLock from './components/AppLock';
 import FloatingProgressBar from './components/FloatingProgressBar';
+import { ErrorNotificationModal } from './components/ErrorNotificationModal';
 
 import AIInsights from './pages/AIInsights';
 import Addons from './pages/settings/Addons';
 import MobileSettings from './pages/settings/MobileSettings';
+import { initPushNotifications } from './lib/pushNotifications';
 
 export default function App() {
   const { appUser, isLoading, setAppUser, setLoading, logout } = useAuthStore();
@@ -45,7 +49,9 @@ export default function App() {
   const [initError, setInitError] = useState<string | null>(null);
 
   useEffect(() => {
-    // Initialize Capacitor Mobile Features
+    // Initialize Capacitor Mobile Features & Push Notifications
+    initPushNotifications().catch(e => console.warn("Push Notifications Init Error:", e));
+
     try {
       CapacitorApp.addListener('appStateChange', ({ isActive }) => {
         console.log('App state changed. Is active?', isActive);
@@ -298,6 +304,7 @@ export default function App() {
 
   return (
     <AppLock>
+      <ErrorNotificationModal />
       <FloatingProgressBar />
       <HashRouter>
         <Routes>
@@ -316,6 +323,8 @@ export default function App() {
           <Route path="cash" element={<Cash />} />
           <Route path="vouchers" element={<Vouchers />} />
           <Route path="expenses" element={<Expenses />} />
+          <Route path="network-cards" element={<NetworkCards />} />
+          <Route path="cards-management" element={<CardsManagement />} />
           <Route path="reports" element={<Reports />} />
           <Route path="ai" element={<AIInsights />} />
           
