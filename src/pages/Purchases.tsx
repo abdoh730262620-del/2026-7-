@@ -6,7 +6,7 @@ import { useAuthStore } from '../store/authStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { useInvoiceStore, CartItem } from '../store/invoiceStore';
 import { logUserAction } from '../lib/logger';
-import { Truck, Plus, Minus, Trash2, Search, FileText, Printer, ShoppingCart, MoreVertical, ArrowLeft, X } from 'lucide-react';
+import { Truck, Plus, Minus, Trash2, Search, FileText, Printer, ShoppingCart, MoreVertical, ArrowLeft, X, RefreshCw } from 'lucide-react';
 import { printInvoice } from '../lib/printHelper';
 import { InvoicePreviewModal } from '../components/InvoicePreviewModal';
 import SearchableSelect from '../components/SearchableSelect';
@@ -84,6 +84,7 @@ export default function Purchases() {
     const [newPartyBalance, setNewPartyBalance] = useState('');
     const [invoices, setInvoices] = useState<PurchaseInvoice[]>([]);
     const [searchInvoice, setSearchInvoice] = useState('');
+    const [autoUpdateCostPrice, setAutoUpdateCostPrice] = useState<boolean>(true);
     const [isAddProductOpen, setIsAddProductOpen] = useState(false);
     const [newProdName, setNewProdName] = useState('');
     const [newProdBarcode, setNewProdBarcode] = useState('');
@@ -505,12 +506,16 @@ export default function Purchases() {
                 tenantId
             });
 
-            // 2. Update Inventory (Add to stock)
+            // 2. Update Inventory (Add to stock and update cost price if option enabled)
             for (const item of cart) {
                 const pRef = doc(db, 'products', item.id);
-                batch.update(pRef, {
+                const updateData: any = {
                     quantity: increment(item.cartQuantity)
-                });
+                };
+                if (autoUpdateCostPrice && item.buyPrice > 0) {
+                    updateData.cost = item.buyPrice;
+                }
+                batch.update(pRef, updateData);
 
                 const invLogRef = doc(collection(db, 'inventoryLogs'));
                 batch.set(invLogRef, {
@@ -924,6 +929,21 @@ export default function Purchases() {
                                     placeholder="ابحث عن مورد أو اكتب اسماً جديداً..."
                                     value={supplierSearchName}
                                     onChange={setSupplierSearchName}
+                                />
+                            </div>
+
+                            <div className="mt-4 p-3 bg-purple-50 dark:bg-purple-950/40 rounded-xl border border-purple-100 dark:border-purple-900/50 flex items-center justify-between cursor-pointer" onClick={() => setAutoUpdateCostPrice(!autoUpdateCostPrice)}>
+                                <div className="flex items-center gap-2">
+                                    <RefreshCw size={16} className="text-purple-600 dark:text-purple-400" />
+                                    <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                                        تحديث سعر التكلفة للمنتجات تلقائياً بناءً على سعر الشراء الجديد
+                                    </span>
+                                </div>
+                                <input 
+                                    type="checkbox" 
+                                    checked={autoUpdateCostPrice} 
+                                    onChange={e => setAutoUpdateCostPrice(e.target.checked)}
+                                    className="w-4 h-4 text-purple-600 accent-purple-600 rounded cursor-pointer"
                                 />
                             </div>
                         </div>

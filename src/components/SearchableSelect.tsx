@@ -1,23 +1,25 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Search, X } from 'lucide-react';
+import { Search, ChevronDown } from 'lucide-react';
 
-interface SearchableSelectProps {
+interface Option {
+    id: string;
+    label: string;
+    subLabel?: string;
+}
+
+interface Props {
+    options: (Option | string)[];
     value: string;
-    onChange: (value: string) => void;
-    options: string[];
+    onChange: (val: string) => void;
     placeholder?: string;
-    className?: string;
+    required?: boolean;
     inputClassName?: string;
 }
 
-export default function SearchableSelect({ value, onChange, options, placeholder = 'بحث...', className = '', inputClassName = '' }: SearchableSelectProps) {
+export default function SearchableSelect({ options, value, onChange, placeholder = "اختر...", required = false }: Props) {
     const [isOpen, setIsOpen] = useState(false);
-    const [searchText, setSearchText] = useState(value);
+    const [search, setSearch] = useState('');
     const wrapperRef = useRef<HTMLDivElement>(null);
-
-    useEffect(() => {
-        setSearchText(value);
-    }, [value]);
 
     useEffect(() => {
         function handleClickOutside(event: MouseEvent) {
@@ -25,57 +27,80 @@ export default function SearchableSelect({ value, onChange, options, placeholder
                 setIsOpen(false);
             }
         }
-        document.addEventListener('mousedown', handleClickOutside);
-        return () => document.removeEventListener('mousedown', handleClickOutside);
-    }, []);
+        document.addEventListener("mousedown", handleClickOutside);
+        return () => {
+            document.removeEventListener("mousedown", handleClickOutside);
+        };
+    }, [wrapperRef]);
 
-    const filteredOptions = options.filter(opt => 
-        opt.toLowerCase().includes(searchText.toLowerCase())
+    const normalizedOptions: Option[] = options.map(opt => {
+        if (typeof opt === 'string') {
+            return { id: opt, label: opt };
+        }
+        return opt;
+    });
+
+    const selectedOption = normalizedOptions.find(o => o.id === value);
+    
+    const filteredOptions = normalizedOptions.filter(o => 
+        o.label.toLowerCase().includes(search.toLowerCase()) || 
+        (o.subLabel && o.subLabel.toLowerCase().includes(search.toLowerCase()))
     );
 
     return (
-        <div ref={wrapperRef} className={`relative ${className}`}>
-            <div className="relative flex items-center">
-                <input
-                    type="text"
-                    value={searchText}
-                    onChange={(e) => {
-                        setSearchText(e.target.value);
-                        setIsOpen(true);
-                        // Also update parent if user is typing, or we can only update on select.
-                        // Let's update parent immediately so it works like a free-text input too.
-                        onChange(e.target.value);
-                    }}
-                    onFocus={() => setIsOpen(true)}
-                    placeholder={placeholder}
-                    className={`w-full p-3.5 text-sm font-bold border-2 border-gray-200 bg-white shadow-sm rounded-xl focus:border-blue-500 focus:ring-4 focus:ring-gray-200 transition outline-none placeholder:text-gray-400 pl-10 ${inputClassName || 'text-black dark:text-gray-100'}`}
-                />
-                <Search className="absolute right-3.5 text-gray-400" size={18} />
-                {searchText && (
-                    <button 
-                        onClick={() => { setSearchText(''); onChange(''); setIsOpen(true); }}
-                        className="absolute left-3.5 text-gray-400 hover:text-red-500 transition-colors"
-                    >
-                        <X size={18} />
-                    </button>
-                )}
+        <div ref={wrapperRef} className="relative w-full">
+            <div 
+                className={`w-full bg-slate-50 dark:bg-slate-800 border ${required && !value ? 'border-rose-300 dark:border-rose-800' : 'border-slate-200 dark:border-slate-700'} rounded-2xl p-3 text-xs font-bold text-slate-900 dark:text-white flex justify-between items-center cursor-pointer hover:border-indigo-400 transition-colors`}
+                onClick={() => setIsOpen(!isOpen)}
+            >
+                <span className={!selectedOption ? "text-slate-400" : ""}>
+                    {selectedOption ? selectedOption.label : placeholder}
+                </span>
+                <ChevronDown size={16} className={`text-slate-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
             </div>
             
-            {isOpen && filteredOptions.length > 0 && (
-                <div className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-60 overflow-y-auto">
-                    {filteredOptions.map((opt, idx) => (
+            {isOpen && (
+                <div className="absolute z-50 w-full mt-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-xl overflow-hidden max-h-60 flex flex-col">
+                    <div className="p-2 border-b border-slate-100 dark:border-slate-800 sticky top-0 bg-white dark:bg-slate-900 z-10">
+                        <div className="relative">
+                            <Search size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                            <input 
+                                type="text" 
+                                placeholder="ابحث..."
+                                value={search}
+                                onChange={e => setSearch(e.target.value)}
+                                className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl py-2 pl-2 pr-8 text-xs font-bold outline-none focus:border-indigo-500"
+                            />
+                        </div>
+                    </div>
+                    <div className="overflow-y-auto p-1.5 scrollbar-thin scrollbar-thumb-slate-200 dark:scrollbar-thumb-slate-700">
                         <div 
-                            key={`${opt}-${idx}`}
+                            className="p-3 text-xs font-bold hover:bg-slate-50 dark:hover:bg-slate-800 rounded-xl cursor-pointer text-slate-500 transition-colors"
                             onClick={() => {
-                                onChange(opt);
-                                setSearchText(opt);
+                                onChange('');
                                 setIsOpen(false);
                             }}
-                            className={`p-3 text-sm font-bold hover:bg-white cursor-pointer border-b border-gray-50 last:border-0 transition-colors ${inputClassName || 'text-black dark:text-gray-100'}`}
                         >
-                            {opt}
+                            {placeholder}
                         </div>
-                    ))}
+                        {filteredOptions.length === 0 ? (
+                            <div className="p-4 text-center text-xs text-slate-400 font-bold">لا توجد نتائج</div>
+                        ) : (
+                            filteredOptions.map(opt => (
+                                <div 
+                                    key={opt.id}
+                                    className={`p-3 text-xs font-bold hover:bg-slate-50 dark:hover:bg-slate-800 rounded-xl cursor-pointer flex justify-between items-center transition-colors ${value === opt.id ? 'bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300' : 'text-slate-700 dark:text-slate-300'}`}
+                                    onClick={() => {
+                                        onChange(opt.id);
+                                        setIsOpen(false);
+                                    }}
+                                >
+                                    <span>{opt.label}</span>
+                                    {opt.subLabel && <span className="text-[10px] text-slate-400 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-lg">{opt.subLabel}</span>}
+                                </div>
+                            ))
+                        )}
+                    </div>
                 </div>
             )}
         </div>

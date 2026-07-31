@@ -60,21 +60,21 @@ try {
         localCache: persistentLocalCache({
             tabManager: persistentMultipleTabManager(),
             cacheSizeBytes: CACHE_SIZE_UNLIMITED
-        })
+        }),
+        experimentalForceLongPolling: true
     }, firebaseConfig.firestoreDatabaseId);
-    console.log("Firestore initialized with persistent local cache (Offline Support enabled).");
+    console.log("Firestore initialized with persistent local cache and experimentalForceLongPolling.");
     setupNetworkSync(dbInstance);
 } catch (e) {
-    console.warn("Failed to initialize Firestore with persistent cache, falling back to memory cache:", e);
+    console.warn("Failed to initialize Firestore with persistent cache, trying fallback with experimentalForceLongPolling:", e);
     try {
         dbInstance = initializeFirestore(app, {
-            localCache: memoryLocalCache()
+            experimentalForceLongPolling: true
         }, firebaseConfig.firestoreDatabaseId);
         setupNetworkSync(dbInstance);
     } catch (fallbackError) {
-        console.error("Firestore initialization critical failure:", fallbackError);
-        dbInstance = getFirestore(app, firebaseConfig.firestoreDatabaseId);
-        setupNetworkSync(dbInstance);
+        console.error("Firestore initialization fallback failure:", fallbackError);
+        dbInstance = getFirestore(app);
     }
 }
 

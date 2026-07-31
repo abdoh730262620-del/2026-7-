@@ -76,3 +76,46 @@ export interface CardCashboxEntry {
     dateTime: string;
     userName: string;
 }
+
+export interface CardSupplier {
+    id: string;
+    tenantId: string;
+    name: string;
+    phone: string;
+    balance: number; // Positive = we owe them money (debt)
+    previousDebt?: number; // الدين السابق عند تسجيل المورد
+    date: string;
+}
+
+export interface CardPurchase {
+    id: string;
+    tenantId: string;
+    categoryName: string;
+    categoryId: string;
+    quantity: number;
+    purchaseType: 'supplier';
+    paymentType: 'cash' | 'credit'; 
+    supplierId?: string;
+    supplierName?: string;
+    unitPrice: number;
+    costPrice?: number;
+    totalAmount: number;
+    month: string; 
+    date: string; 
+    dateTime: string;
+    userName: string;
+}
+
+export interface CardPurchaseVoucher {
+    id: string;
+    tenantId: string;
+    type: 'receipt' | 'payment'; // قبض (من المورد - استرداد) | صرف (للمورد - سداد)
+    voucherNumber: string;
+    supplierId: string;
+    supplierName: string;
+    amount: number;
+    notes: string;
+    date: string;
+    dateTime: string;
+    userName: string;
+}

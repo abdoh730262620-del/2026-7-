@@ -4,6 +4,7 @@ import { collection, query, where, onSnapshot, addDoc, doc, updateDoc } from 'fi
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { useAuthStore } from '../store/authStore';
 import { CardCategory, CardDistributor } from '../types/cardTypes';
+import SearchableSelect from './SearchableSelect';
 import { printReport } from '../lib/printHelper';
 
 interface CardSaleModalProps {
@@ -757,10 +758,9 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                                 <label className="block text-xs font-black text-slate-700 dark:text-slate-300 mb-1.5">
                                     اختيار العميل / الموزع {paymentType === 'credit' && <span className="text-rose-500">* (مطلوب للآجل)</span>}
                                 </label>
-                                <select
+                                <SearchableSelect
                                     value={selectedDistributorId || ''}
-                                    onChange={(e) => {
-                                        const distId = e.target.value;
+                                    onChange={(distId) => {
                                         if (distId === '') {
                                             setSelectedDistributorId('');
                                             setDistributorSearch('');
@@ -772,15 +772,13 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                                             }
                                         }
                                     }}
-                                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-3 text-xs font-black text-slate-900 dark:text-white outline-none focus:border-emerald-600 cursor-pointer"
-                                >
-                                    <option value="">-- بدون موزع (عميل نقدي عام) --</option>
-                                    {distributors.map(dist => (
-                                        <option key={dist.id} value={dist.id}>
-                                            {dist.name} {dist.phone ? `(${dist.phone})` : ''} - (عمولة: %{dist.commission || 0})
-                                        </option>
-                                    ))}
-                                </select>
+                                    placeholder="-- بدون موزع (عميل نقدي عام) --"
+                                    options={distributors.map(dist => ({ 
+                                        id: dist.id, 
+                                        label: dist.name, 
+                                        subLabel: dist.phone ? `${dist.phone} - عمولة: %${dist.commission || 0}` : `عمولة: %${dist.commission || 0}` 
+                                    }))}
+                                />
                             </div>
 
                             {/* Commission % Field */}

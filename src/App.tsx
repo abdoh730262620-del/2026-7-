@@ -42,6 +42,7 @@ import AIInsights from './pages/AIInsights';
 import Addons from './pages/settings/Addons';
 import MobileSettings from './pages/settings/MobileSettings';
 import { initPushNotifications } from './lib/pushNotifications';
+import { SplashScreen } from './components/SplashScreen';
 
 export default function App() {
   const { appUser, isLoading, setAppUser, setLoading, logout } = useAuthStore();
@@ -135,6 +136,7 @@ export default function App() {
           }, (error) => {
             clearTimeout(timeoutId);
             console.error('Session restore error:', error);
+            
             // Try to fall back to cached user in local storage
             const lastAppUserStr = localStorage.getItem('last_logged_in_user');
             if (lastAppUserStr) {
@@ -148,6 +150,25 @@ export default function App() {
                 }
               } catch (e) {}
             }
+
+            const errCode = (error as any)?.code;
+            const errMsg = error instanceof Error ? error.message : String(error);
+            if (errCode === 'unavailable' || errMsg.includes('unavailable') || errMsg.includes('Could not reach Cloud Firestore backend')) {
+              console.warn('Firestore backend unreachable on restore, falling back to local session user data gracefully');
+              const fallbackUser: AppUser = {
+                uid,
+                email: session.email || "offline@sales.app",
+                name: session.name || "مستخدم متصل محلياً",
+                role: session.role || "admin",
+                isActive: true,
+                permissions: {},
+                tenantId: 'single_store'
+              };
+              useAuthStore.getState().setAppUser(fallbackUser);
+              useAuthStore.getState().setLoading(false);
+              return;
+            }
+
             setInitError("حدث خطأ في الاتصال بقاعدة البيانات.");
             useAuthStore.getState().setLoading(false);
           });
@@ -254,26 +275,36 @@ export default function App() {
   }, []); // Run ONCE on mount
 
   if (isLoading) {
-    return <div className="flex h-[100dvh] bg-[var(--bg-main)]" dir="rtl"></div>;
-  }
-
-  if (!appUser) {
-    return <Login />;
+    return (
+      <SplashScreen
+        statusMessage="جاري تهيئة الذاكرة والتحقق من حساب الجلسة..."
+        progress={70}
+        error={initError}
+        onRetry={() => window.location.reload()}
+        onClearStorage={() => {
+          localStorage.clear();
+          window.location.reload();
+        }}
+      />
+    );
   }
 
   if (initError) {
-     return <div className="flex h-screen flex-col items-center justify-center bg-white dark:bg-slate-900 text-black dark:text-gray-100 p-4 text-center" dir="rtl">
-        <div className="bg-white p-5 md:p-8 rounded-2xl shadow-xl max-w-md w-full">
-            <h2 className="text-lg md:text-2xl font-bold text-red-600 mb-4">عذراً</h2>
-            <p className="text-black dark:text-gray-300 mb-4 md:mb-6">{initError}</p>
-            <button 
-                onClick={() => logout()} 
-                className="w-full bg-blue-600 text-white rounded-xl py-3 font-semibold hover:bg-blue-700 transition"
-            >
-                تسجيل الخروج
-            </button>
-        </div>
-     </div>
+    return (
+      <SplashScreen
+        statusMessage="فشل البدء"
+        progress={100}
+        error={initError}
+        onRetry={() => {
+          setInitError(null);
+          logout();
+        }}
+        onClearStorage={() => {
+          localStorage.clear();
+          window.location.reload();
+        }}
+      />
+    );
   }
 
   if (!appUser) {
