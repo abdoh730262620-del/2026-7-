@@ -36,11 +36,11 @@ jobs:
       - name: Generate Custom Android App Icons
         run: node build-app-icons.js
 
-      - name: Sync Capacitor with Android Platform
-        run: npx cap sync android
-
       - name: Sync and Configure Android App Name
         run: node .github/scripts/configure-app-name.cjs
+
+      - name: Sync Capacitor with Android Platform
+        run: npx cap sync android
 
       - name: Set up JDK 21 (Required for modern Android builds)
         uses: actions/setup-java@v4

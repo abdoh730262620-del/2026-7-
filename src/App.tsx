@@ -70,6 +70,15 @@ export default function App() {
          console.log('App resumed');
       });
 
+      CapacitorApp.addListener('backButton', ({ canGoBack }) => {
+        if (canGoBack) {
+          window.history.back();
+        } else {
+          // Stay on app home page rather than exiting instantly
+          console.log('Already at root page, ignoring back button exit');
+        }
+      });
+
       // Only add app state listeners, do not request permissions automatically on startup to prevent FCM configuration crashes
     } catch (e) {
       console.log('Not running in Capacitor/Mobile environment:', e);
