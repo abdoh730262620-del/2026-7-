@@ -153,6 +153,9 @@ async function generateAllIcons() {
         const colorsContent = `<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_launcher_background">#0F172A</color>
+    <color name="colorPrimary">#0F172A</color>
+    <color name="colorPrimaryDark">#090D16</color>
+    <color name="colorAccent">#38BDF8</color>
 </resources>`;
         await fs.promises.writeFile(colorsXmlPath, colorsContent);
 
