@@ -101,7 +101,7 @@ export const scheduleLocalNotification = async (title: string, body: string, ext
                         id: id,
                         schedule: { at: new Date(Date.now() + 100) },
                         sound: 'default',
-                        smallIcon: 'ic_launcher',
+                        smallIcon: 'ic_launcher_foreground',
                         extra: extraData || {}
                     }
                 ]
