@@ -67,11 +67,9 @@ try {
     console.log("Firestore initialized with persistent single tab local cache (forceOwningTab: true) and experimentalForceLongPolling.");
     setupNetworkSync(dbInstance);
 } catch (e) {
-    console.warn("Failed to initialize Firestore with persistent cache, trying fallback with experimentalForceLongPolling:", e);
+    console.warn("Failed to initialize Firestore with persistent cache, falling back to getFirestore:", e);
     try {
-        dbInstance = initializeFirestore(app, {
-            experimentalForceLongPolling: true
-        }, firebaseConfig.firestoreDatabaseId);
+        dbInstance = getFirestore(app);
         setupNetworkSync(dbInstance);
     } catch (fallbackError) {
         console.error("Firestore initialization fallback failure:", fallbackError);
@@ -177,14 +175,17 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   }
 
   console.error('Firestore Error: ', JSON.stringify(errInfo));
-  ErrorNotifier.notify(
-    'خطأ في قاعدة البيانات (Firestore)',
-    `حدث خطأ أثناء تنفيذ عملية (${operationType}) على ${path || 'المجموعة'}.`,
-    errorMessage,
-    'firebase',
-    'قاعدة البيانات السحابية'
-  );
-  throw new Error(JSON.stringify(errInfo));
+  try {
+    ErrorNotifier.notify(
+      'خطأ في قاعدة البيانات (Firestore)',
+      `حدث خطأ أثناء تنفيذ عملية (${operationType}) على ${path || 'المجموعة'}.`,
+      errorMessage,
+      'firebase',
+      'قاعدة البيانات السحابية'
+    );
+  } catch (e) {
+    console.warn('Failed to notify error notifier:', e);
+  }
 }
 
 // Global Exception Interceptors to capture and silence "Target ID already exists" errors in iframe environments

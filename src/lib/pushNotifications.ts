@@ -5,7 +5,7 @@ import { LocalNotifications } from '@capacitor/local-notifications';
 export const initPushNotifications = async (): Promise<boolean> => {
     if (!Capacitor.isNativePlatform()) {
         console.log('[PushNotifications] Running on web/browser mode.');
-        if ('Notification' in window && Notification.permission === 'default') {
+        if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
             try {
                 await Notification.requestPermission();
             } catch (e) {
@@ -16,58 +16,71 @@ export const initPushNotifications = async (): Promise<boolean> => {
     }
 
     try {
-        console.log('[PushNotifications] Initializing Push Notifications on native device...');
+        console.log('[PushNotifications] Checking Push Notifications support on native device...');
 
-        // Check/request permissions
-        let permStatus = await PushNotifications.checkPermissions();
-
-        if (permStatus.receive === 'prompt') {
-            permStatus = await PushNotifications.requestPermissions();
+        // Safely attempt local notification setup first
+        try {
+            await LocalNotifications.requestPermissions();
+        } catch (localErr) {
+            console.warn('[PushNotifications] Local notification permission request failed:', localErr);
         }
 
-        if (permStatus.receive !== 'granted') {
-            console.warn('[PushNotifications] User denied push notification permissions.');
+        // Check/request permissions with extra defensive handling for APKs without FCM
+        let permStatus;
+        try {
+            permStatus = await PushNotifications.checkPermissions();
+            if (permStatus?.receive === 'prompt') {
+                permStatus = await PushNotifications.requestPermissions();
+            }
+        } catch (permErr) {
+            console.warn('[PushNotifications] PushNotifications.checkPermissions failed:', permErr);
             return false;
         }
 
-        // Register with Apple / Google FCM
-        await PushNotifications.register();
+        if (permStatus?.receive !== 'granted') {
+            console.warn('[PushNotifications] Push notification permissions not granted.');
+            return false;
+        }
 
-        // Listen for registration success
-        PushNotifications.addListener('registration', (token) => {
-            console.log('[PushNotifications] FCM/Device Token:', token.value);
-            localStorage.setItem('fcm_token', token.value);
-        });
+        // Add listeners before registration
+        try {
+            PushNotifications.addListener('registration', (token) => {
+                console.log('[PushNotifications] FCM/Device Token:', token.value);
+                try {
+                    localStorage.setItem('fcm_token', token.value);
+                } catch (e) {}
+            });
 
-        // Listen for registration error
-        PushNotifications.addListener('registrationError', (error) => {
-            console.warn('[PushNotifications] Registration error:', error.error);
-        });
+            PushNotifications.addListener('registrationError', (error) => {
+                console.warn('[PushNotifications] Registration error:', error.error);
+            });
 
-        // Listen for foreground notification received
-        PushNotifications.addListener('pushNotificationReceived', (notification: PushNotificationSchema) => {
-            console.log('[PushNotifications] Received in foreground:', notification);
-            // Optionally trigger local alert if app is open
-            scheduleLocalNotification(
-                notification.title || 'تنبيه جديد',
-                notification.body || '',
-                notification.data
-            );
-        });
+            PushNotifications.addListener('pushNotificationReceived', (notification: PushNotificationSchema) => {
+                console.log('[PushNotifications] Received in foreground:', notification);
+                scheduleLocalNotification(
+                    notification.title || 'تنبيه جديد',
+                    notification.body || '',
+                    notification.data
+                );
+            });
 
-        // Listen for notification tap action
-        PushNotifications.addListener('pushNotificationActionPerformed', (notification: ActionPerformed) => {
-            console.log('[PushNotifications] Action performed:', notification.actionId, notification.notification);
-        });
+            PushNotifications.addListener('pushNotificationActionPerformed', (notification: ActionPerformed) => {
+                console.log('[PushNotifications] Action performed:', notification.actionId, notification.notification);
+            });
+        } catch (listenerErr) {
+            console.warn('[PushNotifications] Failed to attach push listeners:', listenerErr);
+        }
 
-        // Also request local notification permissions for sync/local alerts
-        if (Capacitor.isNativePlatform()) {
-            await LocalNotifications.requestPermissions();
+        // Register with Apple / Google FCM safely
+        try {
+            await PushNotifications.register();
+        } catch (regErr) {
+            console.warn('[PushNotifications] PushNotifications.register failed (likely missing google-services.json or FCM config in APK):', regErr);
         }
 
         return true;
     } catch (error) {
-        console.error('[PushNotifications] Error during push initialization:', error);
+        console.warn('[PushNotifications] Safe catch during push initialization:', error);
         return false;
     }
 };

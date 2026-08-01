@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Wifi, ArrowRight, RefreshCw, ShoppingBag, DollarSign, Clock } from 'lucide-react';
+import { Wifi, ArrowRight, RefreshCw, ShoppingBag, DollarSign, Clock, AlertTriangle } from 'lucide-react';
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { CardCategory, CardSale } from '../types/cardTypes';
@@ -190,53 +190,90 @@ export default function NetworkCards() {
                 </div>
             ) : (
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-3.5">
-                    {displayGrid.map((item) => (
-                        <div
-                            key={item.id}
-                            onClick={() => {
-                                if (canAdd) {
-                                    setSelectedCategoryForSale(item.name);
-                                }
-                            }}
-                            className={`group flex flex-col justify-between p-3.5 rounded-2xl border-2 transition-all duration-200 bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 space-y-3 text-center ${
-                                canAdd ? 'hover:shadow-lg hover:border-indigo-500 cursor-pointer' : 'opacity-85 cursor-not-allowed'
-                            }`}
-                        >
-                            {/* Wi-Fi Icon & Title in Center */}
-                            <div className="flex flex-col items-center justify-center pt-1">
-                                <div className="w-11 h-11 rounded-2xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center font-black mb-2 transition-transform group-hover:scale-110 border border-indigo-100 dark:border-indigo-900/40">
-                                    <Wifi size={22} />
-                                </div>
-                                <h3 className="text-xs sm:text-sm font-black text-slate-900 dark:text-white leading-tight">
-                                    {item.name}
-                                </h3>
-                            </div>
+                    {displayGrid.map((item) => {
+                        const isOutOfStock = item.availableCount === 0;
+                        const isLowStock = item.availableCount > 0 && item.availableCount < 5;
 
-                            {/* Stock Badge */}
-                            <div className="w-full flex items-center justify-between bg-slate-50 dark:bg-slate-800/60 px-2.5 py-1.5 rounded-xl border border-slate-100 dark:border-slate-800 whitespace-nowrap gap-1">
-                                <span className="text-[10px] sm:text-[11px] font-bold text-slate-500 dark:text-slate-400 shrink-0">الكمية:</span>
-                                <span className="text-xs font-black text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 rounded-md shrink-0">
-                                    {item.availableCount} كارت
-                                </span>
-                            </div>
+                        let borderBgClass = "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800";
+                        if (isOutOfStock) {
+                            borderBgClass = "bg-red-50/70 dark:bg-red-950/30 border-red-300 dark:border-red-800/80";
+                        } else if (isLowStock) {
+                            borderBgClass = "bg-amber-50/70 dark:bg-amber-950/30 border-amber-300 dark:border-amber-700/80";
+                        }
 
-                            {/* Monthly Cash & Credit Sales stats */}
-                            <div className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-1 text-right">
-                                <div className="flex items-center justify-between text-[10px] font-bold">
-                                    <span className="text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
-                                        <DollarSign size={10} /> نقدي:
+                        return (
+                            <div
+                                key={item.id}
+                                onClick={() => {
+                                    if (canAdd) {
+                                        setSelectedCategoryForSale(item.name);
+                                    }
+                                }}
+                                className={`relative group flex flex-col justify-between p-3.5 rounded-2xl border-2 transition-all duration-200 ${borderBgClass} space-y-3 text-center ${
+                                    canAdd ? 'hover:shadow-lg hover:border-indigo-500 cursor-pointer' : 'opacity-85 cursor-not-allowed'
+                                }`}
+                            >
+                                {/* Low stock top badge indicator */}
+                                {isOutOfStock && (
+                                    <span className="absolute -top-2.5 right-3 bg-red-600 text-white text-[9px] font-black px-2 py-0.5 rounded-full shadow flex items-center gap-1 shrink-0 z-10">
+                                        <AlertTriangle size={10} /> نفذت الكمية
                                     </span>
-                                    <span className="font-black text-slate-900 dark:text-white">{item.cashQty}</span>
+                                )}
+                                {isLowStock && (
+                                    <span className="absolute -top-2.5 right-3 bg-amber-500 text-white text-[9px] font-black px-2 py-0.5 rounded-full shadow flex items-center gap-1 shrink-0 z-10 animate-pulse">
+                                        <AlertTriangle size={10} /> كمية منخفضة (&lt;5)
+                                    </span>
+                                )}
+
+                                {/* Wi-Fi Icon & Title in Center */}
+                                <div className="flex flex-col items-center justify-center pt-1">
+                                    <div className={`w-11 h-11 rounded-2xl flex items-center justify-center font-black mb-2 transition-transform group-hover:scale-110 border ${
+                                        isOutOfStock 
+                                            ? 'bg-red-100 dark:bg-red-900/60 text-red-600 dark:text-red-300 border-red-200 dark:border-red-800'
+                                            : isLowStock
+                                            ? 'bg-amber-100 dark:bg-amber-900/60 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800'
+                                            : 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border-indigo-100 dark:border-indigo-900/40'
+                                    }`}>
+                                        <Wifi size={22} />
+                                    </div>
+                                    <h3 className="text-xs sm:text-sm font-black text-slate-900 dark:text-white leading-tight">
+                                        {item.name}
+                                    </h3>
                                 </div>
-                                <div className="flex items-center justify-between text-[10px] font-bold">
-                                    <span className="text-amber-600 dark:text-amber-400 flex items-center gap-1">
-                                        <Clock size={10} /> آجل:
+
+                                {/* Stock Badge */}
+                                <div className="w-full flex items-center justify-between bg-slate-50 dark:bg-slate-800/60 px-2.5 py-1.5 rounded-xl border border-slate-100 dark:border-slate-800 whitespace-nowrap gap-1">
+                                    <span className="text-[10px] sm:text-[11px] font-bold text-slate-500 dark:text-slate-400 shrink-0">الكمية:</span>
+                                    <span className={`text-xs font-black px-2 py-0.5 rounded-md shrink-0 flex items-center gap-1 ${
+                                        isOutOfStock
+                                            ? 'text-red-700 dark:text-red-300 bg-red-100 dark:bg-red-900/60 border border-red-200 dark:border-red-800'
+                                            : isLowStock
+                                            ? 'text-amber-800 dark:text-amber-300 bg-amber-100 dark:bg-amber-900/60 border border-amber-200 dark:border-amber-800'
+                                            : 'text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60'
+                                    }`}>
+                                        {(isOutOfStock || isLowStock) && <AlertTriangle size={11} />}
+                                        {item.availableCount} كارت
                                     </span>
-                                    <span className="font-black text-slate-900 dark:text-white">{item.creditQty}</span>
+                                </div>
+
+                                {/* Monthly Cash & Credit Sales stats */}
+                                <div className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-1 text-right">
+                                    <div className="flex items-center justify-between text-[10px] font-bold">
+                                        <span className="text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                                            <DollarSign size={10} /> نقدي:
+                                        </span>
+                                        <span className="font-black text-slate-900 dark:text-white">{item.cashQty}</span>
+                                    </div>
+                                    <div className="flex items-center justify-between text-[10px] font-bold">
+                                        <span className="text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                                            <Clock size={10} /> آجل:
+                                        </span>
+                                        <span className="font-black text-slate-900 dark:text-white">{item.creditQty}</span>
+                                    </div>
                                 </div>
                             </div>
-                        </div>
-                    ))}
+                        );
+                    })}
                 </div>
             )}
 

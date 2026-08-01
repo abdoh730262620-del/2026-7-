@@ -28,6 +28,7 @@
     "@capacitor/share": "^8.0.1",
     "@capacitor/splash-screen": "^8.0.1",
     "@capacitor/status-bar": "^8.0.2",
+    "@capacitor/toast": "^8.0.1",
     "@capgo/capacitor-native-biometric": "^8.4.5",
     "@google/genai": "^1.29.0",
     "@hookform/resolvers": "^5.2.2",
