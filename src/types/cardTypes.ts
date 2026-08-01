@@ -48,6 +48,8 @@ export interface CardSale {
     date: string; // e.g. "2026-07-29"
     dateTime: string;
     userName: string;
+    invoiceNumber?: string;
+    status?: 'draft' | 'completed' | 'cancelled';
 }
 
 export interface CardVoucher {
@@ -104,6 +106,8 @@ export interface CardPurchase {
     date: string; 
     dateTime: string;
     userName: string;
+    invoiceNumber?: string;
+    status?: 'draft' | 'completed' | 'cancelled';
 }
 
 export interface CardPurchaseVoucher {

@@ -1,11 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { collection, query, onSnapshot, getDocs, doc, addDoc, orderBy, limit, where, writeBatch } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { useAuthStore } from '../store/authStore';
 import { useInvoiceStore } from '../store/invoiceStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { logUserAction } from '../lib/logger';
-import { FileSignature, Plus, Minus, Trash2, Search, FileText, Printer, CheckCircle2, ShoppingCart, MessageCircle, Globe, Users, ArrowLeft, X } from 'lucide-react';
+import { FileSignature, Plus, Minus, Trash2, Search, FileText, Printer, CheckCircle2, ShoppingCart, MessageCircle, Globe, Users, ArrowLeft, X, GripVertical } from 'lucide-react';
 import { printInvoice } from '../lib/printHelper';
 import SearchableSelect from '../components/SearchableSelect';
 import { InvoicePreviewModal } from '../components/InvoicePreviewModal';
@@ -63,6 +63,7 @@ export default function Quotations() {
     const [isDropdownOpen, setIsDropdownOpen] = useState(false);
     const [isCustomerDropdownOpen, setIsCustomerDropdownOpen] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
+    const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
     const [quotations, setQuotations] = useState<Quotation[]>([]);
     const [searchQuotation, setSearchQuotation] = useState('');
     const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
@@ -71,11 +72,15 @@ export default function Quotations() {
         id: string;
         name: string;
         barcode: string;
-        price: number;
-        cartQuantity: number;
+        price: number | string;
+        cartQuantity: number | string;
         stock: number;
     } | null>(null);
+
+    const inputPrevValue = useRef<string>('');
     const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
+    const [paymentMethod, setPaymentMethod] = useState<'cash' | 'credit'>('cash');
+    const [notes, setNotes] = useState('');
 
     useEffect(() => {
         if (!appUser) return;
@@ -183,6 +188,8 @@ export default function Quotations() {
                 subtotal, discountPercent, discountAmount,
                 vatPercentage: settings.isVatEnabled ? settings.vatPercentage : 0,
                 vatAmount, total,
+                paymentType: paymentMethod,
+                notes: notes.trim(),
                 createdBy: appUser.uid,
                 createdAt: Date.now(),
                 status: 'draft',
@@ -192,6 +199,8 @@ export default function Quotations() {
             await logUserAction('عرض سعر', `إنشاء عرض سعر برقم ${qNum}`);
             alert('تم حفظ عرض السعر بنجاح');
             clearQuotations();
+            setNotes('');
+            setIsSaveModalOpen(false);
             setActiveTab('list');
         } catch (error) {
             handleFirestoreError(error, OperationType.CREATE, 'quotations');
@@ -204,6 +213,19 @@ export default function Quotations() {
         const text = `عرض سعر رقم: ${quo.quotationNumber}\nالتاريخ: ${new Date(quo.date).toLocaleDateString('ar-EG')}\nالإجمالي: ${quo.total} ر.س\nشكراً لتعاملكم معنا.`;
         const url = `https://wa.me/?text=${encodeURIComponent(text)}`;
         window.open(url, '_blank');
+    };
+
+    const handleSelectProduct = (product: Product) => {
+        // Force blur immediately to hide keyboard on mobile
+        const input = document.getElementById('quotations-product-search-input');
+        if (input) (input as HTMLInputElement).blur();
+        if (document.activeElement instanceof HTMLElement) {
+            document.activeElement.blur();
+        }
+
+        addToCart(product);
+        setSearch('');
+        setIsDropdownOpen(false);
     };
 
     if (!canView) {
@@ -297,7 +319,7 @@ export default function Quotations() {
             {activeTab === 'add' && (
                 <div className="flex-1 flex flex-col gap-4 min-h-0">
                     <div className="flex-1 bg-card-bg rounded-xl shadow-sm border border-border-main flex flex-col relative overflow-visible min-h-0">
-                        <div className="p-3 border-b border-border-main bg-white dark:bg-slate-800 shrink-0 rounded-t-xl relative z-30">
+                        <div className="p-3 border-b border-border-main bg-white dark:bg-slate-800 shrink-0 rounded-t-xl relative z-[60]">
                             <div className="flex flex-col md:flex-row gap-3 items-center">
                                 <div className="relative flex-1 w-full z-20">
                                     <div className="bg-card-bg flex items-center gap-3 w-full h-12 px-4 rounded-xl border border-border-main focus-within:border-orange-500 focus-within:ring-2 focus-within:ring-orange-100 transition-all relative z-20 shadow-sm cursor-text" onClick={(e) => {
@@ -313,6 +335,7 @@ export default function Quotations() {
                                             onChange={e => { setSearch(e.target.value); setIsDropdownOpen(e.target.value.length > 0); }}
                                             onFocus={() => { if(search.length > 0) setIsDropdownOpen(true); }}
                                             onBlur={() => setTimeout(() => setIsDropdownOpen(false), 200)}
+                                            id="quotations-product-search-input"
                                         />
                                         {search && (
                                             <button onClick={(e) => { e.stopPropagation(); setSearch(''); }} className="text-gray-400 hover:text-red-500 transition-colors cursor-pointer p-1 shrink-0">
@@ -322,28 +345,29 @@ export default function Quotations() {
                                     </div>
                                     
                                     <AnimatePresence>
-                                        {isDropdownOpen && search.length > 0 && (
+                                        {isDropdownOpen && search.length > 0 && !isSaveModalOpen && (
                                             <motion.div 
                                                 initial={{ opacity: 0, y: 5 }}
                                                 animate={{ opacity: 1, y: 0 }}
                                                 exit={{ opacity: 0, y: 5 }}
-                                                className="absolute top-full right-0 left-0 mt-2 z-[100] bg-white dark:bg-slate-900 border border-border-main rounded-xl shadow-2xl max-h-80 md:max-h-96 overflow-y-auto p-2 flex flex-col gap-2 w-full"
+                                                className="absolute top-full right-0 left-0 mt-1 z-[150] bg-white dark:bg-slate-900 border border-border-main rounded-xl shadow-2xl max-h-[60vh] md:max-h-[70vh] overflow-y-auto p-0.5 flex flex-col gap-0 w-full"
                                             >
                                                 {filteredProducts.map(p => (
                                                     <button 
                                                         key={p.id} 
                                                         type="button"
-                                                        onClick={() => { addToCart(p); setSearch(''); setIsDropdownOpen(false); }} 
-                                                        className="w-full text-right p-3 hover:bg-white bg-card-bg rounded-xl shadow-sm border border-border-main flex justify-between items-center transition-all hover:scale-[1.01] active:scale-[0.99] group"
+                                                        onMouseDown={(e) => e.preventDefault()}
+                                                        onClick={() => handleSelectProduct(p)} 
+                                                        className="w-full text-right p-1.5 hover:bg-white bg-card-bg rounded-lg shadow-sm border-b border-border-main/30 last:border-0 flex justify-between items-center transition-all hover:scale-[1.01] active:scale-[0.99] group"
                                                     >
                                                         <div className="flex flex-col text-right">
-                                                            <span className="font-extrabold text-text-main text-sm group-hover:text-orange-600 transition-colors">{p.name}</span>
-                                                            <span className="text-[10px] font-bold text-text-main/50 uppercase tracking-tight bg-bg-main w-max px-1.5 py-0.5 rounded-md mt-1">{p.barcode || 'بدون باركود'}</span>
+                                                            <span className="font-extrabold text-text-main text-[11px] group-hover:text-orange-600 transition-colors leading-tight">{p.name}</span>
+                                                            <span className="text-[8px] font-bold text-text-main/50 uppercase tracking-tight bg-bg-main w-max px-1 rounded-md mt-0.5">{p.barcode || 'بدون باركود'}</span>
                                                         </div>
-                                                        <div className="flex flex-col items-end gap-1">
-                                                            <span className="font-black text-blue-600 text-sm">{p.price} <small className="text-[9px] font-bold opacity-75">ر.س</small></span>
-                                                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${p.quantity > 0 ? 'text-emerald-700 bg-emerald-50 dark:bg-emerald-950/25' : 'text-red-700 bg-red-50 dark:bg-red-950/25'}`}>
-                                                                {p.quantity > 0 ? `المخزون الحالي: ${p.quantity}` : 'نفذت الكمية'}
+                                                        <div className="flex flex-col items-end gap-0">
+                                                            <span className="font-black text-blue-600 text-[11px]">{p.price} <small className="text-[8px] font-bold opacity-75">ر.س</small></span>
+                                                            <span className={`text-[8px] font-bold px-1 py-0.5 rounded-md ${p.quantity > 0 ? 'text-emerald-700 bg-emerald-50 dark:bg-emerald-950/25' : 'text-red-700 bg-red-50 dark:bg-red-950/25'}`}>
+                                                                {p.quantity > 0 ? `المخزون: ${p.quantity}` : 'نفذت'}
                                                             </span>
                                                         </div>
                                                     </button>
@@ -362,8 +386,32 @@ export default function Quotations() {
                         </div>
 
                         <div className="flex-1 overflow-y-auto bg-bg-main min-h-0 modern-scrollbar p-2 flex flex-col gap-2 relative z-10 rounded-b-xl">
-                            {cart.map(item => (
-                                <div key={item.id} className="bg-card-bg p-2 rounded-lg shadow-sm border border-border-main flex items-center justify-between gap-1.5 group hover:border-blue-400 transition-all">
+                            {cart.map((item, index) => (
+                                <div 
+                                    key={item.id}
+                                    draggable
+                                    onDragStart={(e) => {
+                                        setDraggedIndex(index);
+                                        e.dataTransfer.effectAllowed = 'move';
+                                    }}
+                                    onDragOver={(e) => {
+                                        e.preventDefault();
+                                        e.dataTransfer.dropEffect = 'move';
+                                    }}
+                                    onDrop={(e) => {
+                                        e.preventDefault();
+                                        if (draggedIndex === null || draggedIndex === index) return;
+                                        const newCart = [...cart];
+                                        const [movedItem] = newCart.splice(draggedIndex, 1);
+                                        newCart.splice(index, 0, movedItem);
+                                        setCart(newCart);
+                                        setDraggedIndex(null);
+                                    }}
+                                    className={`bg-card-bg p-2 rounded-lg shadow-sm border ${draggedIndex === index ? 'opacity-40 border-orange-500 ring-2 ring-orange-300' : 'border-border-main'} flex items-center justify-between gap-1.5 group hover:border-orange-400 transition-all`}
+                                >
+                                    <div className="text-slate-400 hover:text-orange-600 cursor-grab active:cursor-grabbing p-1 shrink-0" title="اسحب لإعادة ترتيب منتجات عرض السعر">
+                                        <GripVertical size={14} />
+                                    </div>
                                     <div 
                                         onClick={() => setEditingItem({
                                             id: item.id,
@@ -407,35 +455,35 @@ export default function Quotations() {
                             )}
                         </div>
 
-                        <div className="sticky bottom-0 left-0 right-0 z-40 p-4 border-t border-border-main bg-white dark:bg-slate-900 flex flex-col md:flex-row justify-between items-center gap-4 shrink-0 shadow-[0_-6px_20px_rgba(0,0,0,0.06)] rounded-b-xl">
-                            <div className="flex justify-between items-center w-full md:w-auto gap-5 md:gap-8">
-                                <div className="flex flex-col text-right">
-                                    <span className="text-text-main/40 text-[8px] font-bold uppercase tracking-widest leading-none">عدد الأصناف</span>
-                                    <span className="text-lg font-bold text-text-main">{cart.length}</span>
+                        <div className="sticky bottom-0 left-0 right-0 z-40 p-3 sm:p-4 border-t border-border-main bg-white dark:bg-slate-900 flex flex-row items-center justify-between gap-2.5 sm:gap-3 shrink-0 shadow-[0_-6px_20px_rgba(0,0,0,0.06)] rounded-b-xl">
+                            <div className="flex items-center gap-3 sm:gap-5 bg-slate-50 dark:bg-slate-800/60 p-2 sm:p-2.5 px-3 sm:px-4 rounded-xl border border-gray-100 dark:border-slate-800 shrink min-w-0 overflow-x-auto">
+                                <div className="flex flex-col text-right shrink-0">
+                                    <span className="text-text-main/50 text-[10px] sm:text-[11px] font-bold whitespace-nowrap">الأصناف</span>
+                                    <span className="text-sm sm:text-base font-extrabold text-text-main">{cart.length}</span>
                                 </div>
-                                <div className="flex flex-col text-right">
-                                    <span className="text-text-main/40 text-[8px] font-bold uppercase tracking-widest leading-none">إجمالي القيمة</span>
-                                    <span className="text-base md:text-xl font-bold text-orange-600">{total.toLocaleString()} <small className="text-[10px] font-normal opacity-50">ر.س</small></span>
+                                <div className="h-6 w-px bg-gray-200 dark:bg-slate-700 shrink-0"></div>
+                                <div className="flex flex-col text-right shrink-0">
+                                    <span className="text-text-main/50 text-[10px] sm:text-[11px] font-bold whitespace-nowrap">إجمالي الكمية</span>
+                                    <span className="text-sm sm:text-base font-black text-orange-600">{cart.reduce((s, i) => s + i.cartQuantity, 0)}</span>
+                                </div>
+                                <div className="h-6 w-px bg-gray-200 dark:bg-slate-700 shrink-0"></div>
+                                <div className="flex flex-col text-right shrink-0">
+                                    <span className="text-text-main/50 text-[10px] sm:text-[11px] font-bold whitespace-nowrap">الإجمالي</span>
+                                    <span className="text-sm sm:text-lg font-black text-orange-600 whitespace-nowrap">{total.toLocaleString()} <small className="text-[10px] font-normal opacity-75">ر.س</small></span>
                                 </div>
                             </div>
 
-                            <div className="flex items-center gap-3 w-full md:w-auto">
-                                <button 
-                                    type="button"
-                                    onClick={() => clearQuotations()}
-                                    className="px-4 py-3 text-red-500 hover:text-white border border-red-200 hover:bg-red-600 rounded-xl transition-all font-bold text-xs"
-                                >
-                                    مسح السلة
-                                </button>
-                                <button 
-                                    type="button"
-                                    onClick={() => setIsSaveModalOpen(true)}
-                                    disabled={cart.length === 0 || isSaving}
-                                    className="flex-1 md:w-48 bg-orange-600 hover:bg-orange-700 disabled:bg-gray-300 text-white font-bold py-3 rounded-xl transition-all shadow-md active:scale-95 text-sm flex justify-center items-center gap-2"
-                                >
-                                    {isSaving ? "جاري الحفظ..." : "حفظ عرض السعر"} <CheckCircle2 size={16} />
-                                </button>
-                            </div>
+                            <button 
+                                type="button"
+                                onClick={() => {
+                                    setIsDropdownOpen(false);
+                                    setIsSaveModalOpen(true);
+                                }}
+                                disabled={cart.length === 0 || isSaving}
+                                className="shrink-0 px-5 sm:px-7 py-3 sm:py-3.5 bg-orange-600 hover:bg-orange-700 disabled:bg-gray-300 text-white font-black rounded-xl transition-all shadow-md active:scale-95 text-xs sm:text-base flex justify-center items-center gap-2 whitespace-nowrap"
+                            >
+                                {isSaving ? "جاري الحفظ..." : "حفظ عرض السعر"} <CheckCircle2 size={18} />
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -501,7 +549,7 @@ export default function Quotations() {
             })()}
 
             {isSaveModalOpen && (
-                <div className="fixed inset-0 z-[110] bg-black/65 flex items-center justify-center p-4 backdrop-blur-sm" onClick={() => setIsSaveModalOpen(false)}>
+                <div className="fixed inset-0 z-[210] bg-black/65 flex items-center justify-center p-4 backdrop-blur-sm" onClick={() => setIsSaveModalOpen(false)}>
                     <div className="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-md overflow-hidden shadow-2xl animate-in fade-in zoom-in duration-200 text-right" dir="rtl" onClick={e => e.stopPropagation()}>
                         {/* Header */}
                         <div className="border-b border-gray-100 dark:border-slate-800 p-5 flex justify-between items-center bg-gray-50 dark:bg-slate-900/60">
@@ -512,71 +560,122 @@ export default function Quotations() {
                         </div>
 
                         {/* Content */}
-                        <div className="p-6 space-y-5">
-                            {/* Customer Identifier */}
-                            <div className="space-y-1.5">
-                                <label className="block text-xs font-black text-gray-700 dark:text-gray-300 uppercase tracking-wider">
-                                    اسم العميل <span className="text-red-500">*</span>
-                                </label>
-                                <SearchableSelect
-                                    options={customers.map(c => c.name)}
-                                    placeholder="نقدي أو اسم العميل..."
-                                    value={customerSearchName}
-                                    onChange={setCustomerSearchName}
-                                    inputClassName="text-black dark:text-black font-extrabold text-sm"
-                                />
+                        <div className="p-4 md:p-6 overflow-y-auto max-h-[75vh] space-y-4">
+                            {/* 1. طريقة الدفع فوقهم بالأعلى */}
+                            <div>
+                                <label className="block text-xs font-black mb-1.5 text-black dark:text-gray-200">طريقة الدفع (المتوقعة)</label>
+                                <div className="flex gap-2">
+                                    <button 
+                                        type="button"
+                                        onClick={() => setPaymentMethod('cash')}
+                                        className={`flex-1 py-2.5 rounded-xl border font-bold transition ${paymentMethod === 'cash' ? 'bg-orange-600 text-white border-orange-600 shadow-md' : 'bg-slate-50 dark:bg-slate-800 text-black dark:text-gray-300 border-gray-200 dark:border-slate-700 hover:bg-slate-100'}`}
+                                    >
+                                        💵 نقدي
+                                    </button>
+                                    <button 
+                                        type="button"
+                                        onClick={() => setPaymentMethod('credit')}
+                                        className={`flex-1 py-2.5 rounded-xl border font-bold transition ${paymentMethod === 'credit' ? 'bg-orange-600 text-white border-orange-600 shadow-md' : 'bg-slate-50 dark:bg-slate-800 text-black dark:text-gray-300 border-gray-200 dark:border-slate-700 hover:bg-slate-100'}`}
+                                    >
+                                        💳 آجل
+                                    </button>
+                                </div>
                             </div>
 
-                            {/* Discount Percentage */}
-                            <div className="space-y-1.5">
-                                <label className="block text-xs font-black text-gray-700 dark:text-gray-300 uppercase tracking-wider">
-                                    هل ترغب في تطبيق خصم؟ (نسبة مئوية %)
-                                </label>
-                                <div className="relative">
-                                    <input 
-                                        type="number"
-                                        min="0"
-                                        max="100"
-                                        step="1"
-                                        placeholder="0"
-                                        className="w-full p-3 pr-4 pl-10 text-sm font-extrabold border-2 border-gray-200 dark:border-slate-700 rounded-xl outline-none text-black bg-white focus:border-orange-500 transition"
-                                        value={discountPercent || ''}
-                                        onChange={e => {
-                                            const val = Math.min(100, Math.max(0, Number(e.target.value)));
-                                            setDiscountPercent(isNaN(val) ? 0 : val);
-                                        }}
+                            {/* 2. اسم العميل وتحته حقل الملاحظات */}
+                            <div className="space-y-3 bg-slate-50 dark:bg-slate-800/40 p-3 rounded-xl border border-gray-200 dark:border-slate-800">
+                                <div>
+                                    <label className="block text-xs font-black mb-1.5 text-slate-700 dark:text-slate-300">
+                                        اسم العميل <span className="text-rose-500">*</span>
+                                    </label>
+                                    <SearchableSelect
+                                        options={customers.map(c => c.name)}
+                                        placeholder="نقدي أو ابحث عن اسم العميل..."
+                                        value={customerSearchName}
+                                        onChange={setCustomerSearchName}
                                     />
-                                    <span className="absolute left-3.5 top-3.5 text-gray-500 font-black text-xs">%</span>
+                                    <button 
+                                        type="button"
+                                        onClick={() => {
+                                            const now = new Date();
+                                            const name = `مبيعات يومية لشهر ${now.getMonth() + 1} ${now.getFullYear()}`;
+                                            setCustomerSearchName(name);
+                                        }}
+                                        className="text-[10px] font-bold text-orange-600 hover:text-orange-800 underline underline-offset-4 decoration-orange-300 transition-colors w-max mt-1"
+                                    >
+                                        + إدراج عميل مبيعات الشهر الحالي تلقائياً
+                                    </button>
+                                </div>
+
+                                {/* حقل الملاحظات تحت اسم العميل */}
+                                <div>
+                                    <label className="block text-xs font-black mb-1.5 text-slate-700 dark:text-slate-300">
+                                        ملاحظات عرض السعر (تظهر على العرض المطبوع)
+                                    </label>
+                                    <textarea
+                                        rows={2}
+                                        placeholder="أدخل أي ملاحظات أو شروط تود إظهارها على عرض السعر..."
+                                        value={notes}
+                                        onChange={e => setNotes(e.target.value)}
+                                        className="w-full bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 rounded-xl p-2.5 text-xs font-bold text-slate-900 dark:text-white outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 transition resize-none"
+                                    />
                                 </div>
                             </div>
 
-                            {/* Financial Summary */}
-                            <div className="bg-orange-50/50 dark:bg-slate-800/40 p-4 rounded-2xl border border-orange-100/50 dark:border-slate-800 space-y-2.5">
-                                <div className="flex justify-between items-center text-xs font-bold text-gray-600 dark:text-gray-400">
-                                    <span>المجموع قبل الخصم:</span>
-                                    <span className="text-black dark:text-white font-extrabold">{subtotal.toLocaleString()} ر.س</span>
+                            {/* 3. السعر والخصم والإجمالي في نفس السطر (Row Layout) */}
+                            <div className="bg-orange-50/60 dark:bg-slate-800/60 p-3.5 rounded-2xl border border-orange-100 dark:border-slate-700 space-y-3">
+                                <p className="text-[11px] font-black text-orange-900 dark:text-orange-300 border-b border-orange-100 dark:border-slate-700 pb-1.5">
+                                    الملخص المالي للعرض
+                                </p>
+
+                                <div className="grid grid-cols-3 gap-2 items-center text-center">
+                                    {/* السعر قبل الخصم */}
+                                    <div className="bg-white dark:bg-slate-900 p-2.5 rounded-xl border border-gray-200 dark:border-slate-700 flex flex-col justify-center shadow-2xs">
+                                        <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1">السعر (قبل الخصم)</span>
+                                        <span className="text-xs font-black text-slate-900 dark:text-white truncate" dir="ltr">
+                                            {subtotal.toLocaleString()} ر.س
+                                        </span>
+                                    </div>
+
+                                    {/* الخصم % */}
+                                    <div className="bg-white dark:bg-slate-900 p-2.5 rounded-xl border border-gray-200 dark:border-slate-700 flex flex-col justify-center shadow-2xs">
+                                        <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1">الخصم (%)</span>
+                                        <div className="flex items-center justify-center gap-1">
+                                            <input 
+                                                type="number" 
+                                                min="0"
+                                                max="100"
+                                                value={discountPercent || ''}
+                                                onChange={e => {
+                                                    const val = Math.min(100, Math.max(0, Number(e.target.value)));
+                                                    setDiscountPercent(isNaN(val) ? 0 : val);
+                                                }}
+                                                placeholder="0"
+                                                className="w-12 bg-slate-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded text-center text-xs font-black text-rose-600 outline-none p-0.5"
+                                            />
+                                            <span className="text-[10px] font-bold text-slate-400">%</span>
+                                        </div>
+                                    </div>
+
+                                    {/* الإجمالي الصافي */}
+                                    <div className="bg-orange-600 text-white p-2.5 rounded-xl flex flex-col justify-center shadow-sm">
+                                        <span className="text-[10px] font-bold text-orange-100 mb-1">الإجمالي الصافي</span>
+                                        <span className="text-xs font-black truncate" dir="ltr">
+                                            {total.toLocaleString()} ر.س
+                                        </span>
+                                    </div>
                                 </div>
 
-                                {discountAmount > 0 && (
-                                    <div className="flex justify-between items-center text-xs font-bold text-red-600">
-                                        <span>قيمة الخصم ({discountPercent}%):</span>
-                                        <span className="font-extrabold">-{discountAmount.toLocaleString()} ر.س</span>
+                                {(discountAmount > 0 || settings.isVatEnabled) && (
+                                    <div className="flex flex-wrap items-center justify-between text-[11px] font-bold text-slate-600 dark:text-slate-400 pt-1 border-t border-orange-100/60 dark:border-slate-700 px-1 gap-2">
+                                        {discountAmount > 0 && (
+                                            <span>خصم: <strong className="text-rose-600">-{discountAmount.toLocaleString()} ر.س</strong></span>
+                                        )}
+                                        {settings.isVatEnabled && (
+                                            <span>ضريبة ({settings.vatPercentage}%): <strong className="text-orange-700 dark:text-orange-300">+{vatAmount.toLocaleString()} ر.س</strong></span>
+                                        )}
                                     </div>
                                 )}
-
-                                {settings.isVatEnabled && (
-                                    <div className="flex justify-between items-center text-xs font-bold text-gray-600 dark:text-gray-400">
-                                        <span>ضريبة القيمة المضافة ({settings.vatPercentage}%):</span>
-                                        <span className="text-black dark:text-white font-extrabold">{vatAmount.toLocaleString()} ر.س</span>
-                                    </div>
-                                )}
-
-                                <div className="flex justify-between items-center border-t border-gray-200 dark:border-slate-700 pt-3 text-sm">
-                                    <span className="font-extrabold text-gray-900 dark:text-gray-200">الإجمالي النهائي:</span>
-                                    <span className="font-black text-orange-600 text-lg tracking-tight">
-                                        {total.toLocaleString()} <small className="text-[10px] font-bold">ر.س</small>
-                                    </span>
-                                </div>
                             </div>
                         </div>
 
@@ -657,24 +756,34 @@ export default function Quotations() {
                                 <div className="flex items-center gap-2 bg-white dark:bg-slate-850 p-1 rounded-xl border border-gray-200 dark:border-slate-800 shadow-xs">
                                     <button 
                                         type="button"
-                                        onClick={() => setEditingItem(prev => prev ? { ...prev, cartQuantity: prev.cartQuantity + 1 } : null)} 
+                                        onClick={() => setEditingItem(prev => prev ? { ...prev, cartQuantity: Number(prev.cartQuantity) + 1 } : null)} 
                                         className="p-2.5 bg-blue-50 dark:bg-slate-800 hover:bg-blue-600 dark:hover:bg-blue-600 text-blue-600 dark:text-blue-400 hover:text-white rounded-lg transition-all"
                                     >
                                         <Plus size={14} />
                                     </button>
                                     <input 
                                         type="number" 
+                                        step="0.1"
                                         className="flex-1 text-center font-black text-base text-black dark:text-white bg-transparent outline-none border-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                         value={editingItem.cartQuantity}
-                                        min="1"
+                                        min="0"
                                         onChange={e => {
-                                            const val = parseInt(e.target.value) || 0;
+                                            const val = e.target.value;
                                             setEditingItem(prev => prev ? { ...prev, cartQuantity: val } : null);
+                                        }}
+                                        onFocus={(e) => {
+                                            inputPrevValue.current = editingItem.cartQuantity.toString();
+                                            setEditingItem(prev => prev ? { ...prev, cartQuantity: '' } : null);
+                                        }}
+                                        onBlur={(e) => {
+                                            if (editingItem.cartQuantity === '') {
+                                                setEditingItem(prev => prev ? { ...prev, cartQuantity: inputPrevValue.current } : null);
+                                            }
                                         }}
                                     />
                                     <button 
                                         type="button"
-                                        onClick={() => setEditingItem(prev => prev ? { ...prev, cartQuantity: Math.max(1, prev.cartQuantity - 1) } : null)} 
+                                        onClick={() => setEditingItem(prev => prev ? { ...prev, cartQuantity: Number(prev.cartQuantity) - 1 <= 0 ? 1 : Number(prev.cartQuantity) - 1 } : null)} 
                                         className="p-2.5 bg-red-50 dark:bg-slate-800 hover:bg-red-600 dark:hover:bg-red-600 text-red-600 dark:text-red-400 hover:text-white rounded-lg transition-all"
                                     >
                                         <Minus size={14} />
@@ -688,12 +797,21 @@ export default function Quotations() {
                                 <div className="flex items-center bg-white dark:bg-slate-850 px-3 py-1 rounded-xl border border-gray-200 dark:border-slate-800 shadow-xs">
                                     <input 
                                         type="number" 
-                                        step="any"
-                                        className="w-full font-black text-base text-black dark:text-white bg-transparent outline-none border-none py-1.5 text-right"
-                                        value={editingItem.price === 0 ? '' : editingItem.price}
+                                        step="0.1"
+                                        className="w-full font-black text-base text-black dark:text-white bg-transparent outline-none border-none py-1.5 text-center"
+                                        value={editingItem.price}
                                         onChange={e => {
-                                            const val = parseFloat(e.target.value) || 0;
+                                            const val = e.target.value;
                                             setEditingItem(prev => prev ? { ...prev, price: val } : null);
+                                        }}
+                                        onFocus={(e) => {
+                                            inputPrevValue.current = editingItem.price.toString();
+                                            setEditingItem(prev => prev ? { ...prev, price: '' } : null);
+                                        }}
+                                        onBlur={(e) => {
+                                            if (editingItem.price === '') {
+                                                setEditingItem(prev => prev ? { ...prev, price: inputPrevValue.current } : null);
+                                            }
                                         }}
                                     />
                                 </div>
@@ -703,7 +821,7 @@ export default function Quotations() {
                             <div className="flex justify-between items-center bg-blue-50/50 dark:bg-slate-800/30 p-3 rounded-xl border border-blue-100/50 dark:border-slate-700 text-sm mt-1">
                                 <span className="font-bold text-gray-500 dark:text-gray-400">إجمالي الصنف:</span>
                                 <span className="font-black text-blue-600 dark:text-blue-400 text-base">
-                                    {(editingItem.price * editingItem.cartQuantity).toLocaleString()} <small className="text-xs font-normal">ر.س</small>
+                                    {(Number(editingItem.price) * Number(editingItem.cartQuantity)).toLocaleString()} <small className="text-xs font-normal">ر.س</small>
                                 </span>
                             </div>
                         </div>
@@ -712,7 +830,7 @@ export default function Quotations() {
                         <div className="p-4 border-t border-gray-100 dark:border-slate-800 bg-white dark:bg-slate-900 flex gap-2 shrink-0">
                             <button 
                                 type="button"
-                                onClick={() => handleUpdateCartItem(editingItem.id, editingItem.cartQuantity, editingItem.price)} 
+                                onClick={() => handleUpdateCartItem(editingItem.id, Number(editingItem.cartQuantity), Number(editingItem.price))} 
                                 className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-xl font-bold text-sm shadow-md active:scale-95 transition-all"
                             >
                                 حفظ التعديلات

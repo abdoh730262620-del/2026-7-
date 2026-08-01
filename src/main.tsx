@@ -1,8 +1,8 @@
-import { StrictMode } from 'react';
+import * as React from 'react';
 import { createRoot } from 'react-dom/client';
-import App from './App.tsx';
-import { ThemeProvider } from './context/ThemeContext.tsx';
-import ErrorBoundary from './ErrorBoundary.tsx';
+import App from './App';
+import { ThemeProvider } from './context/ThemeContext';
+import ErrorBoundary from './ErrorBoundary';
 import './index.css';
 
 // System Runtime Early Logger & Exception Handler
@@ -44,13 +44,13 @@ if (!rootElement) {
     console.log('[SystemInit] Mounting React DOM root...');
     const root = createRoot(rootElement);
     root.render(
-      <StrictMode>
+      <React.StrictMode>
         <ErrorBoundary>
           <ThemeProvider>
             <App />
           </ThemeProvider>
         </ErrorBoundary>
-      </StrictMode>
+      </React.StrictMode>
     );
     console.log('[SystemInit] React DOM root mounted successfully.');
   } catch (err) {

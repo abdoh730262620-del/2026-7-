@@ -25,6 +25,7 @@ export default function Layout() {
     const [isOnline, setIsOnline] = useState(window.navigator.onLine);
     const [daysNoSync, setDaysNoSync] = useState(getDaysSinceLastSync());
     const { isSyncing, syncProgress, triggerSync } = useSyncStore();
+    const { isSalesFocusMode } = useInvoiceStore();
 
     useEffect(() => {
         const handleOnline = () => {
@@ -46,6 +47,12 @@ export default function Layout() {
             clearInterval(syncInterval);
         };
     }, [triggerSync]);
+
+    useEffect(() => {
+        if (location.pathname !== '/sales' && isSalesFocusMode) {
+            useInvoiceStore.getState().setIsSalesFocusMode(false);
+        }
+    }, [location.pathname, isSalesFocusMode]);
 
     const navItems = [
         { path: '/', label: 'الرئيسية', icon: Home, roles: ['admin', 'cashier', 'inventory', 'salesman'] },
@@ -164,89 +171,90 @@ export default function Layout() {
         <div dir="rtl" className={`flex flex-col h-[100dvh] bg-[var(--bg-main)] text-[var(--text-main)] font-sans overflow-hidden style-${style}`}>
             <ForcePasswordChangeOverlay />
             <ForceStoreSetupOverlay />
-            {/* Added 5px space to prevent text from sticking to the very top */}
-            <div className="h-[5px] bg-white shrink-0 w-full z-50"></div>
+            {!isSalesFocusMode && <div className="h-[5px] bg-white dark:bg-slate-900 shrink-0 w-full z-50"></div>}
             {/* Global Header */}
-            <header className="h-16 shrink-0 bg-card-bg shadow-sm border-b border-border-main z-30 flex items-center justify-between px-4">
-                <div className="flex items-center gap-3">
-                    <button onClick={() => setIsMobileMenuOpen(true)} className="p-2 bg-white dark:bg-slate-800 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-xl hover:bg-white transition shadow-sm border border-gray-200 dark:border-blue-800">
-                        <Menu size={24} />
-                    </button>
-                    <div className="flex items-center gap-2 mr-1">
-                        <span className="h-6 w-[2px] bg-border-main hidden sm:block"></span>
-                        <h1 className="font-black text-lg md:text-xl text-text-main">{headerTitle}</h1>
+            {!isSalesFocusMode && (
+                <header className="h-16 shrink-0 bg-card-bg shadow-sm border-b border-border-main z-30 flex items-center justify-between px-4">
+                    <div className="flex items-center gap-3">
+                        <button onClick={() => setIsMobileMenuOpen(true)} className="p-2 bg-white dark:bg-slate-800 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-xl hover:bg-white transition shadow-sm border border-gray-200 dark:border-blue-800">
+                            <Menu size={24} />
+                        </button>
+                        <div className="flex items-center gap-2 mr-1">
+                            <span className="h-6 w-[2px] bg-border-main hidden sm:block"></span>
+                            <h1 className="font-black text-lg md:text-xl text-text-main">{headerTitle}</h1>
+                        </div>
                     </div>
-                </div>
-                
-                <div className="flex items-center gap-2 md:gap-3">
-                    {/* Sync Status Icon Button */}
-                    <button
-                        onClick={() => {
-                            if (isOnline && !isSyncing) {
-                                triggerSync();
-                            }
-                        }}
-                        disabled={!isOnline || isSyncing}
-                        className={`p-2 bg-white dark:bg-slate-800 rounded-xl border shadow-sm transition-all duration-300 relative group flex items-center justify-center cursor-pointer ${
-                            !isOnline
-                                ? 'border-red-100 dark:border-red-950/30 text-red-500 dark:text-red-400 bg-red-50/20'
-                                : isSyncing
-                                ? 'border-blue-100 dark:border-blue-950/30 text-blue-500 dark:text-blue-400 bg-blue-50/20'
-                                : 'border-emerald-100 dark:border-emerald-950/30 text-emerald-500 dark:text-emerald-400 hover:scale-105 hover:bg-slate-50 dark:hover:bg-slate-700/50'
-                        }`}
-                        title={
-                            !isOnline
-                                ? 'وضع الأوفلاين (غير متصل بالسحابة)'
-                                : isSyncing
-                                ? `جاري المزامنة... ${syncProgress}%`
-                                : 'متصل بالسحابة • اضغط للمزامنة اليدوية'
-                        }
-                    >
-                        {isSyncing ? (
-                            <RefreshCw size={20} className="animate-spin" />
-                        ) : !isOnline ? (
-                            <CloudOff size={20} className="animate-pulse" />
-                        ) : (
-                            <Cloud size={20} />
-                        )}
-                        {/* Dot Indicator */}
-                        <span className={`absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full border border-white dark:border-slate-800 ${
-                            !isOnline ? 'bg-red-500 animate-pulse' : isSyncing ? 'bg-blue-500 animate-bounce' : 'bg-emerald-500'
-                        }`} />
-                    </button>
-
-                    <NotificationsMenu />
-
-                    {!isHome && (
-                        <button 
+                    
+                    <div className="flex items-center gap-2 md:gap-3">
+                        {/* Sync Status Icon Button */}
+                        <button
                             onClick={() => {
-                                if (typeof (window as any).onHeaderBack === 'function') {
-                                    const handled = (window as any).onHeaderBack();
-                                    if (handled) return;
-                                }
-
-                                if (location.pathname === '/sales') useInvoiceStore.getState().setSalesMinimized(true);
-                                if (location.pathname === '/purchases') useInvoiceStore.getState().setPurchasesMinimized(true);
-                                
-                                if (location.pathname.startsWith('/settings/') && location.pathname !== '/settings') {
-                                    navigate('/settings');
-                                } else {
-                                    navigate('/');
+                                if (isOnline && !isSyncing) {
+                                    triggerSync();
                                 }
                             }}
-                            className="p-2 min-w-[40px] px-3 justify-center bg-white dark:bg-slate-800 text-black dark:text-gray-200 dark:text-gray-300 rounded-lg hover:bg-white dark:hover:bg-slate-700 transition font-bold flex items-center gap-2" 
-                            title="رجوع / خروج"
+                            disabled={!isOnline || isSyncing}
+                            className={`p-2 bg-white dark:bg-slate-800 rounded-xl border shadow-sm transition-all duration-300 relative group flex items-center justify-center cursor-pointer ${
+                                !isOnline
+                                    ? 'border-red-100 dark:border-red-950/30 text-red-500 dark:text-red-400 bg-red-50/20'
+                                    : isSyncing
+                                    ? 'border-blue-100 dark:border-blue-950/30 text-blue-500 dark:text-blue-400 bg-blue-50/20'
+                                    : 'border-emerald-100 dark:border-emerald-950/30 text-emerald-500 dark:text-emerald-400 hover:scale-105 hover:bg-slate-50 dark:hover:bg-slate-700/50'
+                            }`}
+                            title={
+                                !isOnline
+                                    ? 'وضع الأوفلاين (غير متصل بالسحابة)'
+                                    : isSyncing
+                                    ? `جاري المزامنة... ${syncProgress}%`
+                                    : 'متصل بالسحابة • اضغط للمزامنة اليدوية'
+                            }
                         >
-                            <ArrowRight size={20} className="md:hidden" />
-                            <span className="hidden sm:inline">رجوع</span>
+                            {isSyncing ? (
+                                <RefreshCw size={20} className="animate-spin" />
+                            ) : !isOnline ? (
+                                <CloudOff size={20} className="animate-pulse" />
+                            ) : (
+                                <Cloud size={20} />
+                            )}
+                            {/* Dot Indicator */}
+                            <span className={`absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full border border-white dark:border-slate-800 ${
+                                !isOnline ? 'bg-red-500 animate-pulse' : isSyncing ? 'bg-blue-500 animate-bounce' : 'bg-emerald-500'
+                            }`} />
                         </button>
-                    )}
-                    <span className="text-sm font-semibold text-black dark:text-gray-300 dark:text-slate-400 hidden md:block bg-white dark:bg-slate-800 dark:bg-slate-800 px-3 py-1.5 rounded-lg border dark:border-slate-700">{appUser?.name}</span>
-                </div>
-            </header>
+
+                        <NotificationsMenu />
+
+                        {!isHome && (
+                            <button 
+                                onClick={() => {
+                                    if (typeof (window as any).onHeaderBack === 'function') {
+                                        const handled = (window as any).onHeaderBack();
+                                        if (handled) return;
+                                    }
+
+                                    if (location.pathname === '/sales') useInvoiceStore.getState().setSalesMinimized(true);
+                                    if (location.pathname === '/purchases') useInvoiceStore.getState().setPurchasesMinimized(true);
+                                    
+                                    if (location.pathname.startsWith('/settings/') && location.pathname !== '/settings') {
+                                        navigate('/settings');
+                                    } else {
+                                        navigate('/');
+                                    }
+                                }}
+                                className="p-2 min-w-[40px] px-3 justify-center bg-white dark:bg-slate-800 text-black dark:text-gray-200 dark:text-gray-300 rounded-lg hover:bg-white dark:hover:bg-slate-700 transition font-bold flex items-center gap-2" 
+                                title="رجوع / خروج"
+                            >
+                                <ArrowRight size={20} className="md:hidden" />
+                                <span className="hidden sm:inline">رجوع</span>
+                            </button>
+                        )}
+                        <span className="text-sm font-semibold text-black dark:text-gray-300 dark:text-slate-400 hidden md:block bg-white dark:bg-slate-800 dark:bg-slate-800 px-3 py-1.5 rounded-lg border dark:border-slate-700">{appUser?.name}</span>
+                    </div>
+                </header>
+            )}
 
             {/* Offline Sync Warning Banner */}
-            {daysNoSync > 0 && (
+            {!isSalesFocusMode && daysNoSync > 0 && (
                 <div className="bg-amber-50 dark:bg-amber-900/40 border-b border-amber-200 dark:border-amber-800 px-4 py-2 flex items-center justify-between shrink-0 z-20">
                     <div className="flex items-center gap-2">
                         <RefreshCw className="text-amber-600 animate-spin-slow" size={16} />
@@ -262,12 +270,12 @@ export default function Layout() {
 
             {/* Overlay */}
             {isMobileMenuOpen && (
-                <div className="fixed inset-0 bg-black/50 z-40" onClick={() => setIsMobileMenuOpen(false)}></div>
+                <div className="fixed inset-0 bg-black/50 z-[290] backdrop-blur-xs" onClick={() => setIsMobileMenuOpen(false)}></div>
             )}
 
             {/* Sidebar Drawer */}
             <aside className={`
-                fixed inset-y-0 right-0 z-50 w-[260px] bg-card-bg shadow-2xl transform transition-transform duration-300 ease-in-out
+                fixed inset-y-0 right-0 z-[300] w-[260px] bg-card-bg shadow-2xl transform transition-transform duration-300 ease-in-out
                 ${isMobileMenuOpen ? 'translate-x-0' : 'translate-x-full'}
                 flex flex-col h-full border-l border-border-main
             `}>
@@ -318,7 +326,7 @@ export default function Layout() {
             </aside>
 
             {/* Main Content */}
-            <main className={`flex-1 flex flex-col min-h-0 overflow-y-auto bg-[var(--bg-main)] w-full relative p-2 md:p-6`}>
+            <main className={`flex-1 flex flex-col min-h-0 overflow-y-auto bg-[var(--bg-main)] w-full relative ${isSalesFocusMode ? 'p-0' : 'p-2 md:p-6'}`}>
                 <Outlet />
             </main>
         </div>

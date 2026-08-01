@@ -971,8 +971,9 @@ export default function Customers() {
         const reader = new FileReader();
         reader.onload = async (evt) => {
             try {
-                const bstr = evt.target?.result;
-                const wb = XLSX.read(bstr, { type: 'binary' });
+                const arrayBuffer = evt.target?.result as ArrayBuffer;
+                const dataArray = new Uint8Array(arrayBuffer);
+                const wb = XLSX.read(dataArray, { type: 'array' });
                 const wsname = wb.SheetNames[0];
                 const ws = wb.Sheets[wsname];
                 const data = XLSX.utils.sheet_to_json(ws);
@@ -990,7 +991,7 @@ export default function Customers() {
                 if (fileInputRef.current) fileInputRef.current.value = '';
             }
         };
-        reader.readAsBinaryString(file);
+        reader.readAsArrayBuffer(file);
     };
 
     const processMappedImport = async (mappedData: any[]) => {

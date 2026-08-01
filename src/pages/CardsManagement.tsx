@@ -5,7 +5,7 @@ import {
     X, Sparkles, TrendingUp, Wallet, ArrowUpRight, ArrowDownLeft, Search, UserCheck,
     Share2, MessageSquare, Send, Truck
 } from 'lucide-react';
-import { collection, query, where, onSnapshot, doc, addDoc as firestoreAddDoc, updateDoc as firestoreUpdateDoc, deleteDoc as firestoreDeleteDoc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, doc, addDoc as firestoreAddDoc, updateDoc as firestoreUpdateDoc, deleteDoc as firestoreDeleteDoc, runTransaction } from 'firebase/firestore';
 
 // Helper functions for offline-safe writes
 const safeWrite = async (promise: Promise<any>) => {
@@ -30,6 +30,8 @@ import { printReport, printInvoice } from '../lib/printHelper';
 import CardSaleModal from '../components/CardSaleModal';
 import CardPurchaseModal from '../components/CardPurchaseModal';
 import SearchableSelect from '../components/SearchableSelect';
+import { CardInvoiceActionModal } from '../components/CardInvoiceActionModal';
+import { InvoicePdfInput } from '../lib/pdfHelper';
 
 
 
@@ -176,6 +178,10 @@ export default function CardsManagement() {
     const [cashboxIsIncome, setCashboxIsIncome] = useState(true);
     const [cashboxTitleInput, setCashboxTitleInput] = useState('');
     const [cashboxAmountInput, setCashboxAmountInput] = useState('');
+
+    // State for newly saved cards invoice action (print/share) modal
+    const [actionModalOpen, setActionModalOpen] = useState(false);
+    const [actionModalInvoice, setActionModalInvoice] = useState<InvoicePdfInput | null>(null);
 
     // Function to handle sharing distributor details and account ledger
     const handleShareClick = (
@@ -337,6 +343,16 @@ export default function CardsManagement() {
             }
         };
     }, [activeSection, distributorSubSection, selectedDistributorForDetails, purchaseSubSection, selectedSupplierForDetails]);
+
+    // Prefill purchase cost price when category is selected in purchase form
+    useEffect(() => {
+        if (purchaseCategoryId) {
+            const cat = categories.find(c => c.id === purchaseCategoryId);
+            if (cat) {
+                setPurchaseCostPrice(cat.wholesalePrice ? cat.wholesalePrice.toString() : '');
+            }
+        }
+    }, [purchaseCategoryId, categories]);
 
     // ----------------------------------------------------
     // Category Operations
@@ -602,78 +618,150 @@ export default function CardsManagement() {
         const netTotal = unitPrice * qty; // Wholesale price is already discounted
         const isCash = salePaymentMethod === 'cash';
 
+        // Balance & cash checks for instant feedback
+        if (saleIsReturn && isCash && cashboxBalance < netTotal) {
+            alert(`تنبيه فوري: رصيد الصندوق (${cashboxBalance.toFixed(2)} ر.س) لا يكفي لإتمام عملية المرتجع النقدي بقيمة ${netTotal.toFixed(2)} ر.س!`);
+            return;
+        }
+
+        if (salePaymentMethod === 'credit' && dist) {
+            const currentDebt = dist.balance || 0;
+            if (currentDebt < 0) {
+                const availablePrepaid = Math.abs(currentDebt);
+                if (netTotal > availablePrepaid) {
+                    const confirmProceed = window.confirm(`تنبيه فوري: رصيد الصندوق للموزع لا يكفي للعملية!\nالمبلغ المتاح كدفعة مقدمة: ${availablePrepaid.toFixed(2)} ريال.\nقيمة الفاتورة الحالية: ${netTotal.toFixed(2)} ريال.\nهل ترغب بالاستمرار بالعملية وتحويل المتبقي كدين؟`);
+                    if (!confirmProceed) return;
+                }
+            } else if (currentDebt > 5000) {
+                const confirmProceed = window.confirm(`تنبيه فوري: رصيد مديونية الموزع مرتفع جداً حالياً (${currentDebt.toFixed(2)} ريال)!\nهل ترغب بالاستمرار في إتمام العملية بالآجل؟`);
+                if (!confirmProceed) return;
+            }
+        }
+
         try {
             const dateStr = new Date().toISOString().split('T')[0];
             const timeStr = new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
-            
-            // 1. Add Sale record
-            await addDoc(collection(db, 'card_sales'), {
-                tenantId,
-                categoryName: cat.name,
-                quantity: saleIsReturn ? -qty : qty,
-                saleType: 'distributor',
-                paymentType: salePaymentMethod,
-                distributorId: dist.id,
-                distributorName: dist.name,
-                unitPrice,
-                commissionPercent: 0, // No second discount
-                commissionAmount: 0,
-                totalAmount: saleIsReturn ? -netTotal : netTotal,
-                netTotal: saleIsReturn ? -netTotal : netTotal,
-                month: dateStr.substring(0, 7),
-                date: dateStr,
-                dateTime: `${dateStr} ${timeStr}`,
-                userName: appUser?.name || appUser?.email || 'المدير'
-            });
+            const saleRef = doc(collection(db, 'card_sales'));
 
-            // 2. Update stock
-            const newStock = saleIsReturn ? cat.availableCount + qty : cat.availableCount - qty;
-            await updateDoc(doc(db, 'card_categories', cat.id), {
-                availableCount: newStock,
-                updatedAt: Date.now()
-            });
+            await runTransaction(db, async (transaction) => {
+                // Reads
+                const catRef = doc(db, 'card_categories', cat.id);
+                const distRef = doc(db, 'card_distributors', dist.id);
 
-            // 3. Update distributor debt (balance) OR Cashbox
-            if (isCash) {
-                // If it's a cash transaction, we don't increase their debt. We put it in the cashbox.
-                await addDoc(collection(db, 'card_cashbox'), {
+                const catSnap = await transaction.get(catRef);
+                const distSnap = await transaction.get(distRef);
+
+                if (!catSnap.exists() || !distSnap.exists()) {
+                    throw new Error('الفئة المطلوبة أو الموزع غير موجود في قاعدة البيانات!');
+                }
+
+                const currentAvailableCount = catSnap.data().availableCount || 0;
+                const currentBalance = distSnap.data().balance || 0;
+
+                if (!saleIsReturn && currentAvailableCount < qty) {
+                    throw new Error(`الكمية المطلوبة غير متوفرة. المتاح: ${currentAvailableCount}`);
+                }
+
+                // Writes
+                transaction.set(saleRef, {
                     tenantId,
-                    type: saleIsReturn ? 'distributor_return_cash' : 'distributor_sale_cash',
-                    title: saleIsReturn 
-                        ? `مرتجع مبيعات نقدي من الموزع: ${dist.name}`
-                        : `مبيعات نقدية للموزع: ${dist.name}`,
-                    amount: netTotal,
-                    isIncome: !saleIsReturn, // Sale = income, Return = expense
-                    referenceId: '',
+                    categoryName: catSnap.data().name,
+                    quantity: saleIsReturn ? -qty : qty,
+                    saleType: 'distributor',
+                    paymentType: salePaymentMethod,
+                    distributorId: dist.id,
+                    distributorName: distSnap.data().name,
+                    unitPrice,
+                    commissionPercent: 0,
+                    commissionAmount: 0,
+                    totalAmount: saleIsReturn ? -netTotal : netTotal,
+                    netTotal: saleIsReturn ? -netTotal : netTotal,
+                    month: dateStr.substring(0, 7),
                     date: dateStr,
                     dateTime: `${dateStr} ${timeStr}`,
                     userName: appUser?.name || appUser?.email || 'المدير',
+                    status: 'completed',
                     createdAt: Date.now()
                 });
-            } else {
-                const newBalance = saleIsReturn ? dist.balance - netTotal : dist.balance + netTotal;
-                await updateDoc(doc(db, 'card_distributors', dist.id), {
-                    balance: newBalance,
+
+                const newStock = saleIsReturn ? currentAvailableCount + qty : currentAvailableCount - qty;
+                transaction.update(catRef, {
+                    availableCount: newStock,
                     updatedAt: Date.now()
                 });
-            }
 
-            // 4. Record stock log
-            await addDoc(collection(db, 'card_stock_logs'), {
-                tenantId,
-                categoryId: cat.id,
-                categoryName: cat.name,
-                quantityAdded: saleIsReturn ? qty : -qty,
-                userName: appUser?.name || appUser?.email || 'المدير',
-                additionDate: `${dateStr} ${timeStr}`,
-                availableCountAfter: newStock
+                if (isCash) {
+                    const cashboxRef = doc(collection(db, 'card_cashbox'));
+                    transaction.set(cashboxRef, {
+                        tenantId,
+                        type: saleIsReturn ? 'distributor_return_cash' : 'distributor_sale_cash',
+                        title: saleIsReturn 
+                            ? `مرتجع مبيعات نقدي من الموزع: ${distSnap.data().name}`
+                            : `مبيعات نقدية للموزع: ${distSnap.data().name}`,
+                        amount: netTotal,
+                        isIncome: !saleIsReturn,
+                        referenceId: saleRef.id,
+                        date: dateStr,
+                        dateTime: `${dateStr} ${timeStr}`,
+                        userName: appUser?.name || appUser?.email || 'المدير',
+                        createdAt: Date.now()
+                    });
+
+                    const mainCashRef = doc(collection(db, 'cash'));
+                    transaction.set(mainCashRef, {
+                        date: Date.now(),
+                        amount: netTotal,
+                        type: saleIsReturn ? 'out' : 'in',
+                        category: 'card_sale',
+                        description: saleIsReturn 
+                            ? `مرتجع مبيعات نقدي من الموزع: ${distSnap.data().name}`
+                            : `مبيعات كروت نقدية للموزع: ${distSnap.data().name}`,
+                        referenceId: cashboxRef.id,
+                        createdBy: appUser?.uid || 'unknown',
+                        createdAt: Date.now(),
+                        tenantId
+                    });
+                } else {
+                    const newBalance = saleIsReturn ? currentBalance - netTotal : currentBalance + netTotal;
+                    transaction.update(distRef, {
+                        balance: newBalance,
+                        updatedAt: Date.now()
+                    });
+                }
+
+                const stockLogRef = doc(collection(db, 'card_stock_logs'));
+                transaction.set(stockLogRef, {
+                    tenantId,
+                    categoryId: cat.id,
+                    categoryName: catSnap.data().name,
+                    quantityAdded: saleIsReturn ? qty : -qty,
+                    userName: appUser?.name || appUser?.email || 'المدير',
+                    additionDate: `${dateStr} ${timeStr}`,
+                    availableCountAfter: newStock,
+                    createdAt: Date.now()
+                });
             });
-            
-            alert(saleIsReturn ? 'تم إرجاع الكروت وتحديث حساب الموزع بنجاح' : 'تم إصدار الفاتورة وخصم الكروت بنجاح');
+
+            const invRef = saleRef.id.slice(-6).toUpperCase();
+            setActionModalInvoice({
+                id: saleRef.id,
+                invoiceNumber: invRef,
+                type: 'sale',
+                categoryName: cat.name,
+                quantity: saleIsReturn ? -qty : qty,
+                unitPrice,
+                totalAmount: netTotal,
+                paymentType: salePaymentMethod,
+                partyName: dist.name,
+                dateTime: `${dateStr} ${timeStr}`,
+                userName: appUser?.name || appUser?.email || 'المدير'
+            });
+            setActionModalOpen(true);
+
             setSaleQuantity('');
             setSaleCategoryId('');
-        } catch (error) {
-            handleFirestoreError(error, OperationType.WRITE, 'card_sales');
+        } catch (error: any) {
+            alert(error.message || 'حدث خطأ أثناء حفظ الفاتورة');
         }
     };
 
@@ -765,78 +853,135 @@ export default function CardsManagement() {
         const totalAmount = unitCost * qty; 
         const isCash = purchasePaymentMethod === 'cash';
 
+        // Balance & cash checks for instant feedback
+        if (!purchaseIsReturn && isCash && cashboxBalance < totalAmount) {
+            alert(`تنبيه فوري: رصيد الصندوق (${cashboxBalance.toFixed(2)} ر.س) لا يكفي لشراء الكروت نقداً بقيمة ${totalAmount.toFixed(2)} ر.س!`);
+            return;
+        }
+
         try {
             const dateStr = new Date().toISOString().split('T')[0];
             const timeStr = new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
-            
-            // 1. Add Purchase record
-            await addDoc(collection(db, 'card_purchases'), {
-                tenantId,
-                categoryId: cat.id,
-                categoryName: cat.name,
-                quantity: purchaseIsReturn ? -qty : qty,
-                purchaseType: 'supplier',
-                paymentType: purchasePaymentMethod,
-                supplierId: supp.id,
-                supplierName: supp.name,
-                unitPrice: unitCost,
-                totalAmount: purchaseIsReturn ? -totalAmount : totalAmount,
-                month: dateStr.substring(0, 7),
-                date: dateStr,
-                dateTime: `${dateStr} ${timeStr}`,
-                userName: appUser?.name || appUser?.email || 'المدير'
-            });
+            const purchaseRef = doc(collection(db, 'card_purchases'));
 
-            // 2. Update stock
-            const newStock = purchaseIsReturn ? cat.availableCount - qty : cat.availableCount + qty;
-            await updateDoc(doc(db, 'card_categories', cat.id), {
-                availableCount: newStock,
-                updatedAt: Date.now()
-            });
+            await runTransaction(db, async (transaction) => {
+                // Reads
+                const catRef = doc(db, 'card_categories', cat.id);
+                const suppRef = doc(db, 'card_suppliers', supp.id);
 
-            // 3. Update supplier debt (balance) OR Cashbox
-            if (isCash) {
-                // Cash transaction: we pay from cashbox
-                await addDoc(collection(db, 'card_cashbox'), {
+                const catSnap = await transaction.get(catRef);
+                const suppSnap = await transaction.get(suppRef);
+
+                if (!catSnap.exists() || !suppSnap.exists()) {
+                    throw new Error('الفئة المطلوبة أو المورد غير موجود في قاعدة البيانات!');
+                }
+
+                const currentAvailableCount = catSnap.data().availableCount || 0;
+                const currentBalance = suppSnap.data().balance || 0;
+
+                if (purchaseIsReturn && currentAvailableCount < qty) {
+                    throw new Error(`لا يمكن إرجاع كروت للمورد أكثر من المتوفر في المخزون. المتاح: ${currentAvailableCount}`);
+                }
+
+                // Writes
+                transaction.set(purchaseRef, {
                     tenantId,
-                    type: purchaseIsReturn ? 'supplier_return_cash' : 'supplier_purchase_cash',
-                    title: purchaseIsReturn 
-                        ? `مسترد نقدي من المورد: ${supp.name} (مرتجع)`
-                        : `مدفوع نقدي للمورد: ${supp.name} (مشتريات)`,
-                    amount: totalAmount,
-                    isIncome: purchaseIsReturn, // return = we get money back
-                    referenceId: '',
+                    categoryId: cat.id,
+                    categoryName: catSnap.data().name,
+                    quantity: purchaseIsReturn ? -qty : qty,
+                    purchaseType: 'supplier',
+                    paymentType: purchasePaymentMethod,
+                    supplierId: supp.id,
+                    supplierName: suppSnap.data().name,
+                    unitPrice: unitCost,
+                    totalAmount: purchaseIsReturn ? -totalAmount : totalAmount,
+                    month: dateStr.substring(0, 7),
                     date: dateStr,
                     dateTime: `${dateStr} ${timeStr}`,
                     userName: appUser?.name || appUser?.email || 'المدير',
+                    status: 'completed',
                     createdAt: Date.now()
                 });
-            } else {
-                // Credit transaction: update supplier balance
-                const newBalance = purchaseIsReturn ? supp.balance - totalAmount : supp.balance + totalAmount;
-                await updateDoc(doc(db, 'card_suppliers', supp.id), {
-                    balance: newBalance,
+
+                const newStock = purchaseIsReturn ? currentAvailableCount - qty : currentAvailableCount + qty;
+                transaction.update(catRef, {
+                    availableCount: newStock,
                     updatedAt: Date.now()
                 });
-            }
 
-            // 4. Record stock log
-            await addDoc(collection(db, 'card_stock_logs'), {
-                tenantId,
-                categoryId: cat.id,
-                categoryName: cat.name,
-                quantityAdded: purchaseIsReturn ? -qty : qty,
-                userName: appUser?.name || appUser?.email || 'المدير',
-                additionDate: `${dateStr} ${timeStr}`,
-                availableCountAfter: newStock
+                if (isCash) {
+                    const cashboxRef = doc(collection(db, 'card_cashbox'));
+                    transaction.set(cashboxRef, {
+                        tenantId,
+                        type: purchaseIsReturn ? 'supplier_return_cash' : 'supplier_purchase_cash',
+                        title: purchaseIsReturn 
+                            ? `مسترد نقدي من المورد: ${suppSnap.data().name} (مرتجع)`
+                            : `مدفوع نقدي للمورد: ${suppSnap.data().name} (مشتريات)`,
+                        amount: totalAmount,
+                        isIncome: purchaseIsReturn,
+                        referenceId: purchaseRef.id,
+                        date: dateStr,
+                        dateTime: `${dateStr} ${timeStr}`,
+                        userName: appUser?.name || appUser?.email || 'المدير',
+                        createdAt: Date.now()
+                    });
+
+                    const mainCashRef = doc(collection(db, 'cash'));
+                    transaction.set(mainCashRef, {
+                        date: Date.now(),
+                        amount: totalAmount,
+                        type: purchaseIsReturn ? 'in' : 'out',
+                        category: 'card_purchase',
+                        description: purchaseIsReturn 
+                            ? `مسترد نقدي من المورد: ${suppSnap.data().name} (مرتجع كروت)`
+                            : `مدفوع نقدي للمورد: ${suppSnap.data().name} (مشتريات كروت)`,
+                        referenceId: cashboxRef.id,
+                        createdBy: appUser?.uid || 'unknown',
+                        createdAt: Date.now(),
+                        tenantId
+                    });
+                } else {
+                    const newBalance = purchaseIsReturn ? currentBalance - totalAmount : currentBalance + totalAmount;
+                    transaction.update(suppRef, {
+                        balance: newBalance,
+                        updatedAt: Date.now()
+                    });
+                }
+
+                const stockLogRef = doc(collection(db, 'card_stock_logs'));
+                transaction.set(stockLogRef, {
+                    tenantId,
+                    categoryId: cat.id,
+                    categoryName: catSnap.data().name,
+                    quantityAdded: purchaseIsReturn ? -qty : qty,
+                    userName: appUser?.name || appUser?.email || 'المدير',
+                    additionDate: `${dateStr} ${timeStr}`,
+                    availableCountAfter: newStock,
+                    createdAt: Date.now()
+                });
             });
-            
-            alert(purchaseIsReturn ? 'تم إرجاع الكروت للمورد وتحديث الحساب بنجاح' : 'تم إضافة فاتورة المشتريات وتزويد الرصيد بنجاح');
+
+            const invRef = purchaseRef.id.slice(-6).toUpperCase();
+            setActionModalInvoice({
+                id: purchaseRef.id,
+                invoiceNumber: invRef,
+                type: 'purchase',
+                categoryName: cat.name,
+                quantity: purchaseIsReturn ? -qty : qty,
+                unitPrice: unitCost,
+                totalAmount: totalAmount,
+                paymentType: purchasePaymentMethod,
+                partyName: supp.name,
+                dateTime: `${dateStr} ${timeStr}`,
+                userName: appUser?.name || appUser?.email || 'المدير'
+            });
+            setActionModalOpen(true);
+
             setPurchaseQuantity('');
             setPurchaseCostPrice('');
             setPurchaseCategoryId('');
-        } catch (error) {
-            handleFirestoreError(error, OperationType.WRITE, 'card_purchases');
+        } catch (error: any) {
+            alert(error.message || 'حدث خطأ أثناء حفظ الفاتورة');
         }
     };
 
@@ -957,7 +1102,7 @@ export default function CardsManagement() {
     }, 0);
 
     // Filter Sales by selected month
-    const filteredMonthSales = sales.filter(s => s.month === selectedMonth);
+    const filteredMonthSales = sales.filter(s => s.month === selectedMonth && (s.status === 'completed' || !s.status));
 
     // Monthly Report Calculations per category
     const monthlyCategoryReport = categories.map(cat => {
@@ -1222,30 +1367,18 @@ export default function CardsManagement() {
                             </div>
                         </div>
                     ) : (
-                        <div className="bg-white dark:bg-slate-900 p-4 sm:p-5 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between gap-3 animate-in fade-in duration-200">
-                            <div className="flex items-center gap-3">
-                                <button
-                                    onClick={() => {
-                                        setPurchaseSubSection(null);
-                                        setSelectedSupplierForDetails(null);
-                                    }}
-                                    className="p-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-2xl transition flex items-center gap-1.5 font-black text-xs"
-                                >
-                                    <ArrowRight size={18} />
-                                    <span>رجوع لأقسام الموردين</span>
-                                </button>
-                                <div>
-                                    <h2 className="text-base sm:text-lg font-black text-slate-900 dark:text-white">
-                                        {purchaseSubSection === 'accounts' && 'كشوف حسابات الموردين والمديونيات'}
-                                        {purchaseSubSection === 'invoices' && 'عرض وطباعة فواتير الشراء للموردين'}
-                                        {purchaseSubSection === 'alerts' && 'نظام التنبيهات اليومي مديونيات الموردين'}
-                                        {purchaseSubSection === 'list' && 'عرض وتعديل بيانات الموردين'}
-                                        {purchaseSubSection === 'sales' && 'إصدار فاتورة مشتريات أو مرتجع'}
-                                        {purchaseSubSection === 'add' && 'تسجيل مورد جديد'}
-                                    </h2>
+                        (purchaseSubSection === 'invoices' || purchaseSubSection === 'list') ? (
+                            <div className="bg-white dark:bg-slate-900 p-4 sm:p-5 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between gap-3 animate-in fade-in duration-200">
+                                <div className="flex items-center gap-3">
+                                    <div>
+                                        <h2 className="text-base sm:text-lg font-black text-slate-900 dark:text-white">
+                                            {purchaseSubSection === 'invoices' && 'عرض وطباعة فواتير الشراء للموردين'}
+                                            {purchaseSubSection === 'list' && 'عرض وتعديل بيانات الموردين'}
+                                        </h2>
+                                    </div>
                                 </div>
                             </div>
-                        </div>
+                        ) : null
                     )}
 
                     {/* DAILY DEBT NOTIFICATION BANNER */}
@@ -1377,7 +1510,7 @@ export default function CardsManagement() {
                                     const supp = selectedSupplierForDetails;
                                     
                                     // 1. Filter Sales
-                                    const suppPurchases = purchases.filter(s => s.supplierId === supp.id);
+                                    const suppPurchases = purchases.filter(s => s.supplierId === supp.id && (s.status === 'completed' || !s.status));
                                     const totalPurchasesCash = suppPurchases.filter(s => s.paymentType === 'cash').reduce((acc, s) => acc + (s.totalAmount || 0), 0);
                                     const totalPurchasesCredit = suppPurchases.filter(s => s.paymentType === 'credit').reduce((acc, s) => acc + (s.totalAmount || 0), 0);
                                     
@@ -1435,7 +1568,7 @@ export default function CardsManagement() {
                                     // Compute running balance starting with previousDebt
                                     let runningBalance = initialDebt;
                                     const ledgerWithRunningBalance = ledgerEntries.map(entry => {
-                                        runningBalance = runningBalance + entry.debit - entry.credit;
+                                        runningBalance = runningBalance + entry.credit - entry.debit;
                                         return {
                                             ...entry,
                                             runningBalance
@@ -1760,6 +1893,7 @@ export default function CardsManagement() {
                                                     filtered = filtered.filter(p => 
                                                         (p.supplierName && p.supplierName.toLowerCase().includes(q)) ||
                                                         (p.categoryName && p.categoryName.toLowerCase().includes(q)) ||
+                                                        (p.invoiceNumber && p.invoiceNumber.toLowerCase().includes(q)) ||
                                                         p.id.toLowerCase().includes(q)
                                                     );
                                                 }
@@ -1780,45 +1914,132 @@ export default function CardsManagement() {
                                                     );
                                                 }
 
-                                                return filtered.map((purchase) => {
-                                                    const invRef = purchase.id.slice(-6).toUpperCase();
+                                                // Group items by transaction (using invoiceNumber if exists, or dateTime + supplierId + paymentType)
+                                                interface GroupedPurchase {
+                                                    id: string;
+                                                    invoiceNumber: string;
+                                                    supplierId: string;
+                                                    supplierName: string;
+                                                    paymentType: string;
+                                                    dateTime: string;
+                                                    userName: string;
+                                                    status?: string;
+                                                    items: {
+                                                        categoryName: string;
+                                                        quantity: number;
+                                                        unitPrice: number;
+                                                        totalAmount: number;
+                                                    }[];
+                                                    totalAmount: number;
+                                                    totalQuantity: number;
+                                                }
+
+                                                const groupedPurchasesMap: { [key: string]: GroupedPurchase } = {};
+
+                                                filtered.forEach(p => {
+                                                    const key = p.invoiceNumber 
+                                                        ? `inv_${p.invoiceNumber}` 
+                                                        : `${p.dateTime || p.date}_${p.supplierId || 'cash'}_${p.paymentType}`;
+
+                                                    if (!groupedPurchasesMap[key]) {
+                                                        groupedPurchasesMap[key] = {
+                                                            id: p.id,
+                                                            invoiceNumber: p.invoiceNumber || p.id.slice(-6).toUpperCase(),
+                                                            supplierId: p.supplierId || '',
+                                                            supplierName: p.supplierName || 'مورد نقدي',
+                                                            paymentType: p.paymentType || 'cash',
+                                                            dateTime: p.dateTime || p.date || '',
+                                                            userName: p.userName || '',
+                                                            status: p.status || 'completed',
+                                                            items: [],
+                                                            totalAmount: 0,
+                                                            totalQuantity: 0
+                                                        };
+                                                    }
+
+                                                    const unitPrice = p.unitPrice || (p.quantity ? (p.totalAmount / p.quantity) : 0);
+                                                    groupedPurchasesMap[key].items.push({
+                                                        categoryName: p.categoryName || 'فئة كروت',
+                                                        quantity: p.quantity || 0,
+                                                        unitPrice: unitPrice,
+                                                        totalAmount: p.totalAmount || 0
+                                                    });
+
+                                                    groupedPurchasesMap[key].totalAmount += (p.totalAmount || 0);
+                                                    groupedPurchasesMap[key].totalQuantity += (p.quantity || 0);
+                                                });
+
+                                                const groupedList = Object.values(groupedPurchasesMap).sort((a, b) => {
+                                                    // Sort newest first
+                                                    return b.dateTime.localeCompare(a.dateTime);
+                                                });
+
+                                                return groupedList.map((purchase) => {
                                                     return (
                                                         <tr key={purchase.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition">
-                                                            <td className="p-4 font-mono font-black text-indigo-600 dark:text-indigo-400">#{invRef}</td>
-                                                            <td className="p-4 font-black">{purchase.supplierName || 'مورد نقدي'}</td>
-                                                            <td className="p-4 font-black text-slate-700 dark:text-slate-300">{purchase.categoryName || 'فئة كروت'}</td>
-                                                            <td className="p-4 text-center font-black text-emerald-600">+{purchase.quantity} كارت</td>
-                                                            <td className="p-4 text-left font-black">{purchase.costPrice ? purchase.costPrice.toFixed(2) : ((purchase.totalAmount || 0) / (purchase.quantity || 1)).toFixed(2)} ر.س</td>
-                                                            <td className="p-4 text-left font-black text-blue-600 dark:text-blue-400">{(purchase.totalAmount || 0).toFixed(2)} ر.س</td>
-                                                            <td className="p-4 text-center">
-                                                                <span className={`px-2.5 py-1 rounded-xl text-[10px] font-black ${
-                                                                    purchase.paymentType === 'cash' 
-                                                                        ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300' 
-                                                                        : 'bg-amber-50 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300'
-                                                                }`}>
-                                                                    {purchase.paymentType === 'cash' ? 'نقدي' : 'آجل'}
-                                                                </span>
+                                                            <td className="p-4 font-mono font-black text-indigo-600 dark:text-indigo-400">#{purchase.invoiceNumber}</td>
+                                                            <td className="p-4 font-black">{purchase.supplierName}</td>
+                                                            <td className="p-4 font-black text-slate-700 dark:text-slate-300">
+                                                                <div className="flex flex-wrap gap-1 max-w-[220px]">
+                                                                    {purchase.items.map((it, idx) => (
+                                                                        <span key={idx} className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 px-2 py-1 rounded-lg text-[10px] inline-block font-black border border-slate-200/50 dark:border-slate-700/50">
+                                                                            فئة: {it.categoryName} ({it.quantity})
+                                                                        </span>
+                                                                    ))}
+                                                                </div>
                                                             </td>
-                                                            <td className="p-4 text-slate-500 text-[11px]">{purchase.dateTime || purchase.date}</td>
+                                                            <td className="p-4 text-center font-black text-emerald-600">+{purchase.totalQuantity} كارت</td>
+                                                            <td className="p-4 text-left font-black">
+                                                                <div className="space-y-0.5 text-slate-500 dark:text-slate-400">
+                                                                    {purchase.items.map((it, idx) => (
+                                                                        <div key={idx} className="text-[11px] font-bold">
+                                                                            {it.unitPrice.toFixed(2)} ر.س
+                                                                        </div>
+                                                                    ))}
+                                                                </div>
+                                                            </td>
+                                                            <td className="p-4 text-left font-black text-blue-600 dark:text-blue-400">{purchase.totalAmount.toFixed(2)} ر.س</td>
+                                                            <td className="p-4 text-center">
+                                                                <div className="flex flex-col items-center gap-1">
+                                                                    <span className={`px-2.5 py-1 rounded-xl text-[10px] font-black ${
+                                                                        purchase.paymentType === 'cash' 
+                                                                            ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300' 
+                                                                            : 'bg-amber-50 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300'
+                                                                    }`}>
+                                                                        {purchase.paymentType === 'cash' ? 'نقدي' : 'آجل'}
+                                                                    </span>
+                                                                    {purchase.status && (
+                                                                        <span className={`px-2.5 py-0.5 rounded-lg text-[9px] font-black border ${
+                                                                            purchase.status === 'completed' 
+                                                                                ? 'bg-emerald-500/10 text-emerald-600 border-emerald-200' 
+                                                                                : purchase.status === 'cancelled'
+                                                                                ? 'bg-rose-500/10 text-rose-600 border-rose-200'
+                                                                                : 'bg-blue-500/10 text-blue-600 border-blue-200'
+                                                                        }`}>
+                                                                            {purchase.status === 'completed' ? 'معتمدة' : purchase.status === 'cancelled' ? 'ملغاة' : 'مسودة'}
+                                                                        </span>
+                                                                    )}
+                                                                </div>
+                                                            </td>
+                                                            <td className="p-4 text-slate-500 text-[11px]">{purchase.dateTime}</td>
                                                             <td className="p-4 text-center">
                                                                 <button
                                                                     onClick={async () => {
-                                                                        const supp = suppliers.find(s => s.id === purchase.supplierId);
                                                                         const invObj = {
-                                                                            invoiceNumber: invRef,
-                                                                            supplierName: purchase.supplierName || supp?.name || 'مورد نقدي',
+                                                                            invoiceNumber: purchase.invoiceNumber,
+                                                                            supplierName: purchase.supplierName,
                                                                             supplierId: purchase.supplierId,
                                                                             total: purchase.totalAmount,
                                                                             paidAmount: purchase.paymentType === 'cash' ? purchase.totalAmount : 0,
                                                                             paymentType: purchase.paymentType,
-                                                                            date: purchase.date || purchase.dateTime,
+                                                                            date: purchase.dateTime,
                                                                             sellerName: purchase.userName || appUser?.name || 'النظام'
                                                                         };
-                                                                        const itemObj = [{
-                                                                            name: `كروت فئة: ${purchase.categoryName || 'شبكة'}`,
-                                                                            quantity: purchase.quantity,
-                                                                            price: purchase.costPrice || (purchase.totalAmount / (purchase.quantity || 1)) || 0
-                                                                        }];
+                                                                        const itemObj = purchase.items.map(it => ({
+                                                                            name: `كروت فئة: ${it.categoryName}`,
+                                                                            quantity: it.quantity,
+                                                                            price: it.unitPrice
+                                                                        }));
                                                                         await printInvoice(invObj, 'purchase', itemObj);
                                                                     }}
                                                                     className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-black text-xs rounded-xl shadow-md shadow-emerald-600/20 inline-flex items-center gap-1.5 transition"
@@ -2130,6 +2351,28 @@ export default function CardsManagement() {
                                         placeholder="عدد الكروت..."
                                         value={purchaseQuantity}
                                         onChange={(e) => setPurchaseQuantity(e.target.value)}
+                                        onFocus={(e) => {
+                                            setPurchaseQuantity('');
+                                            e.target.select();
+                                        }}
+                                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-3 text-xs font-bold outline-none focus:border-orange-500 text-slate-900 dark:text-white"
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs font-black text-slate-700 dark:text-slate-300 mb-2">سعر تكلفة الكارت الواحد (ر.س) <span className="text-rose-500">*</span></label>
+                                    <input
+                                        type="number"
+                                        required
+                                        min="0"
+                                        step="any"
+                                        placeholder="سعر التكلفة..."
+                                        value={purchaseCostPrice}
+                                        onChange={(e) => setPurchaseCostPrice(e.target.value)}
+                                        onFocus={(e) => {
+                                            setPurchaseCostPrice('');
+                                            e.target.select();
+                                        }}
                                         className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-3 text-xs font-bold outline-none focus:border-orange-500 text-slate-900 dark:text-white"
                                     />
                                 </div>
@@ -2169,11 +2412,11 @@ export default function CardsManagement() {
                                             <div className="bg-orange-50 dark:bg-orange-900/20 p-4 rounded-2xl border border-orange-100 dark:border-orange-800/30 space-y-3">
                                                 <div className="flex justify-between items-center text-xs">
                                                     <span className="text-slate-500 dark:text-slate-400">الإجمالي:</span>
-                                                    <span className="font-bold text-slate-700 dark:text-slate-300">{total.toLocaleString()} د.ل</span>
+                                                    <span className="font-bold text-slate-700 dark:text-slate-300">{total.toLocaleString()} ر.س</span>
                                                 </div>
                                                 <div className="pt-2 border-t border-orange-200/50 dark:border-orange-800/50 flex justify-between items-center">
-                                                    <span className="font-black text-slate-800 dark:text-slate-200 text-sm">المبلغ المطلوب ({purchasePaymentMethod === 'cash' ? 'يضاف للصندوق' : 'يسجل كدين'}):</span>
-                                                    <span className="font-black text-orange-600 dark:text-orange-400 text-sm">{total.toLocaleString()} د.ل</span>
+                                                    <span className="font-black text-slate-800 dark:text-slate-200 text-sm">المبلغ المطلوب ({purchasePaymentMethod === 'cash' ? 'يخصم من الصندوق' : 'يسجل كدين'}):</span>
+                                                    <span className="font-black text-orange-600 dark:text-orange-400 text-sm">{total.toLocaleString()} ر.س</span>
                                                 </div>
                                             </div>
                                         );
@@ -2257,7 +2500,7 @@ export default function CardsManagement() {
 
             {/* SECTION: البائعين (Sellers) */}
             {activeSection === 'sellers' && (() => {
-                const retailSales = sales.filter(s => s.saleType === 'retail');
+                const retailSales = sales.filter(s => s.saleType === 'retail' && (s.status === 'completed' || !s.status));
                 const sellersMap = new Map<string, { userName: string; count: number; totalSales: number; commission: number }>();
                 
                 retailSales.forEach(sale => {
@@ -2565,7 +2808,7 @@ export default function CardsManagement() {
                                     const dist = selectedDistributorForDetails;
                                     
                                     // 1. Filter Sales
-                                    const distSales = sales.filter(s => s.distributorId === dist.id);
+                                    const distSales = sales.filter(s => s.distributorId === dist.id && (s.status === 'completed' || !s.status));
                                     const totalSalesCount = distSales.reduce((acc, s) => acc + (s.quantity || 0), 0);
                                     const totalSalesCash = distSales.filter(s => s.paymentType === 'cash').reduce((acc, s) => acc + (s.netTotal || 0), 0);
                                     const totalSalesCredit = distSales.filter(s => s.paymentType === 'credit').reduce((acc, s) => acc + (s.netTotal || 0), 0);
@@ -2971,6 +3214,10 @@ export default function CardsManagement() {
                                         placeholder="عدد الكروت..."
                                         value={saleQuantity}
                                         onChange={(e) => setSaleQuantity(e.target.value)}
+                                        onFocus={(e) => {
+                                            setSaleQuantity('');
+                                            e.target.select();
+                                        }}
                                         className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-3 text-xs font-bold outline-none focus:border-orange-500 text-slate-900 dark:text-white"
                                     />
                                 </div>
@@ -3010,11 +3257,11 @@ export default function CardsManagement() {
                                             <div className="bg-orange-50 dark:bg-orange-900/20 p-4 rounded-2xl border border-orange-100 dark:border-orange-800/30 space-y-3">
                                                 <div className="flex justify-between items-center text-xs">
                                                     <span className="text-slate-500 dark:text-slate-400">الإجمالي:</span>
-                                                    <span className="font-bold text-slate-700 dark:text-slate-300">{total.toLocaleString()} د.ل</span>
+                                                    <span className="font-bold text-slate-700 dark:text-slate-300">{total.toLocaleString()} ر.س</span>
                                                 </div>
                                                 <div className="pt-2 border-t border-orange-200/50 dark:border-orange-800/50 flex justify-between items-center">
                                                     <span className="font-black text-slate-800 dark:text-slate-200 text-sm">المبلغ المطلوب ({salePaymentMethod === 'cash' ? 'يضاف للصندوق' : 'يسجل كدين'}):</span>
-                                                    <span className="font-black text-orange-600 dark:text-orange-400 text-sm">{total.toLocaleString()} د.ل</span>
+                                                    <span className="font-black text-orange-600 dark:text-orange-400 text-sm">{total.toLocaleString()} ر.س</span>
                                                 </div>
                                             </div>
                                         );
@@ -3121,7 +3368,7 @@ export default function CardsManagement() {
 
             {/* SECTION: البائعين (Sellers) */}
             {activeSection === 'sellers' && (() => {
-                const retailSales = sales.filter(s => s.saleType === 'retail');
+                const retailSales = sales.filter(s => s.saleType === 'retail' && (s.status === 'completed' || !s.status));
                 const sellersMap = new Map<string, { userName: string; count: number; totalSales: number; commission: number }>();
                 
                 retailSales.forEach(sale => {
@@ -3267,80 +3514,52 @@ export default function CardsManagement() {
                         </div>
                     </div>
 
-                    {/* Report Table */}
-                    <div className="bg-transparent md:bg-white md:dark:bg-slate-900 md:rounded-3xl md:border md:border-slate-200 md:dark:border-slate-800 md:overflow-hidden md:shadow-sm">
-                        {/* Mobile View: Cards */}
-                        <div className="block md:hidden space-y-4">
-                            {monthlyCategoryReport.length === 0 ? (
-                                <div className="bg-white dark:bg-slate-900 p-8 text-center text-slate-400 font-bold rounded-2xl border border-slate-200 dark:border-slate-800">
-                                    لا توجد مبيعات مسجلة في هذا الشهر حتى الآن.
-                                </div>
-                            ) : (
-                                monthlyCategoryReport.map((r) => (
-                                    <div key={r.categoryName} className="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm space-y-3">
-                                        <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2">
-                                            <span className="font-black text-slate-900 dark:text-white text-sm">{r.categoryName}</span>
-                                            <span className="text-[10px] font-black bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 px-2.5 py-1 rounded-lg">
-                                                إجمالي العدد: {r.totalQty} كارت
-                                            </span>
+                    {/* Report Cards (squares 2 per row) */}
+                    {monthlyCategoryReport.length === 0 ? (
+                        <div className="bg-white dark:bg-slate-900 p-8 text-center text-slate-400 font-bold rounded-3xl border border-slate-200 dark:border-slate-800">
+                            لا توجد مبيعات مسجلة في هذا الشهر حتى الآن.
+                        </div>
+                    ) : (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
+                            {monthlyCategoryReport.map((r) => (
+                                <div key={r.categoryName} className="bg-white dark:bg-slate-900 p-5 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col justify-between space-y-4 animate-in fade-in duration-200">
+                                    {/* Header / Title */}
+                                    <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+                                        <div className="flex items-center gap-2.5">
+                                            <div className="w-2.5 h-6 bg-emerald-500 rounded-full" />
+                                            <span className="font-black text-slate-900 dark:text-white text-base">{r.categoryName}</span>
                                         </div>
-                                        <div className="grid grid-cols-2 gap-2 text-[11px]">
-                                            <div className="flex justify-between items-center bg-slate-50 dark:bg-slate-950 p-2 rounded-xl">
-                                                <span className="text-slate-400 font-bold">كروت نقدية</span>
-                                                <span className="text-emerald-600 font-black">{r.cashQty}</span>
-                                            </div>
-                                            <div className="flex justify-between items-center bg-slate-50 dark:bg-slate-950 p-2 rounded-xl">
-                                                <span className="text-slate-400 font-bold">كروت آجلة</span>
-                                                <span className="text-amber-600 font-black">{r.creditQty}</span>
-                                            </div>
-                                            <div className="flex justify-between items-center bg-slate-50 dark:bg-slate-950 p-2 rounded-xl">
-                                                <span className="text-slate-400 font-bold">مجموع النقدي</span>
-                                                <span className="text-emerald-600 font-black">{r.cashAmountTotal.toFixed(2)} ر.س</span>
-                                            </div>
-                                            <div className="flex justify-between items-center bg-slate-50 dark:bg-slate-950 p-2 rounded-xl">
-                                                <span className="text-slate-400 font-bold">مجموع الآجل</span>
-                                                <span className="text-amber-600 font-black">{r.creditAmountTotal.toFixed(2)} ر.س</span>
-                                            </div>
+                                        <span className="text-[11px] font-black bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 px-3 py-1 rounded-full border border-indigo-100/50 dark:border-indigo-900/30">
+                                            العدد الكلي: {r.totalQty} كارت
+                                        </span>
+                                    </div>
+
+                                    {/* Metrics Grid */}
+                                    <div className="grid grid-cols-2 gap-3">
+                                        {/* Cash column */}
+                                        <div className="bg-slate-50 dark:bg-slate-950/50 p-3 rounded-2xl border border-slate-100 dark:border-slate-900 flex flex-col justify-between min-h-[75px]">
+                                            <span className="text-[10px] font-black text-slate-400">كروت نقدية</span>
+                                            <span className="text-sm font-black text-emerald-600 dark:text-emerald-400">+{r.cashQty} كارت</span>
+                                            <span className="text-[11px] font-bold text-slate-500 mt-1">{r.cashAmountTotal.toFixed(2)} ر.س</span>
                                         </div>
-                                        <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-800">
-                                            <span className="text-xs font-bold text-slate-500">الصافي الإجمالي</span>
-                                            <span className="text-sm font-black text-indigo-600 dark:text-indigo-400">{r.totalAmount.toFixed(2)} ريال</span>
+                                        
+                                        {/* Credit column */}
+                                        <div className="bg-slate-50 dark:bg-slate-950/50 p-3 rounded-2xl border border-slate-100 dark:border-slate-900 flex flex-col justify-between min-h-[75px]">
+                                            <span className="text-[10px] font-black text-slate-400">كروت آجلة</span>
+                                            <span className="text-sm font-black text-amber-600 dark:text-amber-500">+{r.creditQty} كارت</span>
+                                            <span className="text-[11px] font-bold text-slate-500 mt-1">{r.creditAmountTotal.toFixed(2)} ر.س</span>
                                         </div>
                                     </div>
-                                ))
-                            )}
-                        </div>
 
-                        {/* Desktop View: Table */}
-                        <div className="hidden md:block overflow-x-auto">
-                            <table className="w-full text-right text-xs">
-                                <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-400 font-black border-b border-slate-200 dark:border-slate-800">
-                                    <tr>
-                                        <th className="p-4">فئة الكروت</th>
-                                        <th className="p-4 text-center">الكروت النقدية</th>
-                                        <th className="p-4 text-center">الكروت الآجلة</th>
-                                        <th className="p-4 text-center">إجمالي العدد</th>
-                                        <th className="p-4 text-left">مجموع النقدية</th>
-                                        <th className="p-4 text-left">مجموع الآجلة</th>
-                                        <th className="p-4 text-left">الصافي الإجمالي</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-bold text-slate-800 dark:text-slate-200">
-                                    {monthlyCategoryReport.map((r) => (
-                                        <tr key={r.categoryName} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                                            <td className="p-4 font-black">{r.categoryName}</td>
-                                            <td className="p-4 text-center text-emerald-600 font-black">{r.cashQty}</td>
-                                            <td className="p-4 text-center text-amber-600 font-black">{r.creditQty}</td>
-                                            <td className="p-4 text-center font-black">{r.totalQty}</td>
-                                            <td className="p-4 text-left text-emerald-600 font-black">{r.cashAmountTotal.toFixed(2)} ريال</td>
-                                            <td className="p-4 text-left text-amber-600 font-black">{r.creditAmountTotal.toFixed(2)} ريال</td>
-                                            <td className="p-4 text-left text-indigo-600 font-black">{r.totalAmount.toFixed(2)} ريال</td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
+                                    {/* Footer / Total Net */}
+                                    <div className="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-slate-800">
+                                        <span className="text-xs font-black text-slate-500">إجمالي صافي المبيعات</span>
+                                        <span className="text-base font-black text-indigo-600 dark:text-indigo-400">{r.totalAmount.toFixed(2)} ريال</span>
+                                    </div>
+                                </div>
+                            ))}
                         </div>
-                    </div>
+                    )}
 
                     {/* Top Distributors Report */}
                     {(() => {
@@ -3478,80 +3697,52 @@ export default function CardsManagement() {
                             </div>
                         </div>
 
-                        {/* Report Table */}
-                        <div className="bg-transparent md:bg-white md:dark:bg-slate-900 md:rounded-3xl md:border md:border-slate-200 md:dark:border-slate-800 md:overflow-hidden md:shadow-sm">
-                            {/* Mobile View: Cards */}
-                            <div className="block md:hidden space-y-4">
-                                {monthlyCategoryPurchaseReport.length === 0 ? (
-                                    <div className="bg-white dark:bg-slate-900 p-8 text-center text-slate-400 font-bold rounded-2xl border border-slate-200 dark:border-slate-800">
-                                        لا توجد مشتريات مسجلة في هذا الشهر حتى الآن.
-                                    </div>
-                                ) : (
-                                    monthlyCategoryPurchaseReport.map((r) => (
-                                        <div key={r.categoryName} className="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm space-y-3">
-                                            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2">
-                                                <span className="font-black text-slate-900 dark:text-white text-sm">{r.categoryName}</span>
-                                                <span className="text-[10px] font-black bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 px-2.5 py-1 rounded-lg">
-                                                    إجمالي العدد: {r.totalQty} كارت
-                                                </span>
+                        {/* Report Cards (squares 2 per row) */}
+                        {monthlyCategoryPurchaseReport.length === 0 ? (
+                            <div className="bg-white dark:bg-slate-900 p-8 text-center text-slate-400 font-bold rounded-3xl border border-slate-200 dark:border-slate-800">
+                                لا توجد مشتريات مسجلة في هذا الشهر حتى الآن.
+                            </div>
+                        ) : (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
+                                {monthlyCategoryPurchaseReport.map((r) => (
+                                    <div key={r.categoryName} className="bg-white dark:bg-slate-900 p-5 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col justify-between space-y-4 animate-in fade-in duration-200">
+                                        {/* Header / Title */}
+                                        <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+                                            <div className="flex items-center gap-2.5">
+                                                <div className="w-2.5 h-6 bg-indigo-500 rounded-full" />
+                                                <span className="font-black text-slate-900 dark:text-white text-base">{r.categoryName}</span>
                                             </div>
-                                            <div className="grid grid-cols-2 gap-2 text-[11px]">
-                                                <div className="flex justify-between items-center bg-slate-50 dark:bg-slate-950 p-2 rounded-xl">
-                                                    <span className="text-slate-400 font-bold">كروت نقدية</span>
-                                                    <span className="text-emerald-600 font-black">{r.cashQty}</span>
-                                                </div>
-                                                <div className="flex justify-between items-center bg-slate-50 dark:bg-slate-950 p-2 rounded-xl">
-                                                    <span className="text-slate-400 font-bold">كروت آجلة</span>
-                                                    <span className="text-amber-600 font-black">{r.creditQty}</span>
-                                                </div>
-                                                <div className="flex justify-between items-center bg-slate-50 dark:bg-slate-950 p-2 rounded-xl">
-                                                    <span className="text-slate-400 font-bold">مجموع النقدي</span>
-                                                    <span className="text-emerald-600 font-black">{r.cashAmountTotal.toFixed(2)} ر.س</span>
-                                                </div>
-                                                <div className="flex justify-between items-center bg-slate-50 dark:bg-slate-950 p-2 rounded-xl">
-                                                    <span className="text-slate-400 font-bold">مجموع الآجل</span>
-                                                    <span className="text-amber-600 font-black">{r.creditAmountTotal.toFixed(2)} ر.س</span>
-                                                </div>
+                                            <span className="text-[11px] font-black bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 px-3 py-1 rounded-full border border-indigo-100/50 dark:border-indigo-900/30">
+                                                العدد الكلي: {r.totalQty} كارت
+                                            </span>
+                                        </div>
+
+                                        {/* Metrics Grid */}
+                                        <div className="grid grid-cols-2 gap-3">
+                                            {/* Cash column */}
+                                            <div className="bg-slate-50 dark:bg-slate-950/50 p-3 rounded-2xl border border-slate-100 dark:border-slate-900 flex flex-col justify-between min-h-[75px]">
+                                                <span className="text-[10px] font-black text-slate-400">كروت نقدية</span>
+                                                <span className="text-sm font-black text-emerald-600 dark:text-emerald-400">+{r.cashQty} كارت</span>
+                                                <span className="text-[11px] font-bold text-slate-500 mt-1">{r.cashAmountTotal.toFixed(2)} ر.س</span>
                                             </div>
-                                            <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-800">
-                                                <span className="text-xs font-bold text-slate-500">الصافي الإجمالي</span>
-                                                <span className="text-sm font-black text-indigo-600 dark:text-indigo-400">{r.totalAmount.toFixed(2)} ريال</span>
+                                            
+                                            {/* Credit column */}
+                                            <div className="bg-slate-50 dark:bg-slate-950/50 p-3 rounded-2xl border border-slate-100 dark:border-slate-900 flex flex-col justify-between min-h-[75px]">
+                                                <span className="text-[10px] font-black text-slate-400">كروت آجلة</span>
+                                                <span className="text-sm font-black text-amber-600 dark:text-amber-500">+{r.creditQty} كارت</span>
+                                                <span className="text-[11px] font-bold text-slate-500 mt-1">{r.creditAmountTotal.toFixed(2)} ر.س</span>
                                             </div>
                                         </div>
-                                    ))
-                                )}
-                            </div>
 
-                            {/* Desktop View: Table */}
-                            <div className="hidden md:block overflow-x-auto">
-                                <table className="w-full text-right text-xs">
-                                    <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-400 font-black border-b border-slate-200 dark:border-slate-800">
-                                        <tr>
-                                            <th className="p-4">فئة الكروت</th>
-                                            <th className="p-4 text-center">الكروت النقدية</th>
-                                            <th className="p-4 text-center">الكروت الآجلة</th>
-                                            <th className="p-4 text-center">إجمالي العدد</th>
-                                            <th className="p-4 text-left">مجموع النقدية</th>
-                                            <th className="p-4 text-left">مجموع الآجلة</th>
-                                            <th className="p-4 text-left">الصافي الإجمالي</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-bold text-slate-800 dark:text-slate-200">
-                                        {monthlyCategoryPurchaseReport.map((r) => (
-                                            <tr key={r.categoryName} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                                                <td className="p-4 font-black">{r.categoryName}</td>
-                                                <td className="p-4 text-center text-emerald-600 font-black">{r.cashQty}</td>
-                                                <td className="p-4 text-center text-amber-600 font-black">{r.creditQty}</td>
-                                                <td className="p-4 text-center font-black">{r.totalQty}</td>
-                                                <td className="p-4 text-left text-emerald-600 font-black">{r.cashAmountTotal.toFixed(2)} ريال</td>
-                                                <td className="p-4 text-left text-amber-600 font-black">{r.creditAmountTotal.toFixed(2)} ريال</td>
-                                                <td className="p-4 text-left text-indigo-600 font-black">{r.totalAmount.toFixed(2)} ريال</td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
+                                        {/* Footer / Total Net */}
+                                        <div className="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-slate-800">
+                                            <span className="text-xs font-black text-slate-500">إجمالي صافي المشتريات</span>
+                                            <span className="text-base font-black text-indigo-600 dark:text-indigo-400">{r.totalAmount.toFixed(2)} ريال</span>
+                                        </div>
+                                    </div>
+                                ))}
                             </div>
-                        </div>
+                        )}
 
                         {/* Top Suppliers Report */}
                         {(() => {
@@ -4029,6 +4220,10 @@ export default function CardsManagement() {
                                     placeholder="مثال: 50"
                                     value={stockQtyInput}
                                     onChange={(e) => setStockQtyInput(e.target.value)}
+                                    onFocus={(e) => {
+                                        setStockQtyInput('');
+                                        e.target.select();
+                                    }}
                                     className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-3 text-xs font-bold outline-none focus:border-indigo-600 text-slate-900 dark:text-white text-center"
                                 />
                             </div>
@@ -4133,17 +4328,13 @@ export default function CardsManagement() {
                             </div>
                             <div>
                                 <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">المورد <span className="text-rose-500">*</span></label>
-                                <select
+                                <SearchableSelect
                                     required
                                     value={purchaseVoucherSupplierId}
-                                    onChange={(e) => setPurchaseVoucherSupplierId(e.target.value)}
-                                    className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 text-sm font-black text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
-                                >
-                                    <option value="">-- اختر المورد --</option>
-                                    {suppliers.map(d => (
-                                        <option key={d.id} value={d.id}>{d.name} (الدين: {(d.balance || 0).toFixed(2)})</option>
-                                    ))}
-                                </select>
+                                    onChange={setPurchaseVoucherSupplierId}
+                                    placeholder="اختر المورد..."
+                                    options={suppliers.map(d => ({ id: d.id, label: d.name, subLabel: `الدين الحالي: ${(d.balance || 0).toFixed(2)}` }))}
+                                />
                             </div>
                             <div>
                                 <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">المبلغ (ريال) <span className="text-rose-500">*</span></label>
@@ -4220,19 +4411,13 @@ export default function CardsManagement() {
                             </div>
                             <div>
                                 <label className="block text-xs font-black text-slate-700 dark:text-slate-300 mb-1 text-center w-full">الموزع المستهدف</label>
-                                <select
+                                <SearchableSelect
                                     required
                                     value={voucherDistributorId}
-                                    onChange={(e) => setVoucherDistributorId(e.target.value)}
-                                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-3 text-xs font-bold outline-none focus:border-indigo-600 text-slate-900 dark:text-white text-center"
-                                >
-                                    <option value="">-- اختر الموزع --</option>
-                                    {distributors.map(dist => (
-                                        <option key={dist.id} value={dist.id}>
-                                            {dist.name} (رصيد الدين: {dist.balance || 0} ريال)
-                                        </option>
-                                    ))}
-                                </select>
+                                    onChange={setVoucherDistributorId}
+                                    placeholder="اختر الموزع..."
+                                    options={distributors.map(dist => ({ id: dist.id, label: dist.name, subLabel: `رصيد الدين الحالي: ${(dist.balance || 0).toFixed(2)} ريال` }))}
+                                />
                             </div>
                             <div>
                                 <label className="block text-xs font-black text-slate-700 dark:text-slate-300 mb-1 text-center w-full">المبلغ (ريال)</label>
@@ -4349,6 +4534,10 @@ export default function CardsManagement() {
                     isOpen={!!saleModalCategory}
                     onClose={() => setSaleModalCategory(null)}
                     categoryName={saleModalCategory}
+                    onInvoiceCreated={(invoice) => {
+                        setActionModalInvoice(invoice);
+                        setActionModalOpen(true);
+                    }}
                 />
             )}
 
@@ -4412,6 +4601,19 @@ export default function CardsManagement() {
             <CardPurchaseModal
                 isOpen={isCardPurchaseModalOpen}
                 onClose={() => setIsCardPurchaseModalOpen(false)}
+                onInvoiceCreated={(invoice) => {
+                    setActionModalInvoice(invoice);
+                    setActionModalOpen(true);
+                }}
+            />
+
+            <CardInvoiceActionModal
+                isOpen={actionModalOpen}
+                invoice={actionModalInvoice}
+                onClose={() => {
+                    setActionModalOpen(false);
+                    setActionModalInvoice(null);
+                }}
             />
         </div>
     );

@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import * as React from 'react';
+import { useEffect, useState } from 'react';
 import { BrowserRouter as Router, HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { doc, onSnapshot, setDoc, collection, getDocs, updateDoc } from 'firebase/firestore';
 import { db } from './lib/firebase';
@@ -7,6 +8,7 @@ import { useSettingsStore } from './store/settingsStore';
 import { App as CapacitorApp } from '@capacitor/app';
 import { handleFirestoreError, OperationType } from './lib/firebase';
 import Layout from './components/Layout';
+import { MonthlyCustomerSync } from './components/MonthlyCustomerSync';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Products from './pages/Products';
@@ -281,8 +283,12 @@ export default function App() {
         progress={70}
         error={initError}
         onRetry={() => window.location.reload()}
-        onClearStorage={() => {
+        onClearStorage={async () => {
           localStorage.clear();
+          try {
+            const { clearFirestoreCache } = await import('./lib/firebase');
+            await clearFirestoreCache();
+          } catch (e) {}
           window.location.reload();
         }}
       />
@@ -299,8 +305,12 @@ export default function App() {
           setInitError(null);
           logout();
         }}
-        onClearStorage={() => {
+        onClearStorage={async () => {
           localStorage.clear();
+          try {
+            const { clearFirestoreCache } = await import('./lib/firebase');
+            await clearFirestoreCache();
+          } catch (e) {}
           window.location.reload();
         }}
       />
@@ -308,7 +318,7 @@ export default function App() {
   }
 
   if (!appUser) {
-    return <div className="flex h-[100dvh] bg-[var(--bg-main)]" dir="rtl"></div>;
+    return <Login />;
   }
 
   if (!appUser.isActive) {
@@ -338,6 +348,7 @@ export default function App() {
       <ErrorNotificationModal />
       <FloatingProgressBar />
       <HashRouter>
+        <MonthlyCustomerSync />
         <Routes>
           <Route path="/" element={<Layout />}>
           <Route index element={<Dashboard />} />

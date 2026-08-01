@@ -259,6 +259,12 @@ export const getInvoiceHtml = async (invoice: any, type: 'sale' | 'purchase' | '
                     ${balanceHtml}
                 </div>
 
+                ${(invoice.notes || invoice.note) ? `
+                <div style="margin-top: 15px; margin-bottom: 15px; padding: 10px 14px; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 0.9em; color: #1e293b;">
+                    <strong>ملاحظات الفاتورة:</strong> ${invoice.notes || invoice.note}
+                </div>
+                ` : ''}
+
                 <div class="footer">
                     <p>شكراً لتعاملكم معنا، ونتمنى لكم يوماً سعيداً</p>
                 </div>

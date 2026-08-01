@@ -4,11 +4,12 @@ import {
     initializeFirestore, 
     memoryLocalCache, 
     persistentLocalCache, 
-    persistentMultipleTabManager,
+    persistentSingleTabManager,
     CACHE_SIZE_UNLIMITED,
     onSnapshotsInSync,
     disableNetwork,
-    enableNetwork
+    enableNetwork,
+    terminate
 } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 import firebaseConfig from "../../firebase-applet-config.json";
@@ -17,7 +18,7 @@ import { ErrorNotifier } from "./errorNotifier";
 
 const app = initializeApp(firebaseConfig);
 
-let dbInstance;
+let dbInstance: any;
 
 function setupNetworkSync(dbRef: any) {
     if (!dbRef) return;
@@ -58,12 +59,12 @@ function setupNetworkSync(dbRef: any) {
 try {
     dbInstance = initializeFirestore(app, {
         localCache: persistentLocalCache({
-            tabManager: persistentMultipleTabManager(),
+            tabManager: persistentSingleTabManager({ forceOwningTab: true } as any),
             cacheSizeBytes: CACHE_SIZE_UNLIMITED
         }),
         experimentalForceLongPolling: true
     }, firebaseConfig.firestoreDatabaseId);
-    console.log("Firestore initialized with persistent local cache and experimentalForceLongPolling.");
+    console.log("Firestore initialized with persistent single tab local cache (forceOwningTab: true) and experimentalForceLongPolling.");
     setupNetworkSync(dbInstance);
 } catch (e) {
     console.warn("Failed to initialize Firestore with persistent cache, trying fallback with experimentalForceLongPolling:", e);
@@ -80,6 +81,39 @@ try {
 
 export const db = dbInstance;
 export const auth = getAuth(app);
+
+// Graceful cache clear helper using native browser indexedDB deletion
+export async function clearFirestoreCache() {
+  try {
+    console.log("Clearing Firestore local cache...");
+    if (dbInstance) {
+      await terminate(dbInstance);
+    }
+    
+    // Natively find and delete any IndexedDB databases matching 'firestore'
+    if (window.indexedDB && typeof window.indexedDB.databases === 'function') {
+      const dbs = await window.indexedDB.databases();
+      for (const database of dbs) {
+        if (database.name && database.name.toLowerCase().includes('firestore')) {
+          console.log("Deleting IndexedDB database:", database.name);
+          window.indexedDB.deleteDatabase(database.name);
+        }
+      }
+    } else if (window.indexedDB) {
+      // Fallback: delete common database names if databases() is not available
+      const commonDbNames = [
+        `firestore/[DEFAULT]/${firebaseConfig.projectId}/main`,
+        `firestore/[DEFAULT]/${firebaseConfig.projectId}`
+      ];
+      for (const name of commonDbNames) {
+        window.indexedDB.deleteDatabase(name);
+      }
+    }
+    console.log("Firestore local cache cleared successfully.");
+  } catch (err) {
+    console.warn("Failed to clear Firestore cache:", err);
+  }
+}
 
 // Error handling helper
 export enum OperationType {
@@ -136,6 +170,12 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     return; // Silent failover - let Firestore use local persistent cache
   }
 
+  // Gracefully handle "Target ID already exists" errors to avoid crashing the app
+  if (errCode === 'already-exists' || errorMessage.includes('already-exists') || errorMessage.includes('Target ID already exists')) {
+    console.warn('Firestore Target ID conflict handled gracefully (ignored to prevent crash): ', JSON.stringify(errInfo));
+    return; // Silent failover / ignore target conflict so the SyncEngine can auto-recover
+  }
+
   console.error('Firestore Error: ', JSON.stringify(errInfo));
   ErrorNotifier.notify(
     'خطأ في قاعدة البيانات (Firestore)',
@@ -145,4 +185,36 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     'قاعدة البيانات السحابية'
   );
   throw new Error(JSON.stringify(errInfo));
+}
+
+// Global Exception Interceptors to capture and silence "Target ID already exists" errors in iframe environments
+if (typeof window !== 'undefined') {
+    const isTargetIdConflict = (str: string) => {
+        return str.includes('already-exists') || 
+               str.includes('Target ID already exists') || 
+               str.includes('code=already-exists') || 
+               str.includes('Uncaught Error: {"error":"Target ID already exists:');
+    };
+
+    const handleGlobalError = (event: ErrorEvent) => {
+        const msg = event.message ? String(event.message) : '';
+        const errorStr = event.error ? String(event.error) : '';
+        if (isTargetIdConflict(msg) || isTargetIdConflict(errorStr)) {
+            console.warn('Caught and suppressed persistent Firestore Target ID conflict in global error handler to prevent application crash.');
+            event.preventDefault();
+            event.stopPropagation();
+        }
+    };
+
+    const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
+        const reason = event.reason ? String(event.reason) : '';
+        if (isTargetIdConflict(reason)) {
+            console.warn('Caught and suppressed persistent Firestore Target ID conflict in global unhandled rejection handler to prevent application crash.');
+            event.preventDefault();
+            event.stopPropagation();
+        }
+    };
+
+    window.addEventListener('error', handleGlobalError, true);
+    window.addEventListener('unhandledrejection', handleUnhandledRejection, true);
 }

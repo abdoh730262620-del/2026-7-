@@ -71,13 +71,19 @@ export default function NetworkCards() {
         };
     }, [currentMonthStr]);
 
-    // Build displayed items matching default 8 denominations or custom ones linked to sections
-    const displayGrid = DENOMINATIONS.map(denom => {
+    // Build displayed items matching default 8 denominations AND any custom categories added now or in the future
+    const processedCategoryNames = new Set<string>();
+
+    const defaultGridItems = DENOMINATIONS.map(denom => {
+        processedCategoryNames.add(denom.name.trim());
+        
         // Find matching categories by direct name OR linkedSection setting
         const matchingCategories = categories.filter(c => 
             c.name.trim() === denom.name.trim() || 
             c.linkedSection?.trim() === denom.name.trim()
         );
+
+        matchingCategories.forEach(c => processedCategoryNames.add(c.name.trim()));
         
         // Sum stock count across all linked categories
         const availableCount = matchingCategories.reduce((sum, c) => sum + (c.availableCount || 0), 0);
@@ -88,8 +94,8 @@ export default function NetworkCards() {
 
         // Count cash and credit sales for this category/section in current month
         const categorySales = monthSales.filter(s => {
-            const isDirectName = s.categoryName.trim() === denom.name.trim();
-            const isLinkedCat = matchingCategories.some(c => c.name.trim() === s.categoryName.trim());
+            const isDirectName = s.categoryName?.trim() === denom.name.trim();
+            const isLinkedCat = matchingCategories.some(c => c.name?.trim() === s.categoryName?.trim() || c.id === s.categoryId);
             return isDirectName || isLinkedCat;
         });
 
@@ -109,6 +115,41 @@ export default function NetworkCards() {
             creditQty
         };
     });
+
+    const customGridItems: typeof defaultGridItems = [];
+    categories.forEach(cat => {
+        const catName = cat.name?.trim();
+        if (catName && !processedCategoryNames.has(catName)) {
+            processedCategoryNames.add(catName);
+
+            const matchingCategories = categories.filter(c => c.name?.trim() === catName);
+            const availableCount = matchingCategories.reduce((sum, c) => sum + (c.availableCount || 0), 0);
+            
+            const retailPrice = cat.retailPrice || (catName.match(/\d+/) ? parseInt(catName.match(/\d+/)![0], 10) : 0);
+
+            const categorySales = monthSales.filter(s => {
+                return s.categoryName?.trim() === catName || s.categoryId === cat.id;
+            });
+
+            const cashQty = categorySales
+                .filter(s => s.paymentType === 'cash')
+                .reduce((sum, s) => sum + (s.quantity || 0), 0);
+            const creditQty = categorySales
+                .filter(s => s.paymentType === 'credit')
+                .reduce((sum, s) => sum + (s.quantity || 0), 0);
+
+            customGridItems.push({
+                id: cat.id,
+                name: cat.name,
+                retailPrice,
+                availableCount,
+                cashQty,
+                creditQty
+            });
+        }
+    });
+
+    const displayGrid = [...defaultGridItems, ...customGridItems];
 
     if (!canView) {
         return (
@@ -148,7 +189,7 @@ export default function NetworkCards() {
                     <span className="mr-3 text-sm font-bold text-slate-600 dark:text-slate-400">جاري تحميل كروت الشبكة...</span>
                 </div>
             ) : (
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3.5">
                     {displayGrid.map((item) => (
                         <div
                             key={item.id}
@@ -172,9 +213,9 @@ export default function NetworkCards() {
                             </div>
 
                             {/* Stock Badge */}
-                            <div className="flex items-center justify-between bg-slate-50 dark:bg-slate-800/60 px-2.5 py-1.5 rounded-xl border border-slate-100 dark:border-slate-800">
-                                <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400">الرصيد المتوفر:</span>
-                                <span className="text-xs font-black text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 rounded-md">
+                            <div className="w-full flex items-center justify-between bg-slate-50 dark:bg-slate-800/60 px-2.5 py-1.5 rounded-xl border border-slate-100 dark:border-slate-800 whitespace-nowrap gap-1">
+                                <span className="text-[10px] sm:text-[11px] font-bold text-slate-500 dark:text-slate-400 shrink-0">الكمية:</span>
+                                <span className="text-xs font-black text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 rounded-md shrink-0">
                                     {item.availableCount} كارت
                                 </span>
                             </div>

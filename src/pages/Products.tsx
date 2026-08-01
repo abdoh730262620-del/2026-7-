@@ -59,6 +59,7 @@ export default function Products() {
     const [stockFilter, setStockFilter] = useState<'ALL' | 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK'>('ALL');
     const [sortBy, setSortBy] = useState<'name_asc' | 'name_desc' | 'quantity_asc' | 'quantity_desc' | 'price_asc' | 'price_desc' | 'newest'>('name_asc');
     const [isScannerOpen, setIsScannerOpen] = useState(false);
+    const [showFilters, setShowFilters] = useState(false);
     const [bulkActionType, setBulkActionType] = useState<'category' | 'price_fixed' | 'price_percent'>('category');
     const [bulkPriceValue, setBulkPriceValue] = useState('');
     const [bulkPriceChangeType, setBulkPriceChangeType] = useState<'increase' | 'decrease'>('increase');
@@ -75,6 +76,7 @@ export default function Products() {
     const [quantity, setQuantity] = useState('');
     const [expiryDate, setExpiryDate] = useState('');
     const [selectedCategory, setSelectedCategory] = useState('General');
+    const inputPrevValue = useRef<string>('');
 
     useEffect(() => {
         (window as any).onHeaderBack = () => {
@@ -474,11 +476,109 @@ export default function Products() {
                                  {/* Add Product Button */}
                                  <button
                                      onClick={openAddModal}
-                                     className="bg-blue-600 hover:bg-blue-700 active:scale-95 text-white px-3 py-1.5 rounded-xl flex items-center gap-1.5 text-xs font-bold transition shadow-sm cursor-pointer"
+                                     className="bg-blue-600 hover:bg-blue-700 active:scale-95 text-white px-3 py-1.5 rounded-xl flex items-center gap-1.5 text-xs font-bold transition shadow-sm cursor-pointer shrink-0"
                                  >
                                      <Plus size={16} />
                                      <span className="hidden sm:inline">إضافة منتج</span>
                                  </button>
+
+                                 {/* Filter Toggle Button */}
+                                 <div className="relative shrink-0">
+                                     <button
+                                         onClick={() => setShowFilters(!showFilters)}
+                                         className={`px-3 py-1.5 rounded-xl flex items-center gap-1.5 text-xs font-bold transition shadow-sm cursor-pointer border ${
+                                             showFilters || selectedCategoryFilter !== 'ALL' || stockFilter !== 'ALL' || sortBy !== 'name_asc'
+                                             ? 'bg-blue-50 text-blue-600 border-blue-200 dark:bg-blue-950/30 dark:text-blue-300 dark:border-blue-800'
+                                             : 'bg-white text-gray-700 border-border-main hover:bg-slate-50 dark:bg-slate-800 dark:text-gray-200 dark:border-slate-700'
+                                         }`}
+                                         title="تصفية وترتيب المنتجات"
+                                     >
+                                         <Filter size={16} />
+                                         <span>الفلاتر والترتيب</span>
+                                         {(selectedCategoryFilter !== 'ALL' || stockFilter !== 'ALL' || sortBy !== 'name_asc') && (
+                                             <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse shrink-0"></span>
+                                         )}
+                                     </button>
+
+                                     {showFilters && (
+                                         <>
+                                             <div className="fixed inset-0 z-40" onClick={() => setShowFilters(false)} />
+                                             <div className="absolute left-0 mt-2 w-72 bg-card-bg border border-border-main rounded-xl shadow-xl p-4 z-50 flex flex-col gap-3.5 text-right text-xs">
+                                                 <div className="flex items-center justify-between border-b border-border-main pb-2 mb-1">
+                                                     <span className="text-sm font-black text-text-main">تصفية وترتيب المنتجات</span>
+                                                     <button 
+                                                         onClick={() => {
+                                                             setSelectedCategoryFilter('ALL');
+                                                             setStockFilter('ALL');
+                                                             setSortBy('name_asc');
+                                                         }}
+                                                         className="text-blue-600 dark:text-blue-400 hover:underline text-[10px] font-bold"
+                                                     >
+                                                         إعادة تعيين
+                                                     </button>
+                                                 </div>
+
+                                                 {/* Category Filter */}
+                                                 <div className="flex flex-col gap-1.5">
+                                                     <label className="text-gray-500 font-bold">التصنيف:</label>
+                                                     <div className="flex items-center gap-1.5 bg-bg-main border border-border-main rounded-xl px-2.5 py-1.5">
+                                                         <Filter size={14} className="text-gray-400 shrink-0" />
+                                                         <select
+                                                             value={selectedCategoryFilter}
+                                                             onChange={(e) => setSelectedCategoryFilter(e.target.value)}
+                                                             className="bg-transparent text-text-main font-bold text-xs outline-none w-full cursor-pointer"
+                                                         >
+                                                             <option value="ALL">جميع التصنيفات</option>
+                                                             <option value="General">عام (بدون تصنيف)</option>
+                                                             {categories.map((c) => (
+                                                                 <option key={c.id} value={c.name}>{c.name}</option>
+                                                             ))}
+                                                         </select>
+                                                     </div>
+                                                 </div>
+
+                                                 {/* Stock Filter */}
+                                                 <div className="flex flex-col gap-1.5">
+                                                     <label className="text-gray-500 font-bold">حالة المخزون:</label>
+                                                     <div className="flex items-center gap-1.5 bg-bg-main border border-border-main rounded-xl px-2.5 py-1.5">
+                                                         <Barcode size={14} className="text-gray-400 shrink-0" />
+                                                         <select
+                                                             value={stockFilter}
+                                                             onChange={(e) => setStockFilter(e.target.value as any)}
+                                                             className="bg-transparent text-text-main font-bold text-xs outline-none w-full cursor-pointer"
+                                                         >
+                                                             <option value="ALL">جميع الحالات</option>
+                                                             <option value="IN_STOCK">متوفر في المخزون</option>
+                                                             <option value="LOW_STOCK">منخفض المخزون (تنبيه)</option>
+                                                             <option value="OUT_OF_STOCK">نفذ من المخزون (0)</option>
+                                                         </select>
+                                                     </div>
+                                                 </div>
+
+                                                 {/* Sorting */}
+                                                 <div className="flex flex-col gap-1.5">
+                                                     <label className="text-gray-500 font-bold">ترتيب حسب:</label>
+                                                     <div className="flex items-center gap-1.5 bg-bg-main border border-border-main rounded-xl px-2.5 py-1.5">
+                                                         <ArrowDownUp size={14} className="text-gray-400 shrink-0" />
+                                                         <select
+                                                             value={sortBy}
+                                                             onChange={(e) => setSortBy(e.target.value as any)}
+                                                             className="bg-transparent text-text-main font-bold text-xs outline-none w-full cursor-pointer"
+                                                         >
+                                                             <option value="name_asc">الاسم (أ - ي)</option>
+                                                             <option value="name_desc">الاسم (ي - أ)</option>
+                                                             <option value="quantity_asc">الكمية (الأقل أولاً)</option>
+                                                             <option value="quantity_desc">الكمية (الأكثر أولاً)</option>
+                                                             <option value="price_asc">سعر البيع (الأقل أولاً)</option>
+                                                             <option value="price_desc">سعر البيع (الأعلى أولاً)</option>
+                                                             <option value="newest">الأحدث مضافة</option>
+                                                         </select>
+                                                     </div>
+                                                 </div>
+                                             </div>
+                                         </>
+                                     )}
+                                 </div>
                              </div>
                          </div>
 
@@ -534,57 +634,48 @@ export default function Products() {
                             )}
                         </div>
 
-                        {/* Advanced Filter & Sorting Row */}
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-1">
-                            {/* Category Filter */}
-                            <div className="flex items-center gap-1.5 bg-card-bg border border-border-main rounded-xl px-2.5 py-1.5 shadow-xs">
-                                <Filter size={14} className="text-gray-400 shrink-0" />
-                                <select
-                                    value={selectedCategoryFilter}
-                                    onChange={(e) => setSelectedCategoryFilter(e.target.value)}
-                                    className="bg-transparent text-text-main font-bold text-xs outline-none w-full cursor-pointer"
+                        {/* Active Filters Row */}
+                        {(selectedCategoryFilter !== 'ALL' || stockFilter !== 'ALL' || sortBy !== 'name_asc') && (
+                            <div className="flex flex-wrap gap-1.5 mt-1.5 font-extrabold text-[10px]">
+                                {selectedCategoryFilter !== 'ALL' && (
+                                    <span className="inline-flex items-center gap-1 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300 px-2 py-0.5 rounded-full border border-blue-100 dark:border-blue-900/50">
+                                        <span>التصنيف: {selectedCategoryFilter === 'General' ? 'عام' : selectedCategoryFilter}</span>
+                                        <button onClick={() => setSelectedCategoryFilter('ALL')} className="hover:text-red-500 font-bold">×</button>
+                                    </span>
+                                )}
+                                {stockFilter !== 'ALL' && (
+                                    <span className="inline-flex items-center gap-1 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300 px-2 py-0.5 rounded-full border border-blue-100 dark:border-blue-900/50">
+                                        <span>حالة المخزون: {
+                                            stockFilter === 'IN_STOCK' ? 'متوفر' :
+                                            stockFilter === 'LOW_STOCK' ? 'منخفض' : 'نفذ'
+                                        }</span>
+                                        <button onClick={() => setStockFilter('ALL')} className="hover:text-red-500 font-bold">×</button>
+                                    </span>
+                                )}
+                                {sortBy !== 'name_asc' && (
+                                    <span className="inline-flex items-center gap-1 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300 px-2 py-0.5 rounded-full border border-blue-100 dark:border-blue-900/50">
+                                        <span>الترتيب: {
+                                            sortBy === 'name_desc' ? 'الاسم (ي - أ)' :
+                                            sortBy === 'quantity_asc' ? 'الكمية (الأقل)' :
+                                            sortBy === 'quantity_desc' ? 'الكمية (الأكثر)' :
+                                            sortBy === 'price_asc' ? 'السعر (الأقل)' :
+                                            sortBy === 'price_desc' ? 'السعر (الأعلى)' : 'الأحدث مضافة'
+                                        }</span>
+                                        <button onClick={() => setSortBy('name_asc')} className="hover:text-red-500 font-bold">×</button>
+                                    </span>
+                                )}
+                                <button 
+                                    onClick={() => {
+                                        setSelectedCategoryFilter('ALL');
+                                        setStockFilter('ALL');
+                                        setSortBy('name_asc');
+                                    }} 
+                                    className="text-[10px] text-red-500 hover:text-red-700 font-bold underline px-1 cursor-pointer"
                                 >
-                                    <option value="ALL">جميع التصنيفات</option>
-                                    <option value="General">عام (بدون تصنيف)</option>
-                                    {categories.map((c) => (
-                                        <option key={c.id} value={c.name}>{c.name}</option>
-                                    ))}
-                                </select>
+                                    مسح الكل
+                                </button>
                             </div>
-
-                            {/* Stock Filter */}
-                            <div className="flex items-center gap-1.5 bg-card-bg border border-border-main rounded-xl px-2.5 py-1.5 shadow-xs">
-                                <Barcode size={14} className="text-gray-400 shrink-0" />
-                                <select
-                                    value={stockFilter}
-                                    onChange={(e) => setStockFilter(e.target.value as any)}
-                                    className="bg-transparent text-text-main font-bold text-xs outline-none w-full cursor-pointer"
-                                >
-                                    <option value="ALL">جميع حالات المخزون</option>
-                                    <option value="IN_STOCK">متوفر في المخزون</option>
-                                    <option value="LOW_STOCK">منخفض المخزون (تنبيه)</option>
-                                    <option value="OUT_OF_STOCK">نفذ من المخزون (0)</option>
-                                </select>
-                            </div>
-
-                            {/* Sorting */}
-                            <div className="flex items-center gap-1.5 bg-card-bg border border-border-main rounded-xl px-2.5 py-1.5 shadow-xs">
-                                <ArrowDownUp size={14} className="text-gray-400 shrink-0" />
-                                <select
-                                    value={sortBy}
-                                    onChange={(e) => setSortBy(e.target.value as any)}
-                                    className="bg-transparent text-text-main font-bold text-xs outline-none w-full cursor-pointer"
-                                >
-                                    <option value="name_asc">الاسم (أ - ي)</option>
-                                    <option value="name_desc">الاسم (ي - أ)</option>
-                                    <option value="quantity_asc">الكمية (الأقل أولاً)</option>
-                                    <option value="quantity_desc">الكمية (الأكثر أولاً)</option>
-                                    <option value="price_asc">سعر البيع (الأقل أولاً)</option>
-                                    <option value="price_desc">سعر البيع (الأعلى أولاً)</option>
-                                    <option value="newest">الأحدث مضافة</option>
-                                </select>
-                            </div>
-                        </div>
+                        )}
                     </div>
 
                     <div className="flex-1 overflow-y-auto px-2 pb-2 flex flex-col min-h-0 justify-between">
@@ -788,34 +879,81 @@ export default function Products() {
                             <div className="flex gap-4">
                                 <div className="flex-1">
                                     <label className="block text-sm font-semibold mb-1">سعر الشراء (التكلفة)</label>
-                                    <input required value={cost} onChange={e=>setCost(e.target.value)} type="number" step="0.01" className="w-full border rounded-xl p-3 bg-white text-left" dir="ltr" />
+                                    <input 
+                                        required 
+                                        value={cost} 
+                                        onChange={e=>setCost(e.target.value)} 
+                                        onFocus={() => {
+                                            inputPrevValue.current = cost;
+                                            setCost('');
+                                        }}
+                                        onBlur={() => {
+                                            if (cost === '') setCost(inputPrevValue.current);
+                                        }}
+                                        type="number" 
+                                        step="0.1" 
+                                        className="w-full border rounded-xl p-3 bg-white text-left" 
+                                        dir="ltr" 
+                                    />
                                 </div>
                                 <div className="flex-1">
                                     <label className="block text-sm font-semibold mb-1">سعر البيع</label>
-                                    <input required value={price} onChange={e=>setPrice(e.target.value)} type="number" step="0.01" className="w-full border rounded-xl p-3 bg-white text-left" dir="ltr" />
+                                    <input 
+                                        required 
+                                        value={price} 
+                                        onChange={e=>setPrice(e.target.value)} 
+                                        onFocus={() => {
+                                            inputPrevValue.current = price;
+                                            setPrice('');
+                                        }}
+                                        onBlur={() => {
+                                            if (price === '') setPrice(inputPrevValue.current);
+                                        }}
+                                        type="number" 
+                                        step="0.1" 
+                                        className="w-full border rounded-xl p-3 bg-white text-left" 
+                                        dir="ltr" 
+                                    />
                                 </div>
-                            </div>
-                            <div>
-                                <label className="block text-sm font-semibold mb-1">التصنيف</label>
-                                <select 
-                                    value={selectedCategory} 
-                                    onChange={e=>setSelectedCategory(e.target.value)} 
-                                    className="w-full border rounded-xl p-3 bg-white text-right"
-                                >
-                                    <option value="General">عام (بدون تصنيف)</option>
-                                    {categories.map(c => (
-                                        <option key={c.id} value={c.name}>{c.num ? `${c.num} - ` : ''}{c.name}</option>
-                                    ))}
-                                </select>
                             </div>
                             <div className="flex gap-4">
                                 <div className="flex-1">
                                     <label className="block text-sm font-semibold mb-1">الكمية {(editingProduct ? '' : 'الافتتاحية')}</label>
-                                    <input required value={quantity} onChange={e=>setQuantity(e.target.value)} type="number" className="w-full border rounded-xl p-3 bg-white text-left" dir="ltr" />
+                                    <input 
+                                        required 
+                                        value={quantity} 
+                                        onChange={e=>setQuantity(e.target.value)} 
+                                        onFocus={() => {
+                                            inputPrevValue.current = quantity;
+                                            setQuantity('');
+                                        }}
+                                        onBlur={() => {
+                                            if (quantity === '') setQuantity(inputPrevValue.current);
+                                        }}
+                                        type="number" 
+                                        step="0.1"
+                                        className="w-full border rounded-xl p-3 bg-white text-left" 
+                                        dir="ltr" 
+                                    />
                                 </div>
                                 <div className="flex-1">
                                     <label className="block text-sm font-semibold mb-1 text-red-600">تنبيه المخزون المنخفض</label>
-                                    <input required value={lowStockAlert} onChange={e=>setLowStockAlert(e.target.value)} type="number" className="w-full border rounded-xl p-3 bg-white text-left border-red-200 focus:border-red-500" dir="ltr" />
+                                    <input 
+                                        required 
+                                        value={lowStockAlert} 
+                                        onChange={e=>setLowStockAlert(e.target.value)} 
+                                        onFocus={() => {
+                                            inputPrevValue.current = lowStockAlert;
+                                            setLowStockAlert('');
+                                        }}
+                                        onBlur={() => {
+                                            if (lowStockAlert === '') setLowStockAlert(inputPrevValue.current);
+                                        }}
+                                        type="number" 
+                                        step="0.1"
+                                        className="w-full border rounded-xl p-3 bg-white text-left border-red-200 focus:border-red-500" 
+                                        dir="ltr" 
+                                    />
                                 </div>
                             </div>
                             {settings.isExpiryTrackingEnabled && (

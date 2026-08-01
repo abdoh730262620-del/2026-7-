@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { collection, query, onSnapshot, addDoc, doc, updateDoc, increment, getDocs, orderBy, limit, where, writeBatch } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
@@ -6,7 +6,7 @@ import { useAuthStore } from '../store/authStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { useInvoiceStore, CartItem } from '../store/invoiceStore';
 import { logUserAction } from '../lib/logger';
-import { Truck, Plus, Minus, Trash2, Search, FileText, Printer, ShoppingCart, MoreVertical, ArrowLeft, X, RefreshCw } from 'lucide-react';
+import { Truck, Plus, Minus, Trash2, Search, FileText, Printer, ShoppingCart, MoreVertical, ArrowLeft, X, RefreshCw, GripVertical } from 'lucide-react';
 import { printInvoice } from '../lib/printHelper';
 import { InvoicePreviewModal } from '../components/InvoicePreviewModal';
 import SearchableSelect from '../components/SearchableSelect';
@@ -67,16 +67,19 @@ export default function Purchases() {
     const [isDropdownOpen, setIsDropdownOpen] = useState(false);
     const [isCheckingOut, setIsCheckingOut] = useState(false);
     const [isCheckoutModalOpen, setIsCheckoutModalOpen] = useState(false);
+    const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
     const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
     const [previewInvoiceId, setPreviewInvoiceId] = useState<string | null>(null);
     const [editingItem, setEditingItem] = useState<{
         id: string;
         name: string;
         barcode: string;
-        buyPrice: number;
-        cartQuantity: number;
+        buyPrice: number | string;
+        cartQuantity: number | string;
         stock: number;
     } | null>(null);
+
+    const inputPrevValue = useRef<string>('');
 
     const [isNewPartyModalOpen, setIsNewPartyModalOpen] = useState(false);
     const [newPartyPhone, setNewPartyPhone] = useState('');
@@ -89,6 +92,7 @@ export default function Purchases() {
     const [newProdName, setNewProdName] = useState('');
     const [newProdBarcode, setNewProdBarcode] = useState('');
     const [newProdCost, setNewProdCost] = useState<number>(0);
+    const [notes, setNotes] = useState('');
 
     const _reverseInvoice = async (invoice: any, actionType: 'returned' | 'cancelled', providedBatch?: any) => {
         const batch = providedBatch || writeBatch(db);
@@ -387,6 +391,13 @@ export default function Purchases() {
     };
 
     const handleSelectProduct = (product: Product) => {
+        // Force blur immediately to hide keyboard on mobile
+        const input = document.getElementById('purchases-product-search-input');
+        if (input) (input as HTMLInputElement).blur();
+        if (document.activeElement instanceof HTMLElement) {
+            document.activeElement.blur();
+        }
+
         addToCart(product);
         setSearch('');
         setIsDropdownOpen(false);
@@ -503,7 +514,8 @@ export default function Purchases() {
                 status: 'active',
                 createdBy: appUser?.uid,
                 createdAt: now,
-                tenantId
+                tenantId,
+                notes: notes.trim()
             });
 
             // 2. Update Inventory (Add to stock and update cost price if option enabled)
@@ -557,6 +569,7 @@ export default function Purchases() {
             logUserAction('عملية شراء', `إتمام عملية شراء برقم ${invoiceNum} بقيمة ${total} ر.س. طريقة الدفع: ${paymentMethod}`).catch(() => {});
             const clearAndClose = () => {
                 setCart([]);
+                setNotes('');
                 setIsCheckoutModalOpen(false);
                 setIsNewPartyModalOpen(false);
                 setNewPartyPhone('');
@@ -721,7 +734,7 @@ export default function Purchases() {
                             </button>
                         </div>
                     )}
-                    <div className="p-3 border-b border-border-main bg-white shrink-0 rounded-t-xl relative z-30">
+                    <div className="p-3 border-b border-border-main bg-white shrink-0 rounded-t-xl relative z-[60]">
                         <div className="relative w-full z-20">
                             <div className="bg-card-bg flex items-center gap-3 w-full h-12 px-4 rounded-xl border border-border-main focus-within:border-purple-500 focus-within:ring-2 focus-within:ring-purple-100 transition-all relative z-20 shadow-sm cursor-text" onClick={(e) => {
                                 const input = e.currentTarget.querySelector('input');
@@ -736,6 +749,7 @@ export default function Purchases() {
                                     onChange={handleSearchChange}
                                     onFocus={() => { if(search.length > 0) setIsDropdownOpen(true); }}
                                     onBlur={() => setTimeout(() => setIsDropdownOpen(false), 200)}
+                                    id="purchases-product-search-input"
                                 />
                                 {search && (
                                     <button onClick={(e) => { e.stopPropagation(); setSearch(''); }} className="text-gray-400 hover:text-red-500 transition-colors cursor-pointer p-1 shrink-0">
@@ -745,28 +759,29 @@ export default function Purchases() {
                             </div>
 
                             <AnimatePresence>
-                                {isDropdownOpen && search.length > 0 && (
+                                {isDropdownOpen && search.length > 0 && !isCheckoutModalOpen && !isNewPartyModalOpen && (
                                     <motion.div 
                                         initial={{ opacity: 0, y: 5 }}
                                         animate={{ opacity: 1, y: 0 }}
                                         exit={{ opacity: 0, y: 5 }}
-                                        className="absolute top-full right-0 left-0 mt-2 z-[100] bg-white dark:bg-slate-900 border border-border-main rounded-xl shadow-2xl max-h-80 md:max-h-96 overflow-y-auto p-2 flex flex-col gap-2 w-full"
+                                        className="absolute top-full right-0 left-0 mt-1 z-[150] bg-white dark:bg-slate-900 border border-border-main rounded-xl shadow-2xl max-h-[60vh] md:max-h-[70vh] overflow-y-auto p-1 flex flex-col gap-1 w-full"
                                     >
                                         {filteredProducts.map((p, idx) => (
                                             <button 
                                                 key={`${p.id || 'prod'}-${idx}`} 
                                                 type="button"
+                                                onMouseDown={(e) => e.preventDefault()}
                                                 onClick={() => handleSelectProduct(p)}
-                                                className="w-full text-right p-3 bg-card-bg hover:bg-white rounded-xl shadow-sm border border-border-main flex justify-between items-center transition-all hover:scale-[1.01] active:scale-[0.99] group"
+                                                className="w-full text-right p-1.5 bg-card-bg hover:bg-white rounded-lg shadow-sm border-b border-border-main/30 last:border-0 flex justify-between items-center transition-all hover:scale-[1.01] active:scale-[0.99] group"
                                             >
                                                 <div className="flex flex-col text-right">
-                                                    <span className="font-extrabold text-text-main text-sm group-hover:text-purple-600 transition-colors">{p.name}</span>
-                                                    <span className="text-[10px] font-bold text-text-main/50 uppercase tracking-tight bg-bg-main w-max px-1.5 py-0.5 rounded-md mt-1">{p.barcode || 'بدون باركود'}</span>
+                                                    <span className="font-extrabold text-text-main text-[11px] group-hover:text-purple-600 transition-colors leading-tight">{p.name}</span>
+                                                    <span className="text-[8px] font-bold text-text-main/50 uppercase tracking-tight bg-bg-main w-max px-1 rounded-md mt-0.5">{p.barcode || 'بدون باركود'}</span>
                                                 </div>
-                                                <div className="flex flex-col items-end gap-1">
-                                                    <span className="font-black text-purple-700 text-sm">{p.cost || p.price} <small className="text-[9px] font-bold opacity-75">ر.س</small></span>
-                                                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-purple-50 dark:bg-purple-950/25 text-purple-700">
-                                                        المخزون الحالي: {p.quantity}
+                                                <div className="flex flex-col items-end gap-0">
+                                                    <span className="font-black text-purple-700 text-[11px]">{p.cost || p.price} <small className="text-[8px] font-bold opacity-75">ر.س</small></span>
+                                                    <span className="text-[8px] font-bold px-1 py-0.5 rounded-md bg-purple-50 dark:bg-purple-950/25 text-purple-700">
+                                                        المخزون: {p.quantity}
                                                     </span>
                                                 </div>
                                             </button>
@@ -799,69 +814,102 @@ export default function Purchases() {
                     </div>
                     
                     <div className="flex-1 overflow-y-auto bg-bg-main min-h-0 modern-scrollbar p-2 flex flex-col gap-2 relative z-10">
-                        {cart.map(item => (
-                                    <div key={item.id} className="bg-card-bg p-2 rounded-lg shadow-sm border border-border-main flex items-center justify-between gap-1.5 group hover:border-purple-400 transition-all">
-                                        <div 
-                                            onClick={() => setEditingItem({
-                                                id: item.id,
-                                                name: item.name,
-                                                barcode: item.barcode,
-                                                buyPrice: item.buyPrice || 0,
-                                                cartQuantity: item.cartQuantity,
-                                                stock: item.quantity || 0
-                                            })}
-                                            className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer"
-                                            title="تعديل السعر والكمية"
-                                        >
-                                            <div className="flex flex-col overflow-hidden min-w-0 flex-1">
-                                                <span className="font-bold text-text-main text-[11px] truncate group-hover:text-purple-600 transition-colors">{item.name}</span>
-                                                <span className="text-[9px] font-bold text-text-main/40 uppercase tracking-widest bg-bg-main w-max px-1 rounded-sm mt-0.5">{item.barcode}</span>
-                                            </div>
-                                            <div className="flex flex-col items-end px-1 justify-center shrink-0">
-                                                <span className="text-[9px] text-gray-400 font-bold">السعر</span>
-                                                <span className="font-bold text-purple-600 text-[11px]">{item.buyPrice || 0} <span className="text-[8px] font-normal text-gray-400">ر.س</span></span>
-                                            </div>
-                                        </div>
-                                        <div className="flex items-center gap-2 shrink-0">
-                                            <div className="flex items-center gap-1.5 bg-bg-main rounded-lg p-0.5 border border-border-main">
-                                                <button onClick={(e) => { e.stopPropagation(); updateCartQuantity(item.id, 1); }} className="p-1 bg-white shadow-sm text-purple-600 hover:bg-purple-600 hover:text-white rounded-md transition-all"><Plus size={10} /></button>
-                                                <span className="font-bold w-4 text-center text-[10px] text-text-main">{item.cartQuantity}</span>
-                                                <button onClick={(e) => { e.stopPropagation(); updateCartQuantity(item.id, -1); }} className="p-1 bg-white shadow-sm text-red-600 hover:bg-red-600 hover:text-white rounded-md transition-all"><Minus size={10} /></button>
-                                            </div>
-                                            <div className="flex flex-col items-center px-1 justify-center">
-                                                <span className="text-[9px] text-gray-400 font-bold">المجموع</span>
-                                                <span className="font-bold text-purple-700 text-[11px]">{((item.buyPrice || 0) * item.cartQuantity).toLocaleString()} <span className="text-[8px] font-normal text-gray-400">ر.س</span></span>
-                                            </div>
-                                            <button onClick={(e) => { e.stopPropagation(); removeFromCart(item.id); }} className="text-red-400 hover:text-red-600 p-1.5 bg-white hover:bg-white rounded-lg transition-all"><Trash2 size={12} /></button>
-                                        </div>
+                        {cart.map((item, index) => (
+                            <div 
+                                key={item.id}
+                                draggable
+                                onDragStart={(e) => {
+                                    setDraggedIndex(index);
+                                    e.dataTransfer.effectAllowed = 'move';
+                                }}
+                                onDragOver={(e) => {
+                                    e.preventDefault();
+                                    e.dataTransfer.dropEffect = 'move';
+                                }}
+                                onDrop={(e) => {
+                                    e.preventDefault();
+                                    if (draggedIndex === null || draggedIndex === index) return;
+                                    const newCart = [...cart];
+                                    const [movedItem] = newCart.splice(draggedIndex, 1);
+                                    newCart.splice(index, 0, movedItem);
+                                    setCart(newCart);
+                                    setDraggedIndex(null);
+                                }}
+                                className={`bg-card-bg p-2 rounded-lg shadow-sm border ${draggedIndex === index ? 'opacity-40 border-purple-500 ring-2 ring-purple-300' : 'border-border-main'} flex items-center justify-between gap-1.5 group hover:border-purple-400 transition-all`}
+                            >
+                                <div className="text-slate-400 hover:text-purple-600 cursor-grab active:cursor-grabbing p-1 shrink-0" title="اسحب لإعادة ترتيب منتجات التوريد">
+                                    <GripVertical size={14} />
+                                </div>
+                                <div 
+                                    onClick={() => setEditingItem({
+                                        id: item.id,
+                                        name: item.name,
+                                        barcode: item.barcode,
+                                        buyPrice: item.buyPrice || 0,
+                                        cartQuantity: item.cartQuantity,
+                                        stock: item.quantity || 0
+                                    })}
+                                    className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer"
+                                    title="تعديل السعر والكمية"
+                                >
+                                    <div className="flex flex-col overflow-hidden min-w-0 flex-1">
+                                        <span className="font-bold text-text-main text-[11px] truncate group-hover:text-purple-600 transition-colors">{item.name}</span>
+                                        <span className="text-[9px] font-bold text-text-main/40 uppercase tracking-widest bg-bg-main w-max px-1 rounded-sm mt-0.5">{item.barcode}</span>
                                     </div>
-                                ))}
-                                {cart.length === 0 && (
-                                    <div className="h-full flex flex-col items-center justify-center text-text-main/30 gap-3">
-                                        <ShoppingCart size={48} className="opacity-20" />
-                                        <span className="font-bold text-sm italic">السلة فارغة</span>
+                                    <div className="flex flex-col items-end px-1 justify-center shrink-0">
+                                        <span className="text-[9px] text-gray-400 font-bold">السعر</span>
+                                        <span className="font-bold text-purple-600 text-[11px]">{item.buyPrice || 0} <span className="text-[8px] font-normal text-gray-400">ر.س</span></span>
                                     </div>
-                                )}
+                                </div>
+                                <div className="flex items-center gap-2 shrink-0">
+                                    <div className="flex items-center gap-1.5 bg-bg-main rounded-lg p-0.5 border border-border-main">
+                                        <button onClick={(e) => { e.stopPropagation(); updateCartQuantity(item.id, 1); }} className="p-1 bg-white shadow-sm text-purple-600 hover:bg-purple-600 hover:text-white rounded-md transition-all"><Plus size={10} /></button>
+                                        <span className="font-bold w-4 text-center text-[10px] text-text-main">{item.cartQuantity}</span>
+                                        <button onClick={(e) => { e.stopPropagation(); updateCartQuantity(item.id, -1); }} className="p-1 bg-white shadow-sm text-red-600 hover:bg-red-600 hover:text-white rounded-md transition-all"><Minus size={10} /></button>
+                                    </div>
+                                    <div className="flex flex-col items-center px-1 justify-center">
+                                        <span className="text-[9px] text-gray-400 font-bold">المجموع</span>
+                                        <span className="font-bold text-purple-700 text-[11px]">{((item.buyPrice || 0) * item.cartQuantity).toLocaleString()} <span className="text-[8px] font-normal text-gray-400">ر.س</span></span>
+                                    </div>
+                                    <button onClick={(e) => { e.stopPropagation(); removeFromCart(item.id); }} className="text-red-400 hover:text-red-600 p-1.5 bg-white hover:bg-white rounded-lg transition-all"><Trash2 size={12} /></button>
+                                </div>
+                            </div>
+                        ))}
+                        {cart.length === 0 && (
+                            <div className="h-full flex flex-col items-center justify-center text-text-main/30 gap-3">
+                                <ShoppingCart size={48} className="opacity-20" />
+                                <span className="font-bold text-sm italic">السلة فارغة</span>
+                            </div>
+                        )}
                     </div>
 
-                    <div className="sticky bottom-0 left-0 right-0 z-40 p-4 border-t border-border-main bg-white dark:bg-slate-900 flex flex-col md:flex-row justify-between items-center gap-4 shrink-0 shadow-[0_-6px_20px_rgba(0,0,0,0.06)] rounded-b-xl">
-                        <div className="flex justify-between items-center w-full md:w-auto gap-5 md:gap-8">
-                            <div className="flex flex-col text-right">
-                                <span className="text-text-main/40 text-[8px] font-bold uppercase tracking-widest leading-none">كمية التوريد</span>
-                                <span className="text-lg font-bold text-text-main">{totalItems}</span>
+                    <div className="sticky bottom-0 left-0 right-0 z-40 p-3 sm:p-4 border-t border-border-main bg-white dark:bg-slate-900 flex flex-row items-center justify-between gap-2.5 sm:gap-3 shrink-0 shadow-[0_-6px_20px_rgba(0,0,0,0.06)] rounded-b-xl">
+                        <div className="flex items-center gap-3 sm:gap-5 bg-slate-50 dark:bg-slate-800/60 p-2 sm:p-2.5 px-3 sm:px-4 rounded-xl border border-gray-100 dark:border-slate-800 shrink min-w-0 overflow-x-auto">
+                            <div className="flex flex-col text-right shrink-0">
+                                <span className="text-text-main/50 text-[10px] sm:text-[11px] font-bold whitespace-nowrap">الأصناف</span>
+                                <span className="text-sm sm:text-base font-extrabold text-text-main">{cart.length}</span>
                             </div>
-                            <div className="flex flex-col text-right">
-                                <span className="text-text-main/40 text-[8px] font-bold uppercase tracking-widest leading-none">إجمالي القيمة</span>
-                                <span className="text-base md:text-xl font-bold text-purple-700">{subtotal.toLocaleString()} <small className="text-[10px] font-normal opacity-50">ر.س</small></span>
+                            <div className="h-6 w-px bg-gray-200 dark:bg-slate-700 shrink-0"></div>
+                            <div className="flex flex-col text-right shrink-0">
+                                <span className="text-text-main/50 text-[10px] sm:text-[11px] font-bold whitespace-nowrap">إجمالي الكمية</span>
+                                <span className="text-sm sm:text-base font-black text-purple-600">{totalItems}</span>
+                            </div>
+                            <div className="h-6 w-px bg-gray-200 dark:bg-slate-700 shrink-0"></div>
+                            <div className="flex flex-col text-right shrink-0">
+                                <span className="text-text-main/50 text-[10px] sm:text-[11px] font-bold whitespace-nowrap">الإجمالي</span>
+                                <span className="text-sm sm:text-lg font-black text-purple-700 whitespace-nowrap">{subtotal.toLocaleString()} <small className="text-[10px] font-normal opacity-75">ر.س</small></span>
                             </div>
                         </div>
 
                         <button 
-                            onClick={() => setIsCheckoutModalOpen(true)}
+                            onClick={() => {
+                                setIsDropdownOpen(false);
+                                setIsCheckoutModalOpen(true);
+                            }}
                             disabled={cart.length === 0}
-                            className="w-full md:w-48 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-300 text-white font-bold py-3 rounded-xl transition-all shadow-md active:scale-95 text-sm flex justify-center items-center gap-2"
+                            className="shrink-0 px-5 sm:px-7 py-3 sm:py-3.5 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-300 text-white font-black rounded-xl transition-all shadow-md active:scale-95 text-xs sm:text-base flex justify-center items-center gap-2 whitespace-nowrap"
                         >
-                            تأكيد التوريد <Truck size={16} />
+                            تأكيد التوريد <Truck size={18} />
                         </button>
                     </div>
                 </div>
@@ -869,7 +917,7 @@ export default function Purchases() {
 
             {/* Checkout Modal */}
             {isCheckoutModalOpen && !isNewPartyModalOpen && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+                <div className="fixed inset-0 z-[210] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
                     <div className="bg-white rounded-2xl w-full max-w-md shadow-xl flex flex-col overflow-hidden max-h-[90vh]">
                         <div className="p-5 border-b border-gray-100 bg-white dark:bg-slate-900 flex justify-between items-center shrink-0">
                             <h2 className="text-base md:text-xl font-bold text-black dark:text-white">إتمام عملية الشراء</h2>
@@ -877,73 +925,120 @@ export default function Purchases() {
                                 <span className="font-bold text-lg px-2">X</span>
                             </button>
                         </div>
-                        <div className="p-4 md:p-6 overflow-y-auto flex-1">
-                            <div className="flex flex-col gap-3 mb-4 md:mb-6 bg-white p-4 rounded-xl">
-                                <div className="flex justify-between items-center bg-white p-2 rounded-lg border border-purple-100">
-                                    <label className="text-black dark:text-gray-200 font-semibold text-sm">الخصم (%)</label>
-                                    <input 
-                                        type="number" 
-                                        className="w-20 border-none outline-none font-bold text-center bg-white rounded p-1"
-                                        min="0"
-                                        max="100"
-                                        value={discountPercent || ''}
-                                        onChange={e => setDiscountPercent(Number(e.target.value) || 0)}
-                                    />
-                                </div>
-                                {discountPercent > 0 && (
-                                    <div className="flex justify-between items-center text-red-500 font-semibold text-sm">
-                                        <span>قيمة الخصم:</span>
-                                        <span>- {discountAmount} ر.س</span>
-                                    </div>
-                                )}
-                                <div className="flex justify-between items-center mt-2 pt-3 border-t border-purple-200 text-lg font-black text-purple-800">
-                                    <span>الإجمالي المطلوب:</span>
-                                    <span className="text-lg md:text-2xl text-purple-600">{total} ر.س</span>
-                                </div>
-                            </div>
-
-                            <div className="mb-4 md:mb-6">
-                                <label className="block text-sm font-semibold mb-2 text-black dark:text-gray-200">طريقة الدفع</label>
+                        <div className="p-4 md:p-6 overflow-y-auto flex-1 text-sm bg-white dark:bg-slate-900 space-y-4">
+                            {/* 1. طريقة الدفع فوقهم بالأعلى */}
+                            <div>
+                                <label className="block text-xs font-black mb-1.5 text-black dark:text-gray-200">طريقة الدفع</label>
                                 <div className="flex gap-2">
                                     <button 
+                                        type="button"
                                         onClick={() => setPaymentMethod('cash')}
-                                        className={`flex-1 py-3 rounded-xl border font-bold transition ${paymentMethod === 'cash' ? 'bg-purple-600 text-white border-purple-600 shadow-md' : 'bg-white dark:bg-slate-900 text-black dark:text-gray-300 border-gray-200 hover:bg-white'}`}
+                                        className={`flex-1 py-2.5 rounded-xl border font-bold transition ${paymentMethod === 'cash' ? 'bg-purple-600 text-white border-purple-600 shadow-md' : 'bg-slate-50 dark:bg-slate-800 text-black dark:text-gray-300 border-gray-200 dark:border-slate-700 hover:bg-slate-100'}`}
                                     >
-                                        نقدي
+                                        💵 نقدي
                                     </button>
                                     <button 
+                                        type="button"
                                         onClick={() => setPaymentMethod('credit')}
-                                        className={`flex-1 py-3 rounded-xl border font-bold transition ${paymentMethod === 'credit' ? 'bg-purple-600 text-white border-purple-600 shadow-md' : 'bg-white dark:bg-slate-900 text-black dark:text-gray-300 border-gray-200 hover:bg-white'}`}
+                                        className={`flex-1 py-2.5 rounded-xl border font-bold transition ${paymentMethod === 'credit' ? 'bg-purple-600 text-white border-purple-600 shadow-md' : 'bg-slate-50 dark:bg-slate-800 text-black dark:text-gray-300 border-gray-200 dark:border-slate-700 hover:bg-slate-100'}`}
                                     >
-                                        آجل
+                                        💳 آجل
                                     </button>
                                 </div>
                             </div>
 
-                            <div className="mb-2">
-                                <label className="block text-sm font-semibold mb-2 text-black dark:text-gray-200">
-                                    المورد (مطلوب - سيتم إضافته للمسجلين تلقائياً إذا كان جديداً)
-                                </label>
-                                <SearchableSelect
-                                    options={suppliers.map(s => s.name)}
-                                    placeholder="ابحث عن مورد أو اكتب اسماً جديداً..."
-                                    value={supplierSearchName}
-                                    onChange={setSupplierSearchName}
-                                />
+                            {/* 2. اسم المورد وتحته حقل الملاحظات */}
+                            <div className="space-y-3 bg-slate-50 dark:bg-slate-800/40 p-3 rounded-xl border border-gray-200 dark:border-slate-800">
+                                <div>
+                                    <label className="block text-xs font-black mb-1.5 text-slate-700 dark:text-slate-300">
+                                        المورد <span className="text-rose-500">*</span>
+                                    </label>
+                                    <SearchableSelect
+                                        options={suppliers.map(s => s.name)}
+                                        placeholder="ابحث عن مورد أو اكتب اسماً جديداً..."
+                                        value={supplierSearchName}
+                                        onChange={setSupplierSearchName}
+                                    />
+                                    <p className="text-[10px] text-slate-400 font-bold px-1 mt-1">سيتم إضافة المورد للمسجلين تلقائياً إذا كان جديداً</p>
+                                </div>
+
+                                {/* حقل الملاحظات تحت اسم المورد */}
+                                <div>
+                                    <label className="block text-xs font-black mb-1.5 text-slate-700 dark:text-slate-300">
+                                        ملاحظات الفاتورة (تظهر على الفاتورة المطبوعة)
+                                    </label>
+                                    <textarea
+                                        rows={2}
+                                        placeholder="أدخل أي ملاحظات أو شروط تود إظهارها على الفاتورة..."
+                                        value={notes}
+                                        onChange={e => setNotes(e.target.value)}
+                                        className="w-full bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 rounded-xl p-2.5 text-xs font-bold text-slate-900 dark:text-white outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500 transition resize-none"
+                                    />
+                                </div>
                             </div>
 
-                            <div className="mt-4 p-3 bg-purple-50 dark:bg-purple-950/40 rounded-xl border border-purple-100 dark:border-purple-900/50 flex items-center justify-between cursor-pointer" onClick={() => setAutoUpdateCostPrice(!autoUpdateCostPrice)}>
+                            {/* 3. السعر والخصم والإجمالي في نفس السطر (Row Layout) */}
+                            <div className="bg-purple-50/60 dark:bg-slate-800/60 p-3.5 rounded-2xl border border-purple-100 dark:border-slate-700 space-y-3">
+                                <p className="text-[11px] font-black text-purple-900 dark:text-purple-300 border-b border-purple-100 dark:border-slate-700 pb-1.5">
+                                    الملخص المالي للفاتورة
+                                </p>
+
+                                <div className="grid grid-cols-3 gap-2 items-center text-center">
+                                    {/* السعر قبل الخصم */}
+                                    <div className="bg-white dark:bg-slate-900 p-2.5 rounded-xl border border-gray-200 dark:border-slate-700 flex flex-col justify-center shadow-2xs">
+                                        <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1">السعر (قبل الخصم)</span>
+                                        <span className="text-xs font-black text-slate-900 dark:text-white truncate" dir="ltr">
+                                            {subtotal.toLocaleString()} ر.س
+                                        </span>
+                                    </div>
+
+                                    {/* الخصم % */}
+                                    <div className="bg-white dark:bg-slate-900 p-2.5 rounded-xl border border-gray-200 dark:border-slate-700 flex flex-col justify-center shadow-2xs">
+                                        <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1">الخصم (%)</span>
+                                        <div className="flex items-center justify-center gap-1">
+                                            <input 
+                                                type="number" 
+                                                min="0"
+                                                max="100"
+                                                value={discountPercent || ''}
+                                                onChange={e => setDiscountPercent(Number(e.target.value) || 0)}
+                                                placeholder="0"
+                                                className="w-12 bg-slate-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded text-center text-xs font-black text-rose-600 outline-none p-0.5"
+                                            />
+                                            <span className="text-[10px] font-bold text-slate-400">%</span>
+                                        </div>
+                                    </div>
+
+                                    {/* الإجمالي الصافي */}
+                                    <div className="bg-purple-600 text-white p-2.5 rounded-xl flex flex-col justify-center shadow-sm">
+                                        <span className="text-[10px] font-bold text-purple-100 mb-1">الإجمالي الصافي</span>
+                                        <span className="text-xs font-black truncate" dir="ltr">
+                                            {total.toLocaleString()} ر.س
+                                        </span>
+                                    </div>
+                                </div>
+
+                                {discountAmount > 0 && (
+                                    <div className="flex justify-between items-center text-[11px] font-bold text-slate-600 dark:text-slate-400 pt-1 border-t border-purple-100/60 dark:border-slate-700 px-1">
+                                        <span>قيمة الخصم:</span>
+                                        <strong className="text-rose-600">-{discountAmount.toLocaleString()} ر.س</strong>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* تحديث سعر التكلفة تلقائياً */}
+                            <div className="p-3 bg-purple-50/70 dark:bg-purple-950/40 rounded-xl border border-purple-100 dark:border-purple-900/50 flex items-center justify-between cursor-pointer" onClick={() => setAutoUpdateCostPrice(!autoUpdateCostPrice)}>
                                 <div className="flex items-center gap-2">
-                                    <RefreshCw size={16} className="text-purple-600 dark:text-purple-400" />
+                                    <RefreshCw size={16} className="text-purple-600 dark:text-purple-400 shrink-0" />
                                     <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                                        تحديث سعر التكلفة للمنتجات تلقائياً بناءً على سعر الشراء الجديد
+                                        تحديث سعر التكلفة تلقائياً بناءً على الشراء الجديد
                                     </span>
                                 </div>
                                 <input 
                                     type="checkbox" 
                                     checked={autoUpdateCostPrice} 
                                     onChange={e => setAutoUpdateCostPrice(e.target.checked)}
-                                    className="w-4 h-4 text-purple-600 accent-purple-600 rounded cursor-pointer"
+                                    className="w-4 h-4 text-purple-600 accent-purple-600 rounded cursor-pointer shrink-0"
                                 />
                             </div>
                         </div>
@@ -1182,24 +1277,34 @@ export default function Purchases() {
                                 <div className="flex items-center gap-2 bg-white dark:bg-slate-850 p-1 rounded-xl border border-gray-200 dark:border-slate-800 shadow-xs">
                                     <button 
                                         type="button"
-                                        onClick={() => setEditingItem(prev => prev ? { ...prev, cartQuantity: prev.cartQuantity + 1 } : null)} 
+                                        onClick={() => setEditingItem(prev => prev ? { ...prev, cartQuantity: Number(prev.cartQuantity) + 1 } : null)} 
                                         className="p-2.5 bg-purple-50 dark:bg-slate-800 hover:bg-purple-600 dark:hover:bg-purple-600 text-purple-600 dark:text-purple-400 hover:text-white rounded-lg transition-all"
                                     >
                                         <Plus size={14} />
                                     </button>
                                     <input 
                                         type="number" 
+                                        step="0.1"
                                         className="flex-1 text-center font-black text-base text-black dark:text-white bg-transparent outline-none border-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                         value={editingItem.cartQuantity}
-                                        min="1"
+                                        min="0"
                                         onChange={e => {
-                                            const val = parseInt(e.target.value) || 0;
+                                            const val = e.target.value;
                                             setEditingItem(prev => prev ? { ...prev, cartQuantity: val } : null);
+                                        }}
+                                        onFocus={(e) => {
+                                            inputPrevValue.current = editingItem.cartQuantity.toString();
+                                            setEditingItem(prev => prev ? { ...prev, cartQuantity: '' } : null);
+                                        }}
+                                        onBlur={(e) => {
+                                            if (editingItem.cartQuantity === '') {
+                                                setEditingItem(prev => prev ? { ...prev, cartQuantity: inputPrevValue.current } : null);
+                                            }
                                         }}
                                     />
                                     <button 
                                         type="button"
-                                        onClick={() => setEditingItem(prev => prev ? { ...prev, cartQuantity: Math.max(1, prev.cartQuantity - 1) } : null)} 
+                                        onClick={() => setEditingItem(prev => prev ? { ...prev, cartQuantity: Number(prev.cartQuantity) - 1 <= 0 ? 1 : Number(prev.cartQuantity) - 1 } : null)} 
                                         className="p-2.5 bg-red-50 dark:bg-slate-800 hover:bg-red-600 dark:hover:bg-red-600 text-red-600 dark:text-red-400 hover:text-white rounded-lg transition-all"
                                     >
                                         <Minus size={14} />
@@ -1213,12 +1318,21 @@ export default function Purchases() {
                                 <div className="flex items-center bg-white dark:bg-slate-850 px-3 py-1 rounded-xl border border-gray-200 dark:border-slate-800 shadow-xs">
                                     <input 
                                         type="number" 
-                                        step="any"
-                                        className="w-full font-black text-base text-black dark:text-white bg-transparent outline-none border-none py-1.5 text-right"
-                                        value={editingItem.buyPrice === 0 ? '' : editingItem.buyPrice}
+                                        step="0.1"
+                                        className="w-full font-black text-base text-black dark:text-white bg-transparent outline-none border-none py-1.5 text-center"
+                                        value={editingItem.buyPrice}
                                         onChange={e => {
-                                            const val = parseFloat(e.target.value) || 0;
+                                            const val = e.target.value;
                                             setEditingItem(prev => prev ? { ...prev, buyPrice: val } : null);
+                                        }}
+                                        onFocus={(e) => {
+                                            inputPrevValue.current = editingItem.buyPrice.toString();
+                                            setEditingItem(prev => prev ? { ...prev, buyPrice: '' } : null);
+                                        }}
+                                        onBlur={(e) => {
+                                            if (editingItem.buyPrice === '') {
+                                                setEditingItem(prev => prev ? { ...prev, buyPrice: inputPrevValue.current } : null);
+                                            }
                                         }}
                                     />
                                 </div>
@@ -1228,7 +1342,7 @@ export default function Purchases() {
                             <div className="flex justify-between items-center bg-purple-50/50 dark:bg-slate-800/30 p-3 rounded-xl border border-purple-100/50 dark:border-slate-700 text-sm mt-1">
                                 <span className="font-bold text-gray-500 dark:text-gray-400">إجمالي الصنف:</span>
                                 <span className="font-black text-purple-600 dark:text-purple-400 text-base">
-                                    {(editingItem.buyPrice * editingItem.cartQuantity).toLocaleString()} <small className="text-xs font-normal">ر.س</small>
+                                    {(Number(editingItem.buyPrice) * Number(editingItem.cartQuantity)).toLocaleString()} <small className="text-xs font-normal">ر.س</small>
                                 </span>
                             </div>
                         </div>
@@ -1237,7 +1351,7 @@ export default function Purchases() {
                         <div className="p-4 border-t border-gray-100 dark:border-slate-800 bg-white dark:bg-slate-900 flex gap-2 shrink-0">
                             <button 
                                 type="button"
-                                onClick={() => handleUpdateCartItem(editingItem.id, editingItem.cartQuantity, editingItem.buyPrice)} 
+                                onClick={() => handleUpdateCartItem(editingItem.id, Number(editingItem.cartQuantity), Number(editingItem.buyPrice))} 
                                 className="flex-1 bg-purple-600 hover:bg-purple-700 text-white py-2.5 rounded-xl font-bold text-sm shadow-md active:scale-95 transition-all"
                             >
                                 حفظ التعديلات

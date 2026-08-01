@@ -10,6 +10,7 @@ import PartiesReport from './reports/PartiesReport';
 import CashReport from './reports/CashReport';
 import ExpensesReport from './reports/ExpensesReport';
 import StaffReport from './reports/StaffReport';
+import MonthlySalesSummary from './reports/MonthlySalesSummary';
 
 export default function Reports() {
     const navigate = useNavigate();
@@ -31,6 +32,7 @@ export default function Reports() {
         { id: 'parties', label: 'العملاء والموردين', icon: Truck, desc: 'أرصدة وحسابات العملاء والموردين بالتفصيل' },
         { id: 'cash', label: 'الصندوق', icon: Wallet, desc: 'تحليل حركات النقد اليومية ورأس المال' },
         { id: 'expenses', label: 'المصروفات', icon: FileText, desc: 'تحليل المصروفات حسب التصنيف والحساب' },
+        { id: 'monthly_summary', label: 'الحسابات الشهرية', icon: TrendingUp, desc: 'ملخص مبيعات وكروت الحسابات التلقائية' },
     ] as const;
 
     const renderReport = () => {
@@ -42,6 +44,7 @@ export default function Reports() {
             case 'parties': return <PartiesReport dateRange={dateRange} />;
             case 'cash': return <CashReport dateRange={dateRange} />;
             case 'expenses': return <ExpensesReport dateRange={dateRange} />;
+            case 'monthly_summary': return <MonthlySalesSummary dateRange={dateRange} />;
             default: return null;
         }
     };

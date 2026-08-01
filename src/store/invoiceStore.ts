@@ -21,6 +21,7 @@ interface InvoiceState {
     salesSearch: string;
     salesActiveTab: 'list' | 'add';
     salesMinimized: boolean;
+    isSalesFocusMode: boolean;
     salesEditingInvoice: any | null;
     setSalesCart: (cart: CartItem[] | ((prev: CartItem[]) => CartItem[])) => void;
     setSalesCustomerId: (id: string) => void;
@@ -30,6 +31,7 @@ interface InvoiceState {
     setSalesSearch: (str: string) => void;
     setSalesActiveTab: (tab: 'list' | 'add') => void;
     setSalesMinimized: (val: boolean) => void;
+    setIsSalesFocusMode: (val: boolean) => void;
     setSalesEditingInvoice: (inv: any | null) => void;
     clearSales: () => void;
 
@@ -79,6 +81,7 @@ export const useInvoiceStore = create<InvoiceState>()(
             salesSearch: '',
             salesActiveTab: 'list',
             salesMinimized: false,
+            isSalesFocusMode: false,
             salesEditingInvoice: null,
             setSalesCart: (cartOrUpdater) => set((state) => ({
                 salesCart: typeof cartOrUpdater === 'function' ? cartOrUpdater(state.salesCart) : cartOrUpdater
@@ -90,8 +93,9 @@ export const useInvoiceStore = create<InvoiceState>()(
             setSalesSearch: (str) => set({ salesSearch: str }),
             setSalesActiveTab: (tab) => set({ salesActiveTab: tab }),
             setSalesMinimized: (val) => set({ salesMinimized: val }),
+            setIsSalesFocusMode: (val) => set({ isSalesFocusMode: val }),
             setSalesEditingInvoice: (inv) => set({ salesEditingInvoice: inv }),
-            clearSales: () => set({ salesCart: [], salesCustomerId: '', salesCustomerName: '', salesPaymentMethod: 'cash', salesDiscountPercent: 0, salesSearch: '', salesMinimized: false, salesEditingInvoice: null }),
+            clearSales: () => set({ salesCart: [], salesCustomerId: '', salesCustomerName: '', salesPaymentMethod: 'cash', salesDiscountPercent: 0, salesSearch: '', salesMinimized: false, isSalesFocusMode: false, salesEditingInvoice: null }),
 
             purchasesCart: [],
             purchasesSupplierId: '',
