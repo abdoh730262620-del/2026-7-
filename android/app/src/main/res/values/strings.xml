@@ -2,6 +2,6 @@
 <resources>
     <string name="app_name">نظام مبيعات السعيدة المتكامل</string>
     <string name="title_activity_main">نظام مبيعات السعيدة المتكامل</string>
-    <string name="package_name">com.sales.app</string>
-    <string name="custom_url_scheme">com.sales.app</string>
+    <string name="package_name">rashed.app.sala</string>
+    <string name="custom_url_scheme">rashed.app.sala</string>
 </resources>
