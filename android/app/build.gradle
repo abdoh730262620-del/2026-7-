@@ -49,9 +49,14 @@ apply from: 'capacitor.build.gradle'
 
 try {
     def servicesJSON = file('google-services.json')
-    if (servicesJSON.text) {
-        apply plugin: 'com.google.gms.google-services'
+    if (servicesJSON.exists() && servicesJSON.text) {
+        def text = servicesJSON.text
+        if (text.contains('"mobilesdk_app_id"') && !text.contains('501accfdd5733bbb0edcab')) {
+            apply plugin: 'com.google.gms.google-services'
+        } else {
+            logger.info("google-services.json is dummy or placeholder. Skipping google-services plugin.")
+        }
     }
 } catch(Exception e) {
-    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+    logger.info("google-services.json not found or skipped. Push Notifications native plugin will be optional.")
 }
