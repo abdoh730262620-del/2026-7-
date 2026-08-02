@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { Smartphone, Fingerprint, Bell, Settings2, KeyRound, Check, Trash2, X } from 'lucide-react';
 import { useAuthStore } from '../../store/authStore';
 import { NativeBiometric } from '@capgo/capacitor-native-biometric';
-import { PushNotifications } from '@capacitor/push-notifications';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { useNavigate } from 'react-router-dom';
 
@@ -167,24 +166,16 @@ export default function MobileSettings() {
         const newValue = !notificationsEnabled;
         if (newValue) {
              try {
-                const response = await PushNotifications.requestPermissions();
-                if (response.receive === 'granted') {
-                    PushNotifications.register();
+                const localRes = await LocalNotifications.requestPermissions();
+                if (localRes.display === 'granted') {
                     setNotificationsEnabled(true);
                     localStorage.setItem('notifications_enabled', 'true');
+                    alert('تم تفعيل الإشعارات بنجاح!');
                 } else {
                     alert('لم يتم منح إذن الإشعارات.');
                 }
-             } catch (e) {
-                try {
-                    const localRes = await LocalNotifications.requestPermissions();
-                    if(localRes.display === 'granted') {
-                        setNotificationsEnabled(true);
-                        localStorage.setItem('notifications_enabled', 'true');
-                    }
-                } catch(err) {
-                    alert('الإشعارات غير مدعومة على هذه المنصة حالياً.');
-                }
+             } catch (err) {
+                alert('الإشعارات غير مدعومة على هذا الجهاز حالياً.');
              }
         } else {
             setNotificationsEnabled(false);

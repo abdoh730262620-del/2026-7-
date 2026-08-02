@@ -1,86 +1,45 @@
 import { Capacitor } from '@capacitor/core';
-import { PushNotifications, ActionPerformed, PushNotificationSchema } from '@capacitor/push-notifications';
 import { LocalNotifications } from '@capacitor/local-notifications';
 
 export const initPushNotifications = async (): Promise<boolean> => {
     if (!Capacitor.isNativePlatform()) {
-        console.log('[PushNotifications] Running on web/browser mode.');
+        console.log('[Notifications] Running on web/browser mode.');
         if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
             try {
                 await Notification.requestPermission();
             } catch (e) {
-                console.warn('[PushNotifications] Web notification permission error:', e);
+                console.warn('[Notifications] Web notification permission error:', e);
             }
         }
         return true;
     }
 
     try {
-        console.log('[PushNotifications] Checking Push Notifications support on native device...');
+        console.log('[Notifications] Initializing Local Notifications on native device...');
 
-        // Safely attempt local notification setup first
-        try {
-            await LocalNotifications.requestPermissions();
-        } catch (localErr) {
-            console.warn('[PushNotifications] Local notification permission request failed:', localErr);
+        // Check & request local notification permissions safely (without FCM / remote push registration crash)
+        let status = await LocalNotifications.checkPermissions();
+        if (status?.display === 'prompt') {
+            status = await LocalNotifications.requestPermissions();
         }
 
-        // Check/request permissions with extra defensive handling for APKs without FCM
-        let permStatus;
-        try {
-            permStatus = await PushNotifications.checkPermissions();
-            if (permStatus?.receive === 'prompt') {
-                permStatus = await PushNotifications.requestPermissions();
-            }
-        } catch (permErr) {
-            console.warn('[PushNotifications] PushNotifications.checkPermissions failed:', permErr);
+        if (status?.display !== 'granted') {
+            console.warn('[Notifications] Local notification permission not granted or denied.');
             return false;
         }
 
-        if (permStatus?.receive !== 'granted') {
-            console.warn('[PushNotifications] Push notification permissions not granted.');
-            return false;
-        }
-
-        // Add listeners before registration
+        // Register action listeners for local notifications
         try {
-            PushNotifications.addListener('registration', (token) => {
-                console.log('[PushNotifications] FCM/Device Token:', token.value);
-                try {
-                    localStorage.setItem('fcm_token', token.value);
-                } catch (e) {}
-            });
-
-            PushNotifications.addListener('registrationError', (error) => {
-                console.warn('[PushNotifications] Registration error:', error.error);
-            });
-
-            PushNotifications.addListener('pushNotificationReceived', (notification: PushNotificationSchema) => {
-                console.log('[PushNotifications] Received in foreground:', notification);
-                scheduleLocalNotification(
-                    notification.title || 'تنبيه جديد',
-                    notification.body || '',
-                    notification.data
-                );
-            });
-
-            PushNotifications.addListener('pushNotificationActionPerformed', (notification: ActionPerformed) => {
-                console.log('[PushNotifications] Action performed:', notification.actionId, notification.notification);
+            await LocalNotifications.addListener('localNotificationActionPerformed', (action) => {
+                console.log('[Notifications] User clicked local notification:', action.notification);
             });
         } catch (listenerErr) {
-            console.warn('[PushNotifications] Failed to attach push listeners:', listenerErr);
-        }
-
-        // Register with Apple / Google FCM safely
-        try {
-            await PushNotifications.register();
-        } catch (regErr) {
-            console.warn('[PushNotifications] PushNotifications.register failed (likely missing google-services.json or FCM config in APK):', regErr);
+            console.warn('[Notifications] Listener setup warning:', listenerErr);
         }
 
         return true;
     } catch (error) {
-        console.warn('[PushNotifications] Safe catch during push initialization:', error);
+        console.warn('[Notifications] Safe catch during notification initialization:', error);
         return false;
     }
 };
@@ -89,10 +48,16 @@ export const initPushNotifications = async (): Promise<boolean> => {
  * Schedule a local notification (e.g. sync completed, inventory alerts, updates)
  */
 export const scheduleLocalNotification = async (title: string, body: string, extraData?: any) => {
-    const id = Math.floor(Math.random() * 100000);
+    const id = Math.floor(Math.random() * 100000) + 1;
 
     if (Capacitor.isNativePlatform()) {
         try {
+            const perm = await LocalNotifications.checkPermissions();
+            if (perm?.display !== 'granted') {
+                const req = await LocalNotifications.requestPermissions();
+                if (req?.display !== 'granted') return;
+            }
+
             await LocalNotifications.schedule({
                 notifications: [
                     {
@@ -108,12 +73,12 @@ export const scheduleLocalNotification = async (title: string, body: string, ext
             });
             return;
         } catch (err) {
-            console.warn('[PushNotifications] Native local notification error:', err);
+            console.warn('[Notifications] Native local notification schedule error:', err);
         }
     }
 
     // Web Fallback
-    if ('Notification' in window && Notification.permission === 'granted') {
+    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
         try {
             new Notification(title, {
                 body,
@@ -121,7 +86,7 @@ export const scheduleLocalNotification = async (title: string, body: string, ext
                 data: extraData
             });
         } catch (e) {
-            console.warn('[PushNotifications] Web notification trigger error:', e);
+            console.warn('[Notifications] Web notification trigger error:', e);
         }
     }
 };
@@ -142,3 +107,4 @@ export const notifyImportantUpdate = async (title: string, body: string, updateU
     const notificationTitle = title.startsWith('📢') ? title : `📢 ${title}`;
     await scheduleLocalNotification(notificationTitle, body, { type: 'IMPORTANT_UPDATE', url: updateUrl });
 };
+
