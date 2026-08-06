@@ -105,7 +105,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       const appUser = useAuthStore.getState().appUser;
       if (!appUser) return;
       
-      const tenantId = appUser.tenantId || (appUser.role === 'admin' ? appUser.uid : 'admin_initial');
+      const tenantId = appUser.tenantId || 'single_store';
       
       // Prevent double init if already initialized for this tenant
       if (get().initialized && (get() as any).currentTenantId === tenantId) return;
@@ -142,7 +142,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     updateSettings: async (newSettings) => {
       const appUser = useAuthStore.getState().appUser;
       if (!appUser) return;
-      const tenantId = appUser.tenantId || (appUser.role === 'admin' ? appUser.uid : 'admin_initial');
+      const tenantId = appUser.tenantId || 'single_store';
 
       const docRef = doc(db, 'settings', `app_config_${tenantId}`);
       

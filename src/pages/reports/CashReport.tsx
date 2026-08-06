@@ -32,7 +32,7 @@ export default function CashReport({ dateRange }: { dateRange: { startDate: stri
         try {
             const appUser = useAuthStore.getState().appUser;
             if (!appUser) return;
-            const tenantId = appUser.tenantId || (appUser.role === 'admin' ? appUser.uid : 'admin_initial');
+            const tenantId = appUser.tenantId || 'single_store';
 
             const start = new Date(dateRange.startDate).getTime();
             const end = new Date(dateRange.endDate).getTime() + 86399999;

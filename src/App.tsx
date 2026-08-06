@@ -35,13 +35,13 @@ import Purchases from './pages/Purchases';
 import Reports from './pages/Reports';
 import NetworkCards from './pages/NetworkCards';
 import CardsManagement from './pages/CardsManagement';
+import NotificationsHistory from './pages/NotificationsHistory';
 
 import AppLock from './components/AppLock';
 import FloatingProgressBar from './components/FloatingProgressBar';
 import { ErrorNotificationModal } from './components/ErrorNotificationModal';
 import { AppStartupModal } from './components/AppStartupModal';
 import { CenterToastContainer } from './components/CenterToastContainer';
-import { showWelcomeToast } from './lib/toastService';
 
 import AIInsights from './pages/AIInsights';
 import Addons from './pages/settings/Addons';
@@ -209,15 +209,6 @@ export default function App() {
   useEffect(() => {
     if (appUser) {
       initSettings();
-      try {
-        const welcomeShown = sessionStorage.getItem('app_welcome_toast_shown');
-        if (welcomeShown !== 'true') {
-          sessionStorage.setItem('app_welcome_toast_shown', 'true');
-          showWelcomeToast(appUser.name);
-        }
-      } catch (e) {
-        showWelcomeToast(appUser.name);
-      }
     }
   }, [appUser, initSettings]);
 
@@ -392,6 +383,7 @@ export default function App() {
           <Route path="cards-management" element={<CardsManagement />} />
           <Route path="reports" element={<Reports />} />
           <Route path="ai" element={<AIInsights />} />
+          <Route path="notifications-history" element={<NotificationsHistory />} />
           
           <Route path="settings" element={<SettingsLayout />} />
           <Route path="settings/users" element={<Users />} />

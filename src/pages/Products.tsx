@@ -92,7 +92,7 @@ export default function Products() {
     }, [viewMode]);
 
     useEffect(() => {
-        const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+        const tenantId = appUser?.tenantId || 'single_store';
 
         const fetchLinkedProducts = () => {
             const ids = new Set<string>();
@@ -281,7 +281,7 @@ export default function Products() {
                 nextNum = (max + 1).toString();
             }
 
-            const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+            const tenantId = appUser?.tenantId || 'single_store';
             await addDoc(collection(db, 'categories'), {
                 num: nextNum,
                 name: categoryName,
@@ -302,7 +302,7 @@ export default function Products() {
     const handleSaveProduct = async (e: React.FormEvent) => {
         e.preventDefault();
         try {
-            const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+            const tenantId = appUser?.tenantId || 'single_store';
             
             // Check for duplicate product names (excluding the product currently being edited)
             const isDuplicate = products.some(p => 
@@ -312,6 +312,18 @@ export default function Products() {
             if (isDuplicate) {
                 alert('عذراً، هذا الاسم موجود مسبقاً! يرجى استخدام اسم فريد ومميز للمنتج لتجنب التكرار.');
                 return;
+            }
+
+            // Check for duplicate barcode if barcode is entered
+            if (barcode && barcode.trim() !== '') {
+                const isDuplicateBarcode = products.some(p => 
+                    p.barcode && p.barcode.trim() === barcode.trim() && 
+                    (!editingProduct || p.id !== editingProduct.id)
+                );
+                if (isDuplicateBarcode) {
+                    alert('عذراً، هذا الباركود مسجل مسبقاً لمنتج آخر!');
+                    return;
+                }
             }
 
             const productId = editingProduct ? editingProduct.id : Math.random().toString(36).substring(2);
@@ -442,7 +454,7 @@ export default function Products() {
                 </>
              ) : (
                  <div className="flex flex-col h-full overflow-hidden">
-                     <div className="p-2 md:p-3 flex flex-col gap-2.5 shrink-0 bg-[#FDFDFD] dark:bg-slate-900 border-b border-border-main">
+                     <div className="p-2 md:p-3 flex flex-col gap-2.5 shrink-0 bg-[#FDFDFD] border-b border-border-main">
                          
                          <div className="flex flex-wrap items-center justify-between gap-2">
                              <h1 className="text-base md:text-xl font-black text-text-main flex items-center gap-2">
@@ -892,7 +904,7 @@ export default function Products() {
                                         }}
                                         type="number" 
                                         step="0.1" 
-                                        className="w-full border rounded-xl p-3 bg-white text-left" 
+                                        className="w-full border rounded-xl p-3 bg-white text-center" 
                                         dir="ltr" 
                                     />
                                 </div>
@@ -911,7 +923,7 @@ export default function Products() {
                                         }}
                                         type="number" 
                                         step="0.1" 
-                                        className="w-full border rounded-xl p-3 bg-white text-left" 
+                                        className="w-full border rounded-xl p-3 bg-white text-center" 
                                         dir="ltr" 
                                     />
                                 </div>
@@ -932,7 +944,7 @@ export default function Products() {
                                         }}
                                         type="number" 
                                         step="0.1"
-                                        className="w-full border rounded-xl p-3 bg-white text-left" 
+                                        className="w-full border rounded-xl p-3 bg-white text-center" 
                                         dir="ltr" 
                                     />
                                 </div>
@@ -951,7 +963,7 @@ export default function Products() {
                                         }}
                                         type="number" 
                                         step="0.1"
-                                        className="w-full border rounded-xl p-3 bg-white text-left border-red-200 focus:border-red-500" 
+                                        className="w-full border rounded-xl p-3 bg-white text-center border-red-200 focus:border-red-500" 
                                         dir="ltr" 
                                     />
                                 </div>

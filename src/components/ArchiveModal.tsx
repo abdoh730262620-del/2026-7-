@@ -74,7 +74,7 @@ export default function ArchiveModal({ isOpen, onClose }: ArchiveModalProps) {
 
     const handleExport = async () => {
         if (!appUser) return;
-        const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+        const tenantId = appUser?.tenantId || 'single_store';
 
         start(100, "جاري الأرشفة...");
         update(10);

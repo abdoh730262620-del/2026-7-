@@ -5,7 +5,7 @@ import { useAuthStore } from '../store/authStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { format } from 'date-fns';
 import { logUserAction } from '../lib/logger';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Check } from 'lucide-react';
 
 import { useNavigate } from 'react-router-dom';
 
@@ -33,7 +33,7 @@ export default function Cash() {
     useEffect(() => {
         if (!appUser?.uid) return;
         
-        const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+        const tenantId = appUser?.tenantId || 'single_store';
         const q = query(collection(db, 'cash'), where('tenantId', '==', tenantId));
 
         const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -96,7 +96,7 @@ export default function Cash() {
         }
 
         try {
-            const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+            const tenantId = appUser?.tenantId || 'single_store';
             const now = Date.now();
             await addDoc(collection(db, 'cash'), {
                 date: now,
@@ -174,25 +174,40 @@ export default function Cash() {
                     </div>
 
                     <div className="flex flex-col mt-1 divide-y divide-gray-100 bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden shrink-0">
-                        <div className="flex justify-between items-center py-2 px-3 hover:bg-white transition-colors cursor-pointer group" onClick={() => handleSettingToggle('cashIncludeSales', settings.cashIncludeSales)}>
+                        <div className="flex justify-between items-center py-2 px-3 hover:bg-slate-50 transition-colors cursor-pointer group" onClick={() => handleSettingToggle('cashIncludeSales', settings.cashIncludeSales)}>
                              <div className="text-black font-semibold text-xs flex-1">اضافة مبالغ المبيعات والعملاء للصندوق</div>
-                             <div className="relative inline-flex items-center pointer-events-none">
-                                 <input type="checkbox" className="sr-only peer" checked={settings.cashIncludeSales ?? true} readOnly />
-                                 <div className="w-10 h-5 bg-white rounded-full peer peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:right-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"></div>
+                             <div className="relative inline-flex items-center">
+                                 <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
+                                     (settings.cashIncludeSales ?? true) 
+                                         ? 'bg-emerald-500 border-emerald-500 text-white' 
+                                         : 'bg-white border-gray-300 text-transparent hover:border-gray-400'
+                                 }`}>
+                                     <Check size={14} strokeWidth={3} />
+                                 </div>
                              </div>
                         </div>
-                        <div className="flex justify-between items-center py-2 px-3 hover:bg-white transition-colors cursor-pointer group" onClick={() => handleSettingToggle('cashIncludePurchases', settings.cashIncludePurchases)}>
+                        <div className="flex justify-between items-center py-2 px-3 hover:bg-slate-50 transition-colors cursor-pointer group" onClick={() => handleSettingToggle('cashIncludePurchases', settings.cashIncludePurchases)}>
                              <div className="text-black font-semibold text-xs flex-1">خصم مبالغ المشتريات والموردين من الصندوق</div>
-                             <div className="relative inline-flex items-center pointer-events-none">
-                                 <input type="checkbox" className="sr-only peer" checked={settings.cashIncludePurchases ?? true} readOnly />
-                                 <div className="w-10 h-5 bg-white rounded-full peer peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:right-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"></div>
+                             <div className="relative inline-flex items-center">
+                                 <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
+                                     (settings.cashIncludePurchases ?? true) 
+                                         ? 'bg-emerald-500 border-emerald-500 text-white' 
+                                         : 'bg-white border-gray-300 text-transparent hover:border-gray-400'
+                                 }`}>
+                                     <Check size={14} strokeWidth={3} />
+                                 </div>
                              </div>
                         </div>
-                        <div className="flex justify-between items-center py-2 px-3 hover:bg-white transition-colors cursor-pointer group" onClick={() => handleSettingToggle('cashIncludeExpenses', settings.cashIncludeExpenses)}>
+                        <div className="flex justify-between items-center py-2 px-3 hover:bg-slate-50 transition-colors cursor-pointer group" onClick={() => handleSettingToggle('cashIncludeExpenses', settings.cashIncludeExpenses)}>
                              <div className="text-black font-semibold text-xs flex-1">خصم مبالغ المصروفات من الصندوق</div>
-                             <div className="relative inline-flex items-center pointer-events-none">
-                                 <input type="checkbox" className="sr-only peer" checked={settings.cashIncludeExpenses ?? true} readOnly />
-                                 <div className="w-10 h-5 bg-white rounded-full peer peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:right-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"></div>
+                             <div className="relative inline-flex items-center">
+                                 <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
+                                     (settings.cashIncludeExpenses ?? true) 
+                                         ? 'bg-emerald-500 border-emerald-500 text-white' 
+                                         : 'bg-white border-gray-300 text-transparent hover:border-gray-400'
+                                 }`}>
+                                     <Check size={14} strokeWidth={3} />
+                                 </div>
                              </div>
                         </div>
                     </div>

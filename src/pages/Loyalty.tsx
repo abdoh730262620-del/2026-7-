@@ -39,7 +39,7 @@ export default function Loyalty() {
 
     useEffect(() => {
         if (!appUser) return;
-        const tenantId = appUser.tenantId || (appUser.role === 'admin' ? appUser.uid : 'admin_initial');
+        const tenantId = appUser.tenantId || 'single_store';
 
         const qUsers = query(collection(db, 'customers'), where('tenantId', '==', tenantId));
         const unsubUsers = onSnapshot(qUsers, (snap) => {
@@ -71,7 +71,7 @@ export default function Loyalty() {
         if (!selectedCustomer || redeemAmount <= 0 || redeemAmount > selectedCustomer.points || !appUser) return;
         
         try {
-            const tenantId = appUser.tenantId || (appUser.role === 'admin' ? appUser.uid : 'admin_initial');
+            const tenantId = appUser.tenantId || 'single_store';
 
             await updateDoc(doc(db, 'customers', selectedCustomer.id), {
                 points: selectedCustomer.points - redeemAmount

@@ -1,6 +1,6 @@
 import { useBackupStore } from '../store/backupStore';
 import { performBackup } from './backupService';
-import { collection, onSnapshot } from 'firebase/firestore';
+import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { db } from './firebase';
 
 let intervalId: any = null;
@@ -55,21 +55,25 @@ function setupIntervalBackups(settings: any) {
 
 function setupOnChangeBackups(settings: any) {
     const collectionsToWatch = ['sales', 'purchases', 'products', 'customers', 'cash'];
+    const tenantId = 'single_store';
     
     for (const collName of collectionsToWatch) {
-        const unsub = onSnapshot(collection(db, collName), (snapshot) => {
+        // Use a query with tenantId filter to be more efficient and avoid wide-collection sync conflicts
+        const q = query(collection(db, collName), where('tenantId', '==', tenantId));
+        const unsub = onSnapshot(q, (snapshot) => {
             // Check if there are actual actual changes from locals (not just initial pulls)
-            // But to keep it simple, any snapshot with docChanges will trigger
-            if (snapshot.docChanges().length > 0) {
+            if (!snapshot.metadata.hasPendingWrites && snapshot.docChanges().length > 0) {
                 if (debounceTimeout) {
                     clearTimeout(debounceTimeout);
                 }
-                // Debounce by 1 minute to avoid spamming backups on bulk updates
+                // Debounce by 5 minutes to avoid spamming backups on active usage
                 debounceTimeout = setTimeout(async () => {
                     console.log(`[AutoBackup] Running on-change backup due to ${collName}...`);
                     await performBackup(settings.destinations, settings.targetEmail, settings.maxBackupsCount);
-                }, 60 * 1000);
+                }, 5 * 60 * 1000);
             }
+        }, (err) => {
+            console.warn(`[AutoBackup] Snapshot error for ${collName}:`, err);
         });
         changeUnsubscribers.push(unsub);
     }

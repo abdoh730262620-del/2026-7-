@@ -7,7 +7,7 @@ export const logUserAction = async (action: string, details: string) => {
     const user = useAuthStore.getState().user;
     if (!user) return;
 
-    const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+    const tenantId = appUser?.tenantId || 'single_store';
 
     try {
         await addDoc(collection(db, 'logs'), {

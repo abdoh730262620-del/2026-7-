@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Smartphone, Fingerprint, Bell, Settings2, KeyRound, Check, Trash2, X } from 'lucide-react';
+import { Smartphone, Fingerprint, Bell, Settings2, KeyRound, Check, Trash2, X, Activity } from 'lucide-react';
 import { useAuthStore } from '../../store/authStore';
 import { NativeBiometric } from '@capgo/capacitor-native-biometric';
 import { LocalNotifications } from '@capacitor/local-notifications';
@@ -308,6 +308,33 @@ export default function MobileSettings() {
                         <input type="checkbox" className="sr-only peer" checked={backgroundSyncEnabled} onChange={toggleBackgroundSync} />
                         <div className="w-11 h-6 bg-gray-250 dark:bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-350 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600 dark:peer-checked:bg-blue-500"></div>
                     </label>
+                </div>
+
+                {/* System Diagnostics Logs */}
+                <div className="p-4 md:p-5 border-t border-gray-100 dark:border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-slate-50/50 dark:bg-slate-900/30">
+                    <div className="flex items-start gap-4">
+                        <div className="w-10 h-10 bg-purple-50 dark:bg-purple-950/30 border border-purple-100 dark:border-purple-900/20 text-purple-600 dark:text-purple-400 rounded-lg flex items-center justify-center shrink-0 mt-1">
+                            <Activity size={20} />
+                        </div>
+                        <div>
+                            <h3 className="font-bold text-black dark:text-white text-sm md:text-base">تشخيص وأخطاء النظام (System Logs)</h3>
+                            <p className="text-xs md:text-sm text-gray-500 dark:text-gray-400 leading-relaxed mt-1">
+                                معاينة سجلات النظام وتتبع أداء التطبيق للمساعدة عند الدعم الفني.
+                            </p>
+                        </div>
+                    </div>
+                    <button
+                        onClick={() => {
+                            if (typeof (window as any).openDiagnosticModal === 'function') {
+                                (window as any).openDiagnosticModal();
+                            } else {
+                                alert('وحدة التشخيص غير مفعلة حالياً.');
+                            }
+                        }}
+                        className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-xl font-bold transition text-xs whitespace-nowrap cursor-pointer shadow-sm shadow-purple-100 dark:shadow-none shrink-0"
+                    >
+                        فتح سجل التشخيص
+                    </button>
                 </div>
 
             </div>

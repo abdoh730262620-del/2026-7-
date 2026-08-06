@@ -33,7 +33,7 @@ export default function InventoryReport({ dateRange }: { dateRange?: { startDate
 
     useEffect(() => {
         if (!appUser) return;
-        const tenantId = appUser.tenantId || (appUser.role === 'admin' ? appUser.uid : 'admin_initial');
+        const tenantId = appUser.tenantId || 'single_store';
 
         const unsub = onSnapshot(query(collection(db, 'products'), where('tenantId', '==', tenantId)), (snap) => {
             const arr: any[] = [];
@@ -57,7 +57,7 @@ export default function InventoryReport({ dateRange }: { dateRange?: { startDate
 
     const runReport = async (reportId: string) => {
         if (!appUser) return;
-        const tenantId = appUser.tenantId || (appUser.role === 'admin' ? appUser.uid : 'admin_initial');
+        const tenantId = appUser.tenantId || 'single_store';
         
         setIsLoading(true);
         try {

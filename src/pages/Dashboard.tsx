@@ -101,7 +101,7 @@ export default function Dashboard() {
             setStatementType(type);
             
             try {
-                const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+                const tenantId = appUser?.tenantId || 'single_store';
                 const collectionName = type === 'customer' ? 'customers' : 'suppliers';
                 const snap = await getDocs(query(collection(db, collectionName), where('tenantId', '==', tenantId)));
                 setEntities(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
@@ -117,7 +117,7 @@ export default function Dashboard() {
         setTimeout(async () => {
             let collectionName = '';
             let reportTitle = '';
-            const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+            const tenantId = appUser?.tenantId || 'single_store';
 
             if (q.includes('مبيعات') || q.includes('تقرير مبيعات') || q.includes('بيع')) {
                 collectionName = 'sales';
@@ -208,7 +208,7 @@ export default function Dashboard() {
 
         setIsThinking(true);
         const entityName = entities.find(e => e.id === selectedEntityId)?.name || 'الطرف المحدد';
-        const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+        const tenantId = appUser?.tenantId || 'single_store';
         
         // Mock data fetching based on filters for interactive report
         setTimeout(async () => {

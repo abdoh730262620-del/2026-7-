@@ -119,7 +119,7 @@ export default function Sales() {
     const _reverseInvoice = async (invoice: any, actionType: 'returned' | 'cancelled', providedBatch?: any) => {
         const batch = providedBatch || writeBatch(db);
         batch.update(doc(db, 'sales', invoice.id), { status: actionType });
-        const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+        const tenantId = appUser?.tenantId || 'single_store';
         
         (invoice.items || []).forEach((item: any) => {
             if (item.productId) {
@@ -177,7 +177,7 @@ export default function Sales() {
             let refundValue = 0;
             const updatedItems = [...invoice.items];
 
-            const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+            const tenantId = appUser?.tenantId || 'single_store';
             returnedItems.forEach(retItem => {
                 const itemIndex = updatedItems.findIndex(i => i.productId === retItem.productId);
                 if (itemIndex > -1) {
@@ -300,7 +300,7 @@ export default function Sales() {
                     const customerRef = doc(db, 'customers', customer.id);
                     const invoiceRef = doc(db, 'sales', invoice.id);
                     
-                    const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+                    const tenantId = appUser?.tenantId || 'single_store';
 
                     // Note: In offline mode, we rely on the locally known balance.
                     // increment() is atomic and will be applied correctly by Firestore server later.
@@ -386,7 +386,7 @@ export default function Sales() {
         let unsubCustomers = () => {};
         let unsubCardCategories = () => {};
 
-        const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+        const tenantId = appUser?.tenantId || 'single_store';
 
         // Load products
         const qProducts = query(collection(db, 'products'), where('tenantId', '==', tenantId));
@@ -440,7 +440,7 @@ export default function Sales() {
 
     useEffect(() => {
         if (!appUser) return;
-        const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+        const tenantId = appUser?.tenantId || 'single_store';
         let qInvoices;
         if (appUser.role === 'admin') {
             qInvoices = query(collection(db, 'sales'), where('tenantId', '==', tenantId), orderBy('createdAt', 'desc'), limit(100));
@@ -628,22 +628,28 @@ export default function Sales() {
 
             let finalCustomerId = customerId;
 
-            const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+            const tenantId = appUser?.tenantId || 'single_store';
 
             // If we are in the flow where isNewPartyModalOpen is true, then customerId is null 
             // but we need to create the customer using the modal details.
             if (!finalCustomerId && customerSearchName.trim() !== '') {
-                 const custRef = doc(collection(db, 'customers'));
-                 batch.set(custRef, {
-                     name: customerSearchName.trim(),
-                     phone: newPartyPhone,
-                     address: newPartyAddress,
-                     balance: parseFloat(newPartyBalance) || 0,
-                     tenantId,
-                     createdAt: now,
-                     updatedAt: now
-                 });
-                 finalCustomerId = custRef.id;
+                const searchTrimmed = customerSearchName.trim().toLowerCase();
+                const existingCustomer = customers.find(c => c.name.trim().toLowerCase() === searchTrimmed);
+                if (existingCustomer) {
+                    finalCustomerId = existingCustomer.id;
+                } else {
+                    const custRef = doc(collection(db, 'customers'));
+                    batch.set(custRef, {
+                        name: customerSearchName.trim(),
+                        phone: newPartyPhone,
+                        address: newPartyAddress,
+                        balance: parseFloat(newPartyBalance) || 0,
+                        tenantId,
+                        createdAt: now,
+                        updatedAt: now
+                    });
+                    finalCustomerId = custRef.id;
+                }
             }
 
             // 2. Create Sale Invoice
@@ -809,6 +815,25 @@ export default function Sales() {
                     balance: increment(total)
                 });
             }
+
+            // Manager Invoice Notification
+            const notifRef = doc(collection(db, 'notifications'));
+            batch.set(notifRef, {
+                tenantId,
+                type: 'invoice_created',
+                invoiceType: 'sale',
+                invoiceNumber: String(finalInvoiceNum),
+                invoiceId: saleRef.id,
+                amount: total,
+                createdById: appUser?.uid || '',
+                createdByName: appUser?.name || appUser?.email || 'مستخدم النظام',
+                createdByRole: appUser?.role || 'user',
+                recipientRole: 'admin',
+                createdAt: now,
+                read: false,
+                title: `🧾 فاتورة مبيعات جديدة #${finalInvoiceNum}`,
+                body: `قام المستخدم (${appUser?.name || appUser?.email || 'المستخدم'}) بإنشاء فاتورة مبيعات بمبلغ ${total.toLocaleString('ar-SA')} ر.س`
+            });
             
             batch.commit().catch(e => console.error("Sync error in background: ", e));
             logUserAction('عملية بيع', `إتمام عملية بيع برقم ${finalInvoiceNum} بقيمة ${total} ر.س. طريقة الدفع: ${paymentMethod}`).catch(() => {});
@@ -1266,7 +1291,7 @@ export default function Sales() {
                             </div>
 
                             {/* 3. السعر والخصم والإجمالي في نفس السطر (Row Layout) */}
-                            <div className="bg-blue-50/60 dark:bg-slate-800/60 p-3.5 rounded-2xl border border-blue-100 dark:border-slate-700 space-y-3">
+                            <div className="p-3.5 space-y-3">
                                 <p className="text-[11px] font-black text-blue-900 dark:text-blue-300 border-b border-blue-100 dark:border-slate-700 pb-1.5">
                                     الملخص المالي للفاتورة
                                 </p>
@@ -1276,7 +1301,7 @@ export default function Sales() {
                                     <div className="bg-white dark:bg-slate-900 p-2.5 rounded-xl border border-gray-200 dark:border-slate-700 flex flex-col justify-center shadow-2xs">
                                         <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1">السعر (قبل الخصم)</span>
                                         <span className="text-xs font-black text-slate-900 dark:text-white truncate" dir="ltr">
-                                            {subtotal.toLocaleString()} ر.س
+                                            {subtotal.toLocaleString()}
                                         </span>
                                     </div>
 

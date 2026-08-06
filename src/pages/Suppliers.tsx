@@ -40,7 +40,7 @@ export default function Suppliers() {
     const [balance, setBalance] = useState('');
 
     useEffect(() => {
-        const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+        const tenantId = appUser?.tenantId || 'single_store';
         
         const qPurchases = query(collection(db, 'purchases'), where('tenantId', '==', tenantId));
         const unsubscribePurchases = onSnapshot(qPurchases, (snapshot) => {
@@ -110,7 +110,7 @@ export default function Suppliers() {
     const handleSaveSupplier = async (e: React.FormEvent) => {
         e.preventDefault();
         try {
-            const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+            const tenantId = appUser?.tenantId || 'single_store';
             if (editingSupplier) {
                 await updateDoc(doc(db, 'suppliers', editingSupplier.id), {
                     name,
@@ -155,19 +155,35 @@ export default function Suppliers() {
                 const arrayBuffer = evt.target?.result as ArrayBuffer;
                 const dataArray = new Uint8Array(arrayBuffer);
                 const wb = XLSX.read(dataArray, { type: 'array' });
+                if (!wb.SheetNames || wb.SheetNames.length === 0) {
+                    alert("ملف الإكسل فارغ ولا يحتوي على صفحات بيانات");
+                    return;
+                }
                 const wsname = wb.SheetNames[0];
                 const ws = wb.Sheets[wsname];
-                const data = XLSX.utils.sheet_to_json(ws);
+                const data: any[] = XLSX.utils.sheet_to_json(ws, { defval: '' });
 
-                if (data.length > 0) {
-                    const headers = Object.keys(data[0] as any);
-                    setMapperState({ isOpen: true, headers, rows: data });
+                if (data && data.length > 0) {
+                    const allKeys = new Set<string>();
+                    data.forEach((row: any) => {
+                        Object.keys(row).forEach(k => {
+                            if (k && !k.startsWith('__EMPTY')) {
+                                allKeys.add(k.trim());
+                            }
+                        });
+                    });
+                    const headers = Array.from(allKeys);
+                    if (headers.length > 0) {
+                        setMapperState({ isOpen: true, headers, rows: data });
+                    } else {
+                        alert("لم يتم العثور على عناوين أعمدة صالحة في ملف الإكسل");
+                    }
                 } else {
-                    alert("الملف فارغ");
+                    alert("الملف فارغ أو لا يحتوي على أسطر بيانات");
                 }
-            } catch (err) {
+            } catch (err: any) {
                 console.error("Import error", err);
-                alert("حدث خطأ أثناء قراءة الملف");
+                alert("حدث خطأ أثناء قراءة الملف: " + (err?.message || "يرجى التأكد من اختيار ملف Excel صحيح"));
             } finally {
                 if (fileInputRef.current) fileInputRef.current.value = '';
             }
@@ -176,7 +192,7 @@ export default function Suppliers() {
     };
 
     const processMappedImport = async (mappedData: any[]) => {
-        const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+        const tenantId = appUser?.tenantId || 'single_store';
         setMapperState(prev => ({ ...prev, isOpen: false }));
         setIsImporting(true);
         let imported = 0;

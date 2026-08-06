@@ -34,7 +34,7 @@ export default function Expenses() {
 
     useEffect(() => {
         if (!appUser?.uid) return;
-        const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+        const tenantId = appUser?.tenantId || 'single_store';
 
         // We'll query recent expenses from the cash collection (for backward compatibility) and expenses collection
         // Easiest is to query expenses directly
@@ -87,7 +87,7 @@ export default function Expenses() {
         }
 
         try {
-            const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+            const tenantId = appUser?.tenantId || 'single_store';
             const now = Date.now();
             const expenseDate = new Date(date).getTime();
             const referenceId = `EXP-${now}`;
@@ -153,7 +153,7 @@ export default function Expenses() {
 
     const handleDelete = async (exp: Expense) => {
         if (!window.confirm('هل أنت متأكد من حذف هذا المصروف؟')) return;
-        const currentTenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+        const currentTenantId = appUser?.tenantId || 'single_store';
         try {
             const batch = writeBatch(db);
             // Delete from expenses

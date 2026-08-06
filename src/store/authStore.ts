@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import { User as FirebaseUser } from 'firebase/auth';
+import { User as FirebaseUser, onAuthStateChanged } from 'firebase/auth';
+import { auth } from '../lib/firebase';
 
 export type AppRole = 'admin' | 'cashier' | 'inventory' | 'salesman';
 
@@ -61,6 +62,7 @@ interface AuthState {
     setLoading: (isLoading: boolean) => void;
     login: (user: AppUser) => void;
     logout: () => void;
+    checkSession: () => Promise<FirebaseUser | null>;
     hasPermission: (module: keyof Omit<AppPermissions, 'edit' | 'add' | 'delete' | 'backup'>, action: keyof ModulePermissions) => boolean;
 }
 
@@ -103,13 +105,22 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         }
         set({ appUser: userWithTenant, user: { uid: user.uid, email: user.email } as any, isLoading: false });
     },
-    logout: () => {
+    logout: async () => {
         try {
+            await auth.signOut();
             localStorage.removeItem('app_session');
         } catch (e) {
-            console.warn('localStorage not available', e);
+            console.warn('Error during logout:', e);
         }
         set({ appUser: null, user: null, isLoading: false });
+    },
+    checkSession: async () => {
+        return new Promise((resolve) => {
+            const unsubscribe = onAuthStateChanged(auth, (user) => {
+                unsubscribe();
+                resolve(user);
+            });
+        });
     },
     hasPermission: (module, action) => {
         const { appUser } = get();

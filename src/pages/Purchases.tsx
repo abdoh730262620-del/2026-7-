@@ -97,7 +97,7 @@ export default function Purchases() {
     const _reverseInvoice = async (invoice: any, actionType: 'returned' | 'cancelled', providedBatch?: any) => {
         const batch = providedBatch || writeBatch(db);
         batch.update(doc(db, 'purchases', invoice.id), { status: actionType });
-        const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+        const tenantId = appUser?.tenantId || 'single_store';
         
         (invoice.items || []).forEach((item: any) => {
             if (item.productId) {
@@ -151,7 +151,7 @@ export default function Purchases() {
         try {
             const batch = writeBatch(db);
             const now = Date.now();
-            const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+            const tenantId = appUser?.tenantId || 'single_store';
 
             let refundValue = 0;
             const updatedItems = [...invoice.items];
@@ -291,7 +291,7 @@ export default function Purchases() {
     };
 
     useEffect(() => {
-        const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+        const tenantId = appUser?.tenantId || 'single_store';
 
         // Load products
         const qProducts = query(collection(db, 'products'), where('tenantId', '==', tenantId));
@@ -410,7 +410,17 @@ export default function Purchases() {
 
     const handleAddProduct = async () => {
         if (!newProdName) return alert('يرجى كتابة اسم المنتج');
-        const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+        
+        const existingProd = products.find(p => 
+            p.name.trim().toLowerCase() === newProdName.trim().toLowerCase() || 
+            (newProdBarcode && newProdBarcode.trim() !== '' && p.barcode && p.barcode.trim() === newProdBarcode.trim())
+        );
+        if (existingProd) {
+            alert('عذراً، يوجد منتج بنفس هذا الاسم أو الباركود مسجل مسبقاً في النظام!');
+            return;
+        }
+
+        const tenantId = appUser?.tenantId || 'single_store';
         try {
             const newDoc = await addDoc(collection(db, 'products'), {
                 name: newProdName,
@@ -472,7 +482,7 @@ export default function Purchases() {
         try {
             const batch = writeBatch(db);
             const now = Date.now();
-            const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+            const tenantId = appUser?.tenantId || 'single_store';
             
             if (editingInvoice) {
                 await _reverseInvoice(editingInvoice, 'cancelled', batch);
@@ -562,6 +572,25 @@ export default function Purchases() {
                     balance: increment(-total)
                 });
             }
+
+            // Manager Invoice Notification
+            const notifRef = doc(collection(db, 'notifications'));
+            batch.set(notifRef, {
+                tenantId,
+                type: 'invoice_created',
+                invoiceType: 'purchase',
+                invoiceNumber: String(invoiceNum),
+                invoiceId: purchaseRef.id,
+                amount: total,
+                createdById: appUser?.uid || '',
+                createdByName: appUser?.name || appUser?.email || 'مستخدم النظام',
+                createdByRole: appUser?.role || 'user',
+                recipientRole: 'admin',
+                createdAt: now,
+                read: false,
+                title: `🧾 فاتورة مشتريات جديدة #${invoiceNum}`,
+                body: `قام المستخدم (${appUser?.name || appUser?.email || 'المستخدم'}) بإنشاء فاتورة مشتريات بمبلغ ${total.toLocaleString('ar-SA')} ر.س`
+            });
             
             // Background optimistic commit
             batch.commit().catch(e => console.error("purchases sync error:", e));
@@ -978,7 +1007,7 @@ export default function Purchases() {
                             </div>
 
                             {/* 3. السعر والخصم والإجمالي في نفس السطر (Row Layout) */}
-                            <div className="bg-purple-50/60 dark:bg-slate-800/60 p-3.5 rounded-2xl border border-purple-100 dark:border-slate-700 space-y-3">
+                            <div className="p-3.5 space-y-3">
                                 <p className="text-[11px] font-black text-purple-900 dark:text-purple-300 border-b border-purple-100 dark:border-slate-700 pb-1.5">
                                     الملخص المالي للفاتورة
                                 </p>
@@ -988,7 +1017,7 @@ export default function Purchases() {
                                     <div className="bg-white dark:bg-slate-900 p-2.5 rounded-xl border border-gray-200 dark:border-slate-700 flex flex-col justify-center shadow-2xs">
                                         <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1">السعر (قبل الخصم)</span>
                                         <span className="text-xs font-black text-slate-900 dark:text-white truncate" dir="ltr">
-                                            {subtotal.toLocaleString()} ر.س
+                                            {subtotal.toLocaleString()}
                                         </span>
                                     </div>
 

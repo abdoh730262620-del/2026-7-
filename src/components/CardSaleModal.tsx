@@ -3,6 +3,7 @@ import { X, ShoppingBag, Plus, Trash2, CheckCircle2, User, Phone, Search, Credit
 import { collection, query, where, onSnapshot, addDoc, doc, updateDoc, runTransaction, getDocs } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { useAuthStore } from '../store/authStore';
+import { useUIStore } from '../store/uiStore';
 import { CardCategory, CardDistributor } from '../types/cardTypes';
 import SearchableSelect from './SearchableSelect';
 import { printReport } from '../lib/printHelper';
@@ -40,6 +41,16 @@ const DEFAULT_DENOMINATIONS = [
 
 export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess, onInvoiceCreated }: CardSaleModalProps) {
     const { appUser } = useAuthStore();
+    const { registerModal, unregisterModal } = useUIStore();
+
+    useEffect(() => {
+        if (isOpen) {
+            registerModal('card-sale');
+        } else {
+            unregisterModal('card-sale');
+        }
+        return () => unregisterModal('card-sale');
+    }, [isOpen, registerModal, unregisterModal]);
     const tenantId = 'single_store';
     const staffName = appUser?.name || appUser?.email || 'المستخدم الحياتي';
 
@@ -477,6 +488,24 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                             updatedAt: Date.now()
                         });
                     }
+
+                    // Manager Invoice Notification
+                    const notifRef = doc(collection(db, 'notifications'));
+                    transaction.set(notifRef, {
+                        tenantId,
+                        type: 'invoice_created',
+                        invoiceType: 'card_sale',
+                        invoiceNumber: String(nextInvoiceNumber),
+                        amount: netTotal,
+                        createdById: appUser?.uid || '',
+                        createdByName: staffName,
+                        createdByRole: appUser?.role || 'user',
+                        recipientRole: 'admin',
+                        createdAt: Date.now(),
+                        read: false,
+                        title: `🧾 فاتورة كروت شبكة جديدة #${nextInvoiceNumber}`,
+                        body: `قام المستخدم (${staffName}) ببيع كروت شبكة بمبلغ ${netTotal.toLocaleString('ar-SA')} ر.س`
+                    });
                 } else {
                     // For draft or cancelled, we only save the sale records themselves and do not update categories or balances or cashbox!
                     for (const item of cartItems) {
@@ -548,7 +577,7 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
     if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-md flex items-stretch justify-center p-0 animate-in fade-in duration-200 dir-rtl overflow-hidden" dir="rtl">
+        <div className="fixed inset-0 z-50 bg-black/20  flex items-stretch justify-center p-0 animate-in fade-in duration-200 dir-rtl overflow-hidden" dir="rtl">
             <div className="bg-white dark:bg-slate-900 w-full h-full max-w-full p-4 sm:p-6 shadow-none flex flex-col justify-between overflow-hidden space-y-4">
                 {/* Header */}
                 <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2 shrink-0">
@@ -590,11 +619,11 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                             )}
                         </div>
                         <div className="grid grid-cols-4 gap-2 sm:gap-2.5">
-                            {displayCategories.map((cat) => {
+                            {displayCategories.map((cat, catIdx) => {
                                 const isSelected = selectedCategoryName.trim() === cat.name.trim();
                                 return (
                                     <button
-                                        key={cat.name}
+                                        key={`${cat.id || cat.name || 'cat'}-${catIdx}`}
                                         type="button"
                                         onClick={() => handleSelectCategory(cat.name, saleType)}
                                         className={`p-2.5 sm:p-3 rounded-2xl border-2 text-center transition flex flex-col items-center justify-center relative cursor-pointer ${
@@ -685,8 +714,8 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                                     className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-2 text-xs font-black text-slate-900 dark:text-white outline-none focus:border-indigo-600"
                                 >
                                     <option value="" disabled>-- اختر موزعاً من القائمة --</option>
-                                    {distributors.map(dist => (
-                                        <option key={dist.id} value={dist.id}>
+                                    {distributors.map((dist, distIdx) => (
+                                        <option key={`${dist.id || 'dist'}-${distIdx}`} value={dist.id}>
                                             {dist.name} (عمولة: %{dist.commission || 0})
                                         </option>
                                     ))}
@@ -784,8 +813,8 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                                                 </td>
                                             </tr>
                                         ) : (
-                                            cartItems.map((item) => (
-                                                <tr key={item.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                                            cartItems.map((item, idx) => (
+                                                <tr key={`${item.id}-${idx}`} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
                                                     <td className="p-3 font-black text-slate-900 dark:text-white">{item.categoryName}</td>
                                                     <td className="p-3">
                                                         <span className={`px-2 py-0.5 rounded text-[10px] font-black ${
@@ -868,7 +897,7 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
 
             {/* CHECKOUT PAYMENT MODAL (نافذة الدفع للمبيعات - اختيار العميل من جدول الموزعين) */}
             {showPaymentModal && (
-                <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200 dir-rtl" dir="rtl">
+                <div className="fixed inset-0 z-50 bg-black/20  flex items-center justify-center p-4 animate-in fade-in duration-200 dir-rtl" dir="rtl">
                     <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-5 my-auto">
                         <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
                             <div className="flex items-center gap-3">
@@ -955,8 +984,11 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                                         type="button"
                                         onClick={() => {
                                             const now = new Date();
-                                            const name = `مبيعات يومية لشهر ${now.getMonth() + 1} ${now.getFullYear()}`;
-                                            const dist = distributors.find(d => d.name === name);
+                                            const month = new Date().getMonth() + 1;
+                                            const year = new Date().getFullYear();
+                                            const cardsName = `سجل مبيعات يومية كروت لشهر ${month} ${year}`;
+                                            const generalName = `مبيعات يومية لشهر ${month} ${year}`;
+                                            const dist = distributors.find(d => d.name === cardsName) || distributors.find(d => d.name === generalName);
                                             if (dist) {
                                                 handleSelectDistributor(dist);
                                             } else {
@@ -1089,7 +1121,7 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
             )}
             {/* NEGATIVE STOCK WARNING MODAL (إشعار البيع بالسالب في منتصف الشاشة مدعوم بالأيقونات) */}
             {negativeStockWarning?.isOpen && (
-                <div className="fixed inset-0 z-[60] bg-slate-900/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200 dir-rtl" dir="rtl">
+                <div className="fixed inset-0 z-[60] bg-black/20  flex items-center justify-center p-4 animate-in fade-in duration-200 dir-rtl" dir="rtl">
                     <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-md w-full p-6 shadow-2xl border border-rose-200 dark:border-rose-900/50 space-y-5 my-auto text-center">
                         <div className="w-16 h-16 rounded-3xl bg-rose-50 dark:bg-rose-950/80 text-rose-600 dark:text-rose-400 flex items-center justify-center mx-auto border-2 border-rose-200 dark:border-rose-800 shadow-lg shadow-rose-600/10">
                             <AlertTriangle size={34} />

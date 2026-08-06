@@ -68,27 +68,27 @@ export function AppStartupModal() {
   if (!isOpen || !appUser) return null;
 
   return (
-    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/65 backdrop-blur-sm animate-fadeIn" dir="rtl">
+    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-white/95 backdrop-blur-md animate-fadeIn" dir="rtl">
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl shadow-2xl max-w-md w-full overflow-hidden transition-all transform scale-100">
         
         {/* Header */}
-        <div className="relative bg-gradient-to-r from-blue-600 to-indigo-700 p-6 text-white text-center">
+        <div className="relative bg-white border-b border-slate-100 p-6 text-black text-center">
           <button 
             onClick={() => setIsOpen(false)}
-            className="absolute top-4 left-4 p-1.5 rounded-full bg-white/10 hover:bg-white/20 transition-colors text-white"
+            className="absolute top-4 left-4 p-1.5 rounded-full bg-slate-100 hover:bg-slate-200 transition-colors text-slate-500"
           >
             <X size={18} />
           </button>
           
-          <div className="w-14 h-14 bg-white/15 backdrop-blur-md rounded-2xl flex items-center justify-center mx-auto mb-3 border border-white/20 shadow-inner">
+          <div className="w-14 h-14 bg-blue-50 rounded-2xl flex items-center justify-center mx-auto mb-3 border border-blue-100 shadow-inner">
             {lowStockItems.length > 0 ? (
-              <ShieldAlert size={32} className="text-amber-300 animate-pulse" />
+              <ShieldAlert size={32} className="text-amber-500 animate-pulse" />
             ) : (
-              <Bell size={30} className="text-blue-100" />
+              <Bell size={30} className="text-blue-500" />
             )}
           </div>
-          <h2 className="text-lg font-black leading-tight">إشعار فتح التطبيق</h2>
-          <p className="text-xs font-medium text-blue-100 mt-1">مرحباً بك {appUser.name || ''} 👋</p>
+          <h2 className="text-lg font-black leading-tight text-slate-900">إشعار فتح التطبيق</h2>
+          <p className="text-xs font-semibold text-slate-500 mt-1">مرحباً بك {appUser.name || ''} 👋</p>
         </div>
 
         {/* Content Body */}

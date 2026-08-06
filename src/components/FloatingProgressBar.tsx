@@ -3,11 +3,13 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Minimize2, Maximize2 } from 'lucide-react';
 import ProgressBar from './ProgressBar';
 import { useProgressStore } from '../store/progressStore';
+import { useUIStore } from '../store/uiStore';
 
 export default function FloatingProgressBar() {
     const { show, isMinimized, label, processed, total, toggleMinimize } = useProgressStore();
+    const { hasActiveModal } = useUIStore();
 
-    if (!show) return null;
+    if (!show || hasActiveModal()) return null;
 
     if (isMinimized) {
         const percentage = total > 0 ? Math.min(100, (processed / total) * 100) : 0;
@@ -30,18 +32,18 @@ export default function FloatingProgressBar() {
 
     return (
         <AnimatePresence>
-            <div className="fixed inset-0 bg-black/50 backdrop-blur-xs z-[1999] flex items-center justify-center p-4">
+            <div className="fixed bottom-6 left-6 z-[1999] w-full max-w-sm pointer-events-none">
                 <motion.div 
-                    initial={{ opacity: 0, scale: 0.9 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.9 }}
-                    className="w-full max-w-md bg-white dark:bg-slate-900 shadow-2xl rounded-2xl p-6 border border-gray-200 dark:border-slate-800"
+                    initial={{ opacity: 0, y: 20, scale: 0.9 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 20, scale: 0.9 }}
+                    className="pointer-events-auto bg-white/95 dark:bg-slate-900/95 backdrop-blur-md shadow-2xl rounded-2xl p-5 border border-indigo-100 dark:border-indigo-900/40 ring-1 ring-black/5"
                     dir="rtl"
                 >
-                    <div className="flex justify-between items-center mb-4">
-                        <span className="text-base font-black text-gray-800 dark:text-gray-200">{label || 'جاري المعالجة'}</span>
-                        <button onClick={toggleMinimize} className="p-2 hover:bg-gray-100 dark:hover:bg-slate-800 rounded-full text-gray-500 dark:text-gray-400 group transition-all" title="تصغير إلى شريط علوي">
-                            <Minimize2 size={18} className="group-hover:scale-110 transition-transform" />
+                    <div className="flex justify-between items-center mb-3">
+                        <span className="text-sm font-black text-slate-800 dark:text-slate-200">{label || 'جاري المعالجة'}</span>
+                        <button onClick={toggleMinimize} className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-slate-500 dark:text-slate-400 group transition-all" title="تصغير إلى شريط علوي">
+                            <Minimize2 size={16} className="group-hover:scale-110 transition-transform" />
                         </button>
                     </div>
                     <ProgressBar processed={processed} total={total} />

@@ -84,7 +84,7 @@ export default function Quotations() {
 
     useEffect(() => {
         if (!appUser) return;
-        const tenantId = appUser.tenantId || (appUser.role === 'admin' ? appUser.uid : 'admin_initial');
+        const tenantId = appUser.tenantId || 'single_store';
 
         const qProducts = query(collection(db, 'products'), where('tenantId', '==', tenantId));
         const unsubProducts = onSnapshot(qProducts, (snapshot) => {
@@ -112,7 +112,7 @@ export default function Quotations() {
 
     useEffect(() => {
         if (!appUser) return;
-        const tenantId = appUser.tenantId || (appUser.role === 'admin' ? appUser.uid : 'admin_initial');
+        const tenantId = appUser.tenantId || 'single_store';
         const q = query(collection(db, 'quotations'), where('tenantId', '==', tenantId), orderBy('createdAt', 'desc'), limit(50));
         return onSnapshot(q, (snapshot) => {
             const list: Quotation[] = [];
@@ -169,7 +169,7 @@ export default function Quotations() {
         if (cart.length === 0 || !appUser) return;
         setIsSaving(true);
         try {
-            const tenantId = appUser.tenantId || (appUser.role === 'admin' ? appUser.uid : 'admin_initial');
+            const tenantId = appUser.tenantId || 'single_store';
 
             const existingNums = quotations
                 .map(q => parseInt((q.quotationNumber || '').replace(/\D/g, '')))
@@ -623,7 +623,7 @@ export default function Quotations() {
                             </div>
 
                             {/* 3. السعر والخصم والإجمالي في نفس السطر (Row Layout) */}
-                            <div className="bg-orange-50/60 dark:bg-slate-800/60 p-3.5 rounded-2xl border border-orange-100 dark:border-slate-700 space-y-3">
+                            <div className="p-3.5 space-y-3">
                                 <p className="text-[11px] font-black text-orange-900 dark:text-orange-300 border-b border-orange-100 dark:border-slate-700 pb-1.5">
                                     الملخص المالي للعرض
                                 </p>
@@ -633,7 +633,7 @@ export default function Quotations() {
                                     <div className="bg-white dark:bg-slate-900 p-2.5 rounded-xl border border-gray-200 dark:border-slate-700 flex flex-col justify-center shadow-2xs">
                                         <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1">السعر (قبل الخصم)</span>
                                         <span className="text-xs font-black text-slate-900 dark:text-white truncate" dir="ltr">
-                                            {subtotal.toLocaleString()} ر.س
+                                            {subtotal.toLocaleString()}
                                         </span>
                                     </div>
 

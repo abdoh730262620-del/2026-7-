@@ -179,7 +179,7 @@ export default function Users() {
     useEffect(() => {
         if (appUser?.role !== 'admin') return;
         
-        const currentTenantId = appUser?.tenantId || appUser?.uid || 'admin_initial';
+        const currentTenantId = appUser?.tenantId || 'single_store';
         const q = query(collection(db, 'users'), where('tenantId', '==', currentTenantId));
         const unsubscribe = onSnapshot(q, (snapshot) => {
             const list: UserData[] = [];
@@ -248,7 +248,7 @@ export default function Users() {
         setIsCreating(true);
         try {
             // Check if username already exists within this store's tenant
-            const currentTenantId = appUser?.tenantId || appUser?.uid || 'admin_initial';
+            const currentTenantId = appUser?.tenantId || 'single_store';
             const q = query(
                 collection(db, 'users'), 
                 where('tenantId', '==', currentTenantId),
@@ -341,10 +341,10 @@ export default function Users() {
                         {/* Avatar & Info */}
                         <div className="flex items-center gap-3 md:w-1/4">
                             <div className="w-10 h-10 rounded-xl bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 flex items-center justify-center font-black text-base shrink-0 border border-indigo-100/50 dark:border-indigo-900/20">
-                                {user.name.charAt(0).toUpperCase()}
+                                {user.name?.charAt(0).toUpperCase() || 'U'}
                             </div>
                             <div className="flex flex-col overflow-hidden leading-tight">
-                                <h3 className="font-bold text-sm md:text-base text-black dark:text-white truncate">{user.name}</h3>
+                                <h3 className="font-bold text-sm md:text-base text-black dark:text-white truncate">{user.name || 'مستخدم'}</h3>
                                 <p className="text-gray-500 dark:text-gray-400 text-xs font-mono truncate mt-0.5">{user.email}</p>
                             </div>
                         </div>

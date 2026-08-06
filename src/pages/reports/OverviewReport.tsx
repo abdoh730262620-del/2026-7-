@@ -67,7 +67,7 @@ export default function OverviewReport({ dateRange }: { dateRange: { startDate: 
 
         const appUser = useAuthStore.getState().appUser;
         if (!appUser) return;
-        const tenantId = appUser.tenantId || (appUser.role === 'admin' ? appUser.uid : 'admin_initial');
+        const tenantId = appUser.tenantId || 'single_store';
 
         const unsubSales = onSnapshot(query(collection(db, 'sales'), where('tenantId', '==', tenantId)), (snap) => {
             salesData = snap.docs.map(doc => doc.data());

@@ -22,7 +22,7 @@ export default function ExpensesReport({ dateRange }: { dateRange: { startDate: 
 
     useEffect(() => {
         if (!appUser) return;
-        const tenantId = appUser.tenantId || (appUser.role === 'admin' ? appUser.uid : 'admin_initial');
+        const tenantId = appUser.tenantId || 'single_store';
 
         // Fetch all unique accounts/categories from past expenses
         const fetchAccounts = async () => {
@@ -53,7 +53,7 @@ export default function ExpensesReport({ dateRange }: { dateRange: { startDate: 
 
     const runReport = async (reportId: string) => {
         if (!appUser) return;
-        const tenantId = appUser.tenantId || (appUser.role === 'admin' ? appUser.uid : 'admin_initial');
+        const tenantId = appUser.tenantId || 'single_store';
 
         setIsLoading(true);
         try {

@@ -53,7 +53,7 @@ export default function PartiesReport({ dateRange }: { dateRange: { startDate: s
 
     useEffect(() => {
         if (!useAuthStore.getState().appUser) return;
-        const tenantId = useAuthStore.getState().appUser?.tenantId || (useAuthStore.getState().appUser?.role === 'admin' ? useAuthStore.getState().appUser?.uid : 'admin_initial');
+        const tenantId = useAuthStore.getState().appUser?.tenantId || 'single_store';
 
         const unsubCust = onSnapshot(query(collection(db, 'customers'), where('tenantId', '==', tenantId)), snap => {
             setCustomers(snap.docs.map(d => ({id: d.id, ...d.data()})));
@@ -98,7 +98,7 @@ export default function PartiesReport({ dateRange }: { dateRange: { startDate: s
 
             const start = new Date(dateRange.startDate).getTime();
             const end = new Date(dateRange.endDate).getTime() + 86399999;
-            const tenantId = useAuthStore.getState().appUser?.tenantId || (useAuthStore.getState().appUser?.role === 'admin' ? useAuthStore.getState().appUser?.uid : 'admin_initial');
+            const tenantId = useAuthStore.getState().appUser?.tenantId || 'single_store';
             
             const salesSnap = await getDocs(query(collection(db, 'sales'), where('tenantId', '==', tenantId)));
             const purchSnap = await getDocs(query(collection(db, 'purchases'), where('tenantId', '==', tenantId)));

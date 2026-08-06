@@ -90,7 +90,7 @@ export default function AIInsights() {
     useEffect(() => {
         const appUser = useAuthStore.getState().appUser;
         if (!appUser) return;
-        const tenantId = appUser.tenantId || (appUser.role === 'admin' ? appUser.uid : 'admin_initial');
+        const tenantId = appUser.tenantId || 'single_store';
 
         const unsub = onSnapshot(query(collection(db, 'sales'), where('tenantId', '==', tenantId), orderBy('createdAt', 'desc')), (snap) => {
             const allSales: any[] = [];
@@ -160,7 +160,7 @@ export default function AIInsights() {
             
             try {
                 const appUser = useAuthStore.getState().appUser;
-                const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+                const tenantId = appUser?.tenantId || 'single_store';
                 const collectionName = type === 'customer' ? 'customers' : 'suppliers';
                 const snap = await getDocs(query(collection(db, collectionName), where('tenantId', '==', tenantId)));
                 setEntities(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
@@ -177,7 +177,7 @@ export default function AIInsights() {
             let collectionName = '';
             let reportTitle = '';
             const appUser = useAuthStore.getState().appUser;
-            const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+            const tenantId = appUser?.tenantId || 'single_store';
 
             if (q.includes('مبيعات') || q.includes('تقرير مبيعات') || q.includes('بيع')) {
                 collectionName = 'sales';
@@ -253,7 +253,7 @@ export default function AIInsights() {
         setTimeout(async () => {
             let fetchedData = [];
             const appUser = useAuthStore.getState().appUser;
-            const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+            const tenantId = appUser?.tenantId || 'single_store';
 
             const q = statementType === 'customer' 
                 ? query(collection(db, 'sales'), where('tenantId', '==', tenantId), where('customerId', '==', selectedEntityId)) 

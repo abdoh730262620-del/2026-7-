@@ -57,9 +57,8 @@ window.addEventListener('unhandledrejection', (event) => {
   addDiagnosticLog('error', '[UnhandledRejection] Promise Rejected', String(reason));
 });
 
-// UI Container for Floating Diagnostics
+// UI Container for Hidden System Diagnostics Overlay
 let overlayElement: HTMLDivElement | null = null;
-let toastElement: HTMLDivElement | null = null;
 
 function renderDiagnosticDOM() {
   if (uiInitialized || typeof document === 'undefined') return;
@@ -69,30 +68,7 @@ function renderDiagnosticDOM() {
   }
   uiInitialized = true;
 
-  // 1. Toast Notification Container (Top)
-  toastElement = document.createElement('div');
-  toastElement.id = '__diagnostic_toast__';
-  toastElement.style.cssText = `
-    position: fixed;
-    top: 12px;
-    left: 12px;
-    right: 12px;
-    z-index: 999999;
-    display: none;
-    background: #1e1b4b;
-    border: 1px solid #6366f1;
-    color: #f8fafc;
-    padding: 12px 16px;
-    border-radius: 12px;
-    box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5);
-    font-family: system-ui, -apple-system, sans-serif;
-    font-size: 13px;
-    direction: rtl;
-    text-align: right;
-  `;
-  document.body.appendChild(toastElement);
-
-  // 2. Full Modal Logs Viewer (Overlay)
+  // Full Modal Logs Viewer (Overlay - Hidden by default)
   overlayElement = document.createElement('div');
   overlayElement.id = '__diagnostic_overlay__';
   overlayElement.style.cssText = `
@@ -113,8 +89,8 @@ function renderDiagnosticDOM() {
   overlayElement.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;border-bottom:1px solid #334155;padding-bottom:10px;direction:rtl">
       <div style="display:flex;align-items:center;gap:8px">
-        <span style="background:#ef4444;color:#fff;font-size:11px;font-weight:bold;padding:2px 8px;border-radius:12px">تشخيص النظام</span>
-        <span style="font-weight:bold;font-size:14px;color:#f8fafc">سجل أخطاء التطبيق (Logs)</span>
+        <span style="background:#2563eb;color:#fff;font-size:11px;font-weight:bold;padding:2px 8px;border-radius:12px">تشخيص النظام</span>
+        <span style="font-weight:bold;font-size:14px;color:#f8fafc">سجل أخطاء وملفات النظام (Logs)</span>
       </div>
       <div style="display:flex;gap:8px">
         <button id="__diag_copy_btn__" style="background:#2563eb;color:#fff;border:none;padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer">نسخ السجلات</button>
@@ -126,36 +102,6 @@ function renderDiagnosticDOM() {
   `;
   document.body.appendChild(overlayElement);
 
-  // Floating Trigger Button (Bottom Left)
-  const triggerBtn = document.createElement('button');
-  triggerBtn.id = '__diag_trigger_btn__';
-  triggerBtn.style.cssText = `
-    position: fixed;
-    bottom: 16px;
-    left: 16px;
-    z-index: 999997;
-    background: #1e293b;
-    border: 1px solid #475569;
-    color: #38bdf8;
-    padding: 8px 12px;
-    border-radius: 20px;
-    font-size: 11px;
-    font-weight: bold;
-    cursor: pointer;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  `;
-  triggerBtn.innerHTML = `🩺 التشخيص (<span id="__diag_count__">0</span>)`;
-  triggerBtn.onclick = () => {
-    if (overlayElement) {
-      overlayElement.style.display = overlayElement.style.display === 'none' ? 'flex' : 'none';
-      refreshLogsInDOM();
-    }
-  };
-  document.body.appendChild(triggerBtn);
-
   // Setup button handlers
   document.getElementById('__diag_close_btn__')?.addEventListener('click', () => {
     if (overlayElement) overlayElement.style.display = 'none';
@@ -164,7 +110,6 @@ function renderDiagnosticDOM() {
   document.getElementById('__diag_clear_btn__')?.addEventListener('click', () => {
     diagnosticLogs.length = 0;
     refreshLogsInDOM();
-    updateTriggerCount();
   });
 
   document.getElementById('__diag_copy_btn__')?.addEventListener('click', () => {
@@ -177,15 +122,6 @@ function renderDiagnosticDOM() {
   });
 
   refreshLogsInDOM();
-}
-
-function updateTriggerCount() {
-  const countEl = document.getElementById('__diag_count__');
-  if (countEl) {
-    const errorCount = diagnosticLogs.filter(l => l.type === 'error').length;
-    countEl.textContent = String(errorCount || diagnosticLogs.length);
-    countEl.style.color = errorCount > 0 ? '#ef4444' : '#38bdf8';
-  }
 }
 
 function refreshLogsInDOM() {
@@ -207,38 +143,6 @@ function refreshLogsInDOM() {
 }
 
 function updateDiagnosticUI(entry: LogEntry) {
-  if (typeof document === 'undefined') return;
-  if (!uiInitialized) renderDiagnosticDOM();
-
-  updateTriggerCount();
-
-  // Show Toast if Error occurs
-  if (entry.type === 'error' && toastElement) {
-    toastElement.style.display = 'block';
-    toastElement.style.borderColor = '#ef4444';
-    toastElement.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
-        <div style="flex:1">
-          <div style="color:#f87171;font-weight:bold;margin-bottom:2px">⚠️ تنبيه تشخيص أخطاء التطبيق</div>
-          <div style="font-size:12px;color:#e2e8f0;max-height:40px;overflow:hidden;text-overflow:ellipsis">${escapeHtml(entry.message)}</div>
-        </div>
-        <button id="__toast_view_btn__" style="background:#2563eb;color:#fff;border:none;padding:6px 12px;border-radius:6px;font-size:11px;cursor:pointer;white-space:nowrap">عرض التفاصيل</button>
-      </div>
-    `;
-    document.getElementById('__toast_view_btn__')?.addEventListener('click', () => {
-      toastElement!.style.display = 'none';
-      if (overlayElement) {
-        overlayElement.style.display = 'flex';
-        refreshLogsInDOM();
-      }
-    });
-
-    // Auto dismiss toast after 8s
-    setTimeout(() => {
-      if (toastElement) toastElement.style.display = 'none';
-    }, 8000);
-  }
-
   if (overlayElement && overlayElement.style.display !== 'none') {
     refreshLogsInDOM();
   }
@@ -247,6 +151,15 @@ function updateDiagnosticUI(entry: LogEntry) {
 function escapeHtml(str: string) {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
+
+// Expose function globally for Settings page
+(window as any).openDiagnosticModal = () => {
+  renderDiagnosticDOM();
+  if (overlayElement) {
+    overlayElement.style.display = 'flex';
+    refreshLogsInDOM();
+  }
+};
 
 // Ensure DOM overlay is ready as early as possible
 if (typeof document !== 'undefined') {

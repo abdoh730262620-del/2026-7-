@@ -220,7 +220,7 @@ function deserializeValue(val: any): any {
 // Generate the Backup Object
 export async function generateBackupData(): Promise<BackupData | null> {
     const appUser = useAuthStore.getState().appUser;
-    const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+    const tenantId = appUser?.tenantId || 'single_store';
 
     try {
         const exportData: Record<string, any[]> = {};
@@ -303,7 +303,7 @@ export async function performBackup(destinations: Record<string, boolean>, email
 // Restore
 export async function restoreFromBackupData(backupData: BackupData): Promise<boolean> {
     const appUser = useAuthStore.getState().appUser;
-    const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+    const tenantId = appUser?.tenantId || 'single_store';
 
     try {
         const collectionsData = backupData.data;

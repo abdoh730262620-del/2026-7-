@@ -40,7 +40,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
         }
 
         const appUser = useAuthStore.getState().appUser;
-        const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+        const tenantId = appUser?.tenantId || 'single_store';
 
         // Professional multi-step progress bar integrated with real SyncManager
         try {

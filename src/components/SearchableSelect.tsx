@@ -51,14 +51,18 @@ export default function SearchableSelect({ options, value, onChange, placeholder
 
     // Handle click outside to close dropdown
     useEffect(() => {
-        const handleClickOutside = (e: MouseEvent) => {
+        const handleClickOutside = (e: Event) => {
             if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
                 setIsOpen(false);
                 setIsFocused(false);
             }
         };
         document.addEventListener('mousedown', handleClickOutside);
-        return () => document.removeEventListener('mousedown', handleClickOutside);
+        document.addEventListener('touchstart', handleClickOutside);
+        return () => {
+            document.removeEventListener('mousedown', handleClickOutside);
+            document.removeEventListener('touchstart', handleClickOutside);
+        };
     }, []);
 
     // Icons helper
@@ -196,7 +200,14 @@ export default function SearchableSelect({ options, value, onChange, placeholder
                         {/* Custom Name notice if user typed something not matching existing options */}
                         {typedText.trim() !== '' && !filteredOptions.some(o => o.label.toLowerCase() === typedText.toLowerCase()) && (
                             <div
-                                onClick={() => {
+                                onMouseDown={(e) => {
+                                    e.preventDefault();
+                                    onChange(typedText.trim());
+                                    setIsOpen(false);
+                                    setIsFocused(false);
+                                }}
+                                onTouchStart={(e) => {
+                                    e.preventDefault();
                                     onChange(typedText.trim());
                                     setIsOpen(false);
                                     setIsFocused(false);
@@ -227,16 +238,20 @@ export default function SearchableSelect({ options, value, onChange, placeholder
                                 لا يوجد اسم مطابقة في القائمة. يمكنك الاستمرار بكتابة الاسم الذي تريده.
                             </div>
                         ) : (
-                            filteredOptions.map(opt => {
+                            filteredOptions.map((opt, optIndex) => {
                                 const isSelected = value === opt.id || value === opt.label;
                                 const initials = getInitials(opt.label);
                                 const avatarGradient = getAvatarColor(opt.id);
 
                                 return (
                                     <div
-                                        key={opt.id}
+                                        key={`${opt.id || 'opt'}-${optIndex}`}
                                         onMouseDown={(e) => {
                                             e.preventDefault(); // Prevent input blur before click registers
+                                            handleOptionSelect(opt);
+                                        }}
+                                        onTouchStart={(e) => {
+                                            e.preventDefault(); // Prevent input blur and trigger selection immediately
                                             handleOptionSelect(opt);
                                         }}
                                         className={`p-2.5 rounded-xl border cursor-pointer flex items-center justify-between transition-all duration-150 ${

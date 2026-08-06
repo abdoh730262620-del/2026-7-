@@ -136,7 +136,7 @@ export default function Layout() {
             return;
         }
 
-        const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+        const tenantId = appUser?.tenantId || 'single_store';
         const q = query(collection(db, 'products'), where('tenantId', '==', tenantId));
         const unsubscribe = onSnapshot(q, (snapshot) => {
             let count = 0;

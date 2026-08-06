@@ -53,20 +53,33 @@ export default function Reports() {
 
     return (
         <div className="flex flex-col h-full bg-bg-main pb-4" dir="rtl">
-            <div className="flex items-center gap-4 mb-4 shrink-0">
-                {!activeReport ? (
-                    null
-                ) : (
-                    <>
-                        <button onClick={() => setActiveReport(null)} className="bg-white dark:bg-slate-800 p-2 rounded-xl text-black dark:text-gray-300 hover:bg-white transition">
-                            <ArrowLeft size={24} />
-                        </button>
-                        <h1 className="text-xl font-black text-text-main">تقرير {activeReportData?.label}</h1>
-                    </>
-                )}
+            <div className="flex items-center gap-4 mb-3 shrink-0">
+                <h1 className="text-xl font-black text-text-main flex items-center gap-2">
+                    <FileText className="text-blue-600" size={24} />
+                    <span>التقارير التفصيلية</span>
+                </h1>
             </div>
-            {/* Compact Global Date Filter */}
-            <div className="bg-card-bg p-3 sm:p-4 rounded-xl shadow-sm border border-border-main flex flex-wrap items-center gap-3 mb-4 shrink-0 transition-all duration-300">
+
+            {/* Compact Controls Panel: Selection + Date Filters */}
+            <div className="bg-card-bg p-3.5 rounded-2xl shadow-sm border border-border-main flex flex-wrap items-center gap-3 mb-4 shrink-0 transition-all duration-300">
+                {/* Custom Styled Select Dropdown (Like category list) */}
+                <div className="flex items-center gap-2 bg-bg-main p-1.5 rounded-xl border border-border-main shrink-0 w-full sm:w-auto sm:min-w-[240px]">
+                    <FileText size={16} className="text-blue-500 mr-1.5 shrink-0" />
+                    <select
+                        value={activeReport || ''}
+                        onChange={(e) => setActiveReport(e.target.value || null)}
+                        className="bg-transparent text-text-main font-black text-xs outline-none w-full cursor-pointer pr-1"
+                    >
+                        <option value="">📊 جميع التقارير (اختر للتصفح سريعاً)</option>
+                        {reports.map((r) => (
+                            <option key={r.id} value={r.id}>
+                                {r.label}
+                            </option>
+                        ))}
+                    </select>
+                </div>
+
+                {/* Date Filter Row */}
                 <div className="flex items-center gap-2 text-[10px] sm:text-xs font-black">
                     <Clock size={14} className="text-blue-500" />
                     <span className="text-text-main/50 hidden sm:inline">فلترة الفترة:</span>
@@ -88,7 +101,7 @@ export default function Reports() {
                         className="bg-transparent border-none outline-none font-black text-text-main text-[10px] sm:text-xs py-1 px-2"
                     />
                 </div>
-                <div className="flex-1 flex justify-end gap-2 shrink-0">
+                <div className="flex-1 flex justify-end gap-1.5 shrink-0">
                     <button 
                         onClick={() => setDateRange({
                             startDate: new Date(new Date().setDate(new Date().getDate() - 7)).toISOString().substring(0, 10),
@@ -110,70 +123,53 @@ export default function Reports() {
                 </div>
             </div>
             
-            <div className="flex-1 overflow-y-auto no-scrollbar">
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-3 pb-2">
-                    {reports.map(report => {
-                        const Icon = report.icon;
-                        return (
-                            <button
-                                key={report.id}
-                                onClick={() => setActiveReport(report.id)}
-                                className="bg-card-bg p-3 sm:p-4 rounded-xl border border-border-main hover:border-blue-500 hover:shadow-md transition-all flex items-center gap-3 md:gap-4 group text-right focus:outline-none"
-                            >
-                                <div className="p-2.5 sm:p-3 bg-white dark:bg-slate-800 dark:bg-gray-800 rounded-xl group-hover:bg-blue-600 transition-all duration-300 shrink-0">
-                                    <Icon size={20} className="text-blue-600 dark:text-gray-400 group-hover:text-white transition-colors" />
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                    <h3 className="font-bold sm:font-black text-sm md:text-base text-text-main mb-1 truncate">{report.label}</h3>
-                                    <p className="text-[10px] sm:text-xs text-text-main/60 font-bold truncate leading-relaxed">{report.desc}</p>
-                                </div>
-                            </button>
-                        )
-                    })}
-                </div>
-            </div>
-
-            {/* Report Overlay Modal */}
-            {activeReport && activeReportData && (
-                <div className="fixed inset-0 z-[100] flex flex-col bg-bg-main/95 backdrop-blur-md pb-safe">
-                    <div className="bg-card-bg border-b border-border-main p-3 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0 shadow-sm z-10 sticky top-0">
-                        <div className="flex flex-wrap items-center gap-3 sm:gap-4">
-                            <h2 className="font-black text-lg md:text-xl text-text-main pr-1 shrink-0">{activeReportData.label}</h2>
-                            <div className="bg-bg-main rounded-xl border border-border-main flex items-center shrink-0 h-10 px-2 shadow-inner">
-                                <input 
-                                    type="date" 
-                                    name="startDate"
-                                    value={dateRange.startDate} 
-                                    onChange={handleDateChange}
-                                    className="bg-transparent border-none outline-none font-bold text-text-main text-xs sm:text-sm h-full px-2"
-                                />
-                                <span className="text-text-main/50 mx-1 font-bold text-xs sm:text-sm">-</span>
-                                <input 
-                                    type="date" 
-                                    name="endDate"
-                                    value={dateRange.endDate} 
-                                    onChange={handleDateChange}
-                                    className="bg-transparent border-none outline-none font-bold text-text-main text-xs sm:text-sm h-full px-2"
-                                />
+            <div className="flex-1 overflow-y-auto no-scrollbar flex flex-col">
+                {!activeReport ? (
+                    /* Show default reports grid */
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-3 pb-2">
+                        {reports.map(report => {
+                            const Icon = report.icon;
+                            return (
+                                <button
+                                    key={report.id}
+                                    onClick={() => setActiveReport(report.id)}
+                                    className="bg-card-bg p-3.5 sm:p-4 rounded-xl border border-border-main hover:border-blue-500 hover:shadow-md transition-all flex items-center gap-3 md:gap-4 group text-right focus:outline-none"
+                                >
+                                    <div className="p-2.5 sm:p-3 bg-white dark:bg-slate-800 dark:bg-gray-800 rounded-xl group-hover:bg-blue-600 transition-all duration-300 shrink-0">
+                                        <Icon size={20} className="text-blue-600 dark:text-gray-400 group-hover:text-white transition-colors" />
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                        <h3 className="font-bold sm:font-black text-sm md:text-base text-text-main mb-1 truncate">{report.label}</h3>
+                                        <p className="text-[10px] sm:text-xs text-text-main/60 font-bold truncate leading-relaxed">{report.desc}</p>
+                                    </div>
+                                </button>
+                            )
+                        })}
+                    </div>
+                ) : (
+                    /* Show selected report inline, integrated with the main screen view */
+                    <div className="flex-1 overflow-hidden w-full flex flex-col bg-card-bg border border-border-main rounded-2xl p-3 sm:p-4 shadow-sm animate-fadeIn">
+                        <div className="flex items-center justify-between border-b border-border-main pb-3 mb-4 shrink-0">
+                            <div className="flex items-center gap-2">
+                                <span className="w-2.5 h-2.5 rounded-full bg-blue-600"></span>
+                                <h2 className="font-black text-sm sm:text-base text-text-main">
+                                    معاينة تقرير: {activeReportData?.label}
+                                </h2>
                             </div>
+                            <button 
+                                onClick={() => setActiveReport(null)}
+                                className="flex items-center justify-center gap-1.5 px-3 py-1.5 bg-red-50 text-red-650 hover:bg-red-100 dark:bg-red-950/20 dark:text-red-400 rounded-xl transition-all shrink-0 font-black text-xs"
+                            >
+                                <X size={14} />
+                                <span>إغلاق التقرير</span>
+                            </button>
                         </div>
-
-                        <button 
-                            onClick={() => setActiveReport(null)}
-                            className="flex items-center justify-center gap-2 px-4 py-2 bg-red-650 hover:bg-red-700 active:scale-[0.98] text-white rounded-xl transition-all shrink-0 font-black text-sm shadow-md shadow-red-200 dark:shadow-none"
-                            title="الخروج من معاينة التقرير"
-                        >
-                            <X size={18} strokeWidth={2.5} />
-                            <span className="hidden sm:inline">خروج من المعاينة</span>
-                            <span className="sm:hidden">خروج</span>
-                        </button>
+                        <div className="flex-1 overflow-y-auto no-scrollbar">
+                            {renderReport()}
+                        </div>
                     </div>
-                    
-                    <div className="flex-1 overflow-hidden w-full flex flex-col">
-                        {renderReport()}
-                    </div>
-                </div>
-            )}
+                )}
+            </div>
         </div>
     );
 }

@@ -20,47 +20,42 @@ export default function ImportMapper({ isOpen, onClose, onImport, headers, rows,
     // Maps system field key -> Excel header
     const [mapping, setMapping] = useState<Record<string, string>>({});
 
-    // Auto-map based on common names if possible
+    // Auto-map based on common names
     useEffect(() => {
         if (isOpen && headers.length > 0) {
             const autoMap: Record<string, string> = {};
-            fields.forEach(field => {
-                // Determine index-based position matching (First = barcode, Second = name, Third = price, Fourth = cost, Fifth = quantity)
-                if (field.key === 'barcode' && headers[0]) {
-                    autoMap[field.key] = headers[0];
-                } else if (field.key === 'name' && headers[1]) {
-                    autoMap[field.key] = headers[1];
-                } else if (field.key === 'price' && headers[2]) {
-                    autoMap[field.key] = headers[2];
-                } else if (field.key === 'cost' && headers[3]) {
-                    autoMap[field.key] = headers[3];
-                } else if (field.key === 'quantity' && headers[4]) {
-                    autoMap[field.key] = headers[4];
-                } else {
-                    const possibleMatches = [
-                        field.label, 
-                        field.key, 
-                        field.label.split(' ')[0],
-                        // adding possible arabic matches
-                        field.key === 'name' ? 'الاسم' : '',
-                        field.key === 'name' ? 'اسم' : '',
-                        field.key === 'barcode' ? 'الباركود' : '',
-                        field.key === 'price' ? 'السعر' : '',
-                        field.key === 'cost' ? 'التكلفة' : '',
-                        field.key === 'quantity' ? 'الكمية' : '',
-                        field.key === 'category' ? 'التصنيف' : '',
-                        field.key === 'phone' ? 'الهاتف' : '',
-                        field.key === 'phone' ? 'رقم الهاتف' : '',
-                        field.key === 'address' ? 'العنوان' : '',
-                        field.key === 'balance' ? 'الرصيد' : ''
-                    ].map(s => s?.toLowerCase());
+            const usedHeaders = new Set<string>();
 
-                    const match = headers.find(h => possibleMatches.includes(h.toLowerCase().trim()));
-                    if (match) {
-                        autoMap[field.key] = match;
-                    }
+            const FIELD_KEYWORDS: Record<string, string[]> = {
+                barcode: ['رقم المنتج', 'الباركود', 'باركود', 'كود', 'الكود', 'barcode', 'code', 'sku', 'upc', 'id'],
+                name: ['اسم المنتج', 'اسم الصنف', 'اسم السلعة', 'الاسم', 'اسم', 'منتج', 'اسم العميل', 'اسم المورد', 'name', 'product name', 'item name', 'product', 'title'],
+                price: ['سعر البيع', 'السعر', 'سعر', 'سعر المنتج', 'سعر المفرد', 'price', 'unit price', 'sell price', 'rate', 'selling price'],
+                cost: ['سعر الشراء', 'التكلفة', 'تكلفة', 'سعر التكلفة', 'cost', 'buy price', 'purchase price', 'cost price'],
+                quantity: ['الكمية', 'كمية', 'العدد', 'عدد', 'الرصيد', 'المخزون', 'quantity', 'qty', 'stock', 'count'],
+                category: ['التصنيف', 'تصنيف', 'الفئة', 'فئة', 'القسم', 'قسم', 'المجموعة', 'category', 'cat', 'group'],
+                expiryDate: ['تاريخ الانتهاء', 'انهاء', 'صلاحية', 'تاريخ الصلاحية', 'تاريخ انقضاء', 'expiry', 'exp date', 'expiry date', 'exp'],
+                phone: ['رقم الهاتف', 'الهاتف', 'جوال', 'رقم الجوال', 'هاتف', 'موبايل', 'phone', 'mobile', 'tel'],
+                address: ['العنوان', 'عنوان', 'الموقع', 'address', 'location'],
+                balance: ['الرصيد الافتتاحي', 'الرصيد', 'رصيد', 'balance', 'opening balance']
+            };
+
+            // First pass: match exact label or keywords
+            fields.forEach(field => {
+                const key = field.key;
+                const keywords = [field.label, key, ...(FIELD_KEYWORDS[key] || [])].map(s => s.toLowerCase().trim());
+                
+                const matchedHeader = headers.find(h => {
+                    if (usedHeaders.has(h)) return false;
+                    const hClean = h.toLowerCase().trim();
+                    return keywords.some(kw => hClean === kw || hClean.includes(kw));
+                });
+
+                if (matchedHeader) {
+                    autoMap[key] = matchedHeader;
+                    usedHeaders.add(matchedHeader);
                 }
             });
+
             setMapping(autoMap);
         }
     }, [isOpen, headers, fields]);
@@ -90,8 +85,8 @@ export default function ImportMapper({ isOpen, onClose, onImport, headers, rows,
     };
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 overflow-y-auto">
-            <div className="bg-white rounded-2xl w-full max-w-3xl shadow-xl flex flex-col my-8">
+        <div className="fixed inset-0 z-[250] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm overflow-y-auto" dir="rtl">
+            <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-3xl shadow-2xl flex flex-col my-8 border border-gray-100 dark:border-slate-800">
                 <div className="p-4 md:p-6 border-b border-gray-100 flex justify-between items-center bg-white dark:bg-slate-900 rounded-t-2xl">
                     <div>
                         <h2 className="text-base md:text-xl font-bold text-black dark:text-white">مطابقة حقول البيانات</h2>

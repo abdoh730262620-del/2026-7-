@@ -24,7 +24,7 @@ export default function Logs() {
     useEffect(() => {
         if (appUser?.role !== 'admin') return;
 
-        const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+        const tenantId = appUser?.tenantId || 'single_store';
         const q = query(
             collection(db, 'logs'), 
             where('tenantId', '==', tenantId),

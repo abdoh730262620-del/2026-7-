@@ -50,7 +50,7 @@ export default function Vouchers() {
 
     useEffect(() => {
         if (!appUser?.uid) return;
-        const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+        const tenantId = appUser?.tenantId || 'single_store';
 
         // Load vouchers
         const qV = query(
@@ -111,7 +111,7 @@ export default function Vouchers() {
 
         setIsSubmitting(true);
         try {
-            const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+            const tenantId = appUser?.tenantId || 'single_store';
             const batch = writeBatch(db);
             const now = Date.now();
             const partyRef = doc(db, partyType === 'customer' ? 'customers' : 'suppliers', partyId);

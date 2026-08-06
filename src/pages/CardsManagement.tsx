@@ -3,7 +3,7 @@ import {
     Layers, Plus, Users, ArrowRight, Trash2, Edit, CreditCard, 
     FileText, Calendar, DollarSign, Receipt, Printer, CheckCircle2, 
     X, Sparkles, TrendingUp, Wallet, ArrowUpRight, ArrowDownLeft, Search, UserCheck,
-    Share2, MessageSquare, Send, Truck
+    Share2, MessageSquare, Send, Truck, ChevronDown, ChevronUp, ShoppingBag
 } from 'lucide-react';
 import { collection, query, where, onSnapshot, doc, addDoc as firestoreAddDoc, updateDoc as firestoreUpdateDoc, deleteDoc as firestoreDeleteDoc, runTransaction } from 'firebase/firestore';
 
@@ -25,6 +25,7 @@ const deleteDoc = (ref: any) => safeWrite(firestoreDeleteDoc(ref));
 
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { useAuthStore } from '../store/authStore';
+import { useUIStore } from '../store/uiStore';
 import { CardCategory, CardDistributor, CardStockLog, CardSale, CardVoucher, CardCashboxEntry, CardSupplier, CardPurchase, CardPurchaseVoucher } from '../types/cardTypes';
 import { printReport, printInvoice } from '../lib/printHelper';
 import CardSaleModal from '../components/CardSaleModal';
@@ -32,11 +33,15 @@ import CardPurchaseModal from '../components/CardPurchaseModal';
 import SearchableSelect from '../components/SearchableSelect';
 import { CardInvoiceActionModal } from '../components/CardInvoiceActionModal';
 import { InvoicePdfInput } from '../lib/pdfHelper';
+import { CardSalesSection } from '../components/CardSalesSection';
+import { CardPurchasesSection } from '../components/CardPurchasesSection';
 
 
 
 export default function CardsManagement() {
     const { appUser, hasPermission } = useAuthStore();
+    const { registerModal, unregisterModal } = useUIStore();
+
     const tenantId = 'single_store';
 
     // Active Section View: null (Main 6 Squares Grid) OR 'add_stock' | 'categories' | 'distributors' | 'monthly_sales' | 'sales_cashbox' | 'vouchers'
@@ -68,6 +73,8 @@ export default function CardsManagement() {
         if (secId === 'distributors') return 'cards_distributors';
         if (secId === 'sellers') return 'cards_sellers';
         if (secId === 'monthly_sales') return 'cards_sales_report';
+        if (secId === 'card_sales_section') return 'cards_sales_report';
+        if (secId === 'card_purchases_section') return 'cards_stock';
         if (secId === 'sales_cashbox') return 'cards_cashbox';
         if (secId === 'vouchers') return 'cards_vouchers';
         return 'cards';
@@ -182,6 +189,39 @@ export default function CardsManagement() {
     // State for newly saved cards invoice action (print/share) modal
     const [actionModalOpen, setActionModalOpen] = useState(false);
     const [actionModalInvoice, setActionModalInvoice] = useState<InvoicePdfInput | null>(null);
+
+    // Sellers state variables
+    const [sellersActiveTab, setSellersActiveTab] = useState<'by_seller' | 'by_day'>('by_seller');
+    const [expandedDays, setExpandedDays] = useState<string[]>([]);
+    const [sellersSearchQuery, setSellersSearchQuery] = useState('');
+
+    // Register active modals in UI Store to prevent interference
+    useEffect(() => {
+        const activeCount = [
+            isCategoryModalOpen,
+            isStockModalOpen,
+            isSupplierModalOpen,
+            isPurchaseVoucherModalOpen,
+            isDistributorModalOpen,
+            isVoucherModalOpen,
+            isCardPurchaseModalOpen,
+            isCashboxModalOpen,
+            actionModalOpen,
+            isShareModalOpen,
+            saleModalCategory !== null
+        ].filter(Boolean).length;
+
+        if (activeCount > 0) {
+            registerModal('cards-mgmt-active');
+        } else {
+            unregisterModal('cards-mgmt-active');
+        }
+        return () => unregisterModal('cards-mgmt-active');
+    }, [
+        isCategoryModalOpen, isStockModalOpen, isSupplierModalOpen, isPurchaseVoucherModalOpen,
+        isDistributorModalOpen, isVoucherModalOpen, isCardPurchaseModalOpen, isCashboxModalOpen,
+        actionModalOpen, isShareModalOpen, saleModalCategory, registerModal, unregisterModal
+    ]);
 
     // Function to handle sharing distributor details and account ledger
     const handleShareClick = (
@@ -1165,6 +1205,28 @@ export default function CardsManagement() {
             lightBg: 'bg-indigo-50 dark:bg-indigo-950/60',
             textColor: 'text-indigo-600 dark:text-indigo-400',
             borderColor: 'border-indigo-100 dark:border-indigo-900/50',
+            visible: getSecPermission('cards_stock', 'view')
+        },
+        {
+            id: 'card_sales_section',
+            title: 'المبيعات',
+            subtitle: 'عرض فواتير المبيعات الفردية والـ PDF',
+            icon: TrendingUp,
+            color: 'bg-emerald-600',
+            lightBg: 'bg-emerald-50 dark:bg-emerald-950/60',
+            textColor: 'text-emerald-600 dark:text-emerald-400',
+            borderColor: 'border-emerald-100 dark:border-emerald-900/50',
+            visible: getSecPermission('cards_sales_report', 'view')
+        },
+        {
+            id: 'card_purchases_section',
+            title: 'المشتريات',
+            subtitle: 'عرض فواتير المشتريات الفردية والـ PDF',
+            icon: ShoppingBag,
+            color: 'bg-blue-600',
+            lightBg: 'bg-blue-50 dark:bg-blue-950/60',
+            textColor: 'text-blue-600 dark:text-blue-400',
+            borderColor: 'border-blue-100 dark:border-blue-900/50',
             visible: getSecPermission('cards_stock', 'view')
         },
         {
@@ -2501,101 +2563,351 @@ export default function CardsManagement() {
             {/* SECTION: البائعين (Sellers) */}
             {activeSection === 'sellers' && (() => {
                 const retailSales = sales.filter(s => s.saleType === 'retail' && (s.status === 'completed' || !s.status));
-                const sellersMap = new Map<string, { userName: string; count: number; totalSales: number; commission: number }>();
                 
+                // 1. Calculate Seller Summaries
+                const sellersMap = new Map<string, { userName: string; count: number; totalSales: number; commission: number }>();
                 retailSales.forEach(sale => {
                     const name = sale.userName?.trim() || 'بائع مجهول';
-                    const amount = sale.totalAmount || sale.totalAmount || 0;
+                    const amount = sale.netTotal || sale.totalAmount || 0;
                     const current = sellersMap.get(name) || { userName: name, count: 0, totalSales: 0, commission: 0 };
                     current.count += sale.quantity || 0;
                     current.totalSales += amount;
-                    current.commission = current.totalSales * 0.10;
+                    current.commission = current.totalSales * 0.10; // 10% commission
                     sellersMap.set(name, current);
                 });
-
                 const sellersList = Array.from(sellersMap.values());
+
+                // 2. Calculate Daily Summaries
+                const dailySalesMap = new Map<string, {
+                    date: string;
+                    count: number;
+                    totalSales: number;
+                    commission: number;
+                    sellers: {
+                        [sellerName: string]: {
+                            count: number;
+                            totalSales: number;
+                            commission: number;
+                        }
+                    }
+                }>();
+
+                retailSales.forEach(sale => {
+                    const dateStr = sale.date || (sale.dateTime ? sale.dateTime.split(' ')[0] : '') || 'تاريخ غير محدد';
+                    const name = sale.userName?.trim() || 'بائع مجهول';
+                    const amount = sale.netTotal || sale.totalAmount || 0;
+                    
+                    const currentDay = dailySalesMap.get(dateStr) || {
+                        date: dateStr,
+                        count: 0,
+                        totalSales: 0,
+                        commission: 0,
+                        sellers: {}
+                    };
+                    
+                    currentDay.count += sale.quantity || 0;
+                    currentDay.totalSales += amount;
+                    currentDay.commission = currentDay.totalSales * 0.10;
+                    
+                    if (!currentDay.sellers[name]) {
+                        currentDay.sellers[name] = { count: 0, totalSales: 0, commission: 0 };
+                    }
+                    currentDay.sellers[name].count += sale.quantity || 0;
+                    currentDay.sellers[name].totalSales += amount;
+                    currentDay.sellers[name].commission = currentDay.sellers[name].totalSales * 0.10;
+                    
+                    dailySalesMap.set(dateStr, currentDay);
+                });
+
+                const dailySalesList = Array.from(dailySalesMap.values()).sort((a, b) => b.date.localeCompare(a.date));
+
+                // Totals
                 const grandRetailSales = sellersList.reduce((sum, s) => sum + s.totalSales, 0);
                 const grandCommission = sellersList.reduce((sum, s) => sum + s.commission, 0);
+                const grandQty = sellersList.reduce((sum, s) => sum + s.count, 0);
+
+                // Filters based on search query
+                const filteredSellersList = sellersList.filter(s => 
+                    s.userName.toLowerCase().includes(sellersSearchQuery.toLowerCase())
+                );
+
+                const filteredDailyList = dailySalesList.filter(d => 
+                    d.date.includes(sellersSearchQuery) || 
+                    Object.keys(d.sellers).some(name => name.toLowerCase().includes(sellersSearchQuery.toLowerCase()))
+                );
+
+                const toggleDay = (dateStr: string) => {
+                    setExpandedDays(prev => 
+                        prev.includes(dateStr) ? prev.filter(d => d !== dateStr) : [...prev, dateStr]
+                    );
+                };
+
+                const handlePrintSellersReport = () => {
+                    if (sellersActiveTab === 'by_seller') {
+                        const title = 'تقرير عمولات البائعين لكروت التجزئة (10%)';
+                        const headers = ['اسم البائع', 'عدد الكروت المباعة', 'إجمالي مبيعات التجزئة', 'العمولة المستحقة (10%)'];
+                        const data = filteredSellersList.map(s => [
+                            s.userName,
+                            `${s.count} كارت`,
+                            `${s.totalSales.toFixed(2)} ريال`,
+                            `${s.commission.toFixed(2)} ريال`
+                        ]);
+                        data.push([
+                            'الإجمالي العام',
+                            `${grandQty} كارت`,
+                            `${grandRetailSales.toFixed(2)} ريال`,
+                            `${grandCommission.toFixed(2)} ريال`
+                        ]);
+                        printReport(title, headers, data);
+                    } else {
+                        const title = 'التقرير اليومي لعمولات كروت التجزئة (10%)';
+                        const headers = ['التاريخ', 'عدد الكروت', 'إجمالي المبيعات اليومية', 'العمولة اليومية (10%)'];
+                        const data = filteredDailyList.map(d => [
+                            d.date,
+                            `${d.count} كارت`,
+                            `${d.totalSales.toFixed(2)} ريال`,
+                            `${d.commission.toFixed(2)} ريال`
+                        ]);
+                        data.push([
+                            'الإجمالي العام',
+                            `${grandQty} كارت`,
+                            `${grandRetailSales.toFixed(2)} ريال`,
+                            `${grandCommission.toFixed(2)} ريال`
+                        ]);
+                        printReport(title, headers, data);
+                    }
+                };
 
                 return (
-                    <div className="space-y-6 animate-in fade-in duration-200">
-                        <div className="bg-white dark:bg-slate-900 p-4 sm:p-5 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between gap-3">
-                            <h2 className="text-lg font-black text-slate-900 dark:text-white">سجل البائعين وعمولات التجزئة (10%)</h2>
+                    <div className="space-y-6 animate-in fade-in duration-200 text-right dir-rtl" dir="rtl">
+                        {/* Header Panel */}
+                        <div className="bg-white dark:bg-slate-900 p-4 sm:p-5 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                            <div>
+                                <h2 className="text-lg font-black text-slate-900 dark:text-white flex items-center gap-2 font-display">
+                                    <Sparkles className="text-teal-600 dark:text-teal-400 animate-pulse" size={20} />
+                                    <span>تقرير عمولات بائعي كروت التجزئة</span>
+                                </h2>
+                                <p className="text-xs font-bold text-slate-400 mt-1">عرض وتحليل مبيعات البائعين باليوم وبالاسم والعمولة المستحقة (%10)</p>
+                            </div>
+                            
+                            <button
+                                onClick={handlePrintSellersReport}
+                                className="px-5 py-2.5 bg-slate-900 dark:bg-slate-800 hover:bg-slate-800 dark:hover:bg-slate-700 active:scale-95 text-white font-black text-xs rounded-2xl shadow-lg flex items-center gap-2 transition"
+                            >
+                                <Printer size={16} />
+                                <span>طباعة التقرير</span>
+                            </button>
                         </div>
 
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                            <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center gap-3">
-                                <div className="w-10 h-10 rounded-xl bg-teal-50 dark:bg-teal-950/60 text-teal-600 dark:text-teal-400 flex items-center justify-center font-black">
-                                    <UserCheck size={20} />
+                        {/* Stats Dashboard */}
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                            <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center gap-4 hover:shadow-md transition">
+                                <div className="w-12 h-12 rounded-2xl bg-teal-50 dark:bg-teal-950/60 text-teal-600 dark:text-teal-400 flex items-center justify-center border border-teal-100 dark:border-teal-900/50">
+                                    <UserCheck size={24} />
                                 </div>
                                 <div>
-                                    <span className="text-[10px] font-black text-slate-400">إجمالي البائعين</span>
-                                    <div className="text-base font-black text-slate-900 dark:text-white">{sellersList.length} بائع</div>
+                                    <span className="text-[10px] font-black text-slate-400">إجمالي البائعين النشطين</span>
+                                    <div className="text-lg font-black text-slate-900 dark:text-white">{sellersList.length} بائع</div>
                                 </div>
                             </div>
 
-                            <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center gap-3">
-                                <div className="w-10 h-10 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center font-black">
-                                    <DollarSign size={20} />
+                            <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center gap-4 hover:shadow-md transition">
+                                <div className="w-12 h-12 rounded-2xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center border border-emerald-100 dark:border-emerald-900/50">
+                                    <DollarSign size={24} />
                                 </div>
                                 <div>
                                     <span className="text-[10px] font-black text-slate-400">إجمالي مبيعات التجزئة</span>
-                                    <div className="text-base font-black text-emerald-600 dark:text-emerald-400">{grandRetailSales.toFixed(2)} ريال</div>
+                                    <div className="text-lg font-black text-emerald-600 dark:text-emerald-400">{grandRetailSales.toFixed(2)} ريال</div>
                                 </div>
                             </div>
 
-                            <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center gap-3">
-                                <div className="w-10 h-10 rounded-xl bg-purple-50 dark:bg-purple-950/60 text-purple-600 dark:text-purple-400 flex items-center justify-center font-black">
-                                    <Sparkles size={20} />
+                            <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center gap-4 hover:shadow-md transition">
+                                <div className="w-12 h-12 rounded-2xl bg-purple-50 dark:bg-purple-950/60 text-purple-600 dark:text-purple-400 flex items-center justify-center border border-purple-100 dark:border-purple-900/50">
+                                    <Sparkles size={24} />
                                 </div>
                                 <div>
-                                    <span className="text-[10px] font-black text-slate-400">إجمالي عمولات البائعين (10%)</span>
-                                    <div className="text-base font-black text-purple-600 dark:text-purple-400">{grandCommission.toFixed(2)} ريال</div>
+                                    <span className="text-[10px] font-black text-slate-400">إجمالي العمولات المستحقة (10%)</span>
+                                    <div className="text-lg font-black text-purple-600 dark:text-purple-400">{grandCommission.toFixed(2)} ريال</div>
                                 </div>
                             </div>
                         </div>
 
-                        <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
-                            <div className="overflow-x-auto">
-                                <table className="w-full text-right text-xs">
-                                    <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-400 font-black border-b border-slate-200 dark:border-slate-800">
-                                        <tr>
-                                            <th className="p-4">اسم البائع</th>
-                                            <th className="p-4 text-center">عدد الكروت المباعة (تجزئة)</th>
-                                            <th className="p-4 text-left">إجمالي مبيعات التجزئة</th>
-                                            <th className="p-4 text-left">نسبة العمولة (10%)</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-bold text-slate-800 dark:text-slate-200">
-                                        {sellersList.length === 0 ? (
-                                            <tr>
-                                                <td colSpan={4} className="p-8 text-center text-slate-400 font-bold">
-                                                    لا توجد مبيعات تجزئة مسجلة للبائعين حتى الآن.
-                                                </td>
-                                            </tr>
-                                        ) : (
-                                            sellersList.map((seller) => (
-                                                <tr key={seller.userName} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                                                    <td className="p-4 font-black flex items-center gap-2">
-                                                        <div className="w-8 h-8 rounded-full bg-teal-50 dark:bg-teal-950/60 text-teal-600 dark:text-teal-400 flex items-center justify-center font-black text-xs">
-                                                            <UserCheck size={14} />
-                                                        </div>
-                                                        <span>{seller.userName}</span>
-                                                    </td>
-                                                    <td className="p-4 text-center font-black text-indigo-600 dark:text-indigo-400">{seller.count} كارت</td>
-                                                    <td className="p-4 text-left font-black text-emerald-600 dark:text-emerald-400">{seller.totalSales.toFixed(2)} ريال</td>
-                                                    <td className="p-4 text-left">
-                                                        <span className="bg-purple-50 dark:bg-purple-950/70 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800 px-3 py-1 rounded-xl font-black text-xs">
-                                                            {seller.commission.toFixed(2)} ريال (10%)
-                                                        </span>
-                                                    </td>
-                                                </tr>
-                                            ))
-                                        )}
-                                    </tbody>
-                                </table>
+                        {/* Tab Switcher & Search Bar */}
+                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-slate-50 dark:bg-slate-800/40 p-2.5 rounded-2xl border border-slate-200 dark:border-slate-800">
+                            {/* Tabs */}
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={() => {
+                                        setSellersActiveTab('by_seller');
+                                        setSellersSearchQuery('');
+                                    }}
+                                    className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-black text-xs transition active:scale-95 ${
+                                        sellersActiveTab === 'by_seller'
+                                            ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-md border border-slate-200/55 dark:border-slate-800'
+                                            : 'text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-800'
+                                    }`}
+                                >
+                                    <Users size={16} />
+                                    <span>عرض حسب البائعين</span>
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        setSellersActiveTab('by_day');
+                                        setSellersSearchQuery('');
+                                    }}
+                                    className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-black text-xs transition active:scale-95 ${
+                                        sellersActiveTab === 'by_day'
+                                            ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-md border border-slate-200/55 dark:border-slate-800'
+                                            : 'text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-800'
+                                    }`}
+                                >
+                                    <Calendar size={16} />
+                                    <span>التقرير اليومي للعمولات</span>
+                                </button>
+                            </div>
+
+                            {/* Search */}
+                            <div className="relative w-full md:max-w-xs">
+                                <Search className="absolute right-3 top-2.5 text-slate-400" size={16} />
+                                <input
+                                    type="text"
+                                    placeholder={sellersActiveTab === 'by_seller' ? "ابحث باسم البائع..." : "ابحث بالتاريخ أو الموظف..."}
+                                    value={sellersSearchQuery}
+                                    onChange={(e) => setSellersSearchQuery(e.target.value)}
+                                    className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl pr-9 pl-3 py-2 text-xs font-bold outline-none focus:border-indigo-500 text-slate-900 dark:text-white"
+                                />
                             </div>
                         </div>
+
+                        {/* Tab Content 1: Sellers Summary */}
+                        {sellersActiveTab === 'by_seller' && (
+                            <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-right text-xs">
+                                        <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-400 font-black border-b border-slate-200 dark:border-slate-800 animate-in fade-in duration-100">
+                                            <tr>
+                                                <th className="p-4">اسم البائع</th>
+                                                <th className="p-4 text-center">عدد الكروت المباعة (تجزئة)</th>
+                                                <th className="p-4 text-center">إجمالي مبيعات التجزئة</th>
+                                                <th className="p-4 text-left">نسبة العمولة (10%)</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-bold text-slate-800 dark:text-slate-200">
+                                            {filteredSellersList.length === 0 ? (
+                                                <tr>
+                                                    <td colSpan={4} className="p-8 text-center text-slate-400 font-bold">
+                                                        لا توجد نتائج مطابقة لمبيعات البائعين.
+                                                    </td>
+                                                </tr>
+                                            ) : (
+                                                filteredSellersList.map((seller) => (
+                                                    <tr key={seller.userName} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition">
+                                                        <td className="p-4 font-black flex items-center gap-2">
+                                                            <div className="w-8 h-8 rounded-full bg-teal-50 dark:bg-teal-950/60 text-teal-600 dark:text-teal-400 flex items-center justify-center font-black text-xs border border-teal-100 dark:border-teal-900/30">
+                                                                <UserCheck size={14} />
+                                                            </div>
+                                                            <span>{seller.userName}</span>
+                                                        </td>
+                                                        <td className="p-4 text-center font-black text-slate-700 dark:text-slate-300">{seller.count} كارت</td>
+                                                        <td className="p-4 text-center font-black text-emerald-600 dark:text-emerald-400">{seller.totalSales.toFixed(2)} ريال</td>
+                                                        <td className="p-4 text-left">
+                                                            <span className="inline-flex bg-purple-50 dark:bg-purple-950/70 text-purple-700 dark:text-purple-300 border border-purple-200/50 dark:border-purple-800/60 px-3 py-1.5 rounded-xl font-black text-xs">
+                                                                {seller.commission.toFixed(2)} ريال (10%)
+                                                            </span>
+                                                        </td>
+                                                    </tr>
+                                                ))
+                                            )}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Tab Content 2: Daily Report with Breakdown */}
+                        {sellersActiveTab === 'by_day' && (
+                            <div className="space-y-4 animate-in fade-in duration-200">
+                                {filteredDailyList.length === 0 ? (
+                                    <div className="bg-white dark:bg-slate-900 p-8 text-center text-slate-400 font-bold border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm">
+                                        لا توجد مبيعات تجزئة مسجلة في هذا التاريخ حتى الآن.
+                                    </div>
+                                ) : (
+                                    filteredDailyList.map((day) => {
+                                        const isExpanded = expandedDays.includes(day.date);
+                                        return (
+                                            <div 
+                                                key={day.date}
+                                                className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm overflow-hidden transition-all duration-300"
+                                            >
+                                                {/* Day Row Header */}
+                                                <div 
+                                                    onClick={() => toggleDay(day.date)}
+                                                    className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/20 select-none"
+                                                >
+                                                    <div className="flex items-center gap-3">
+                                                        <div className="w-10 h-10 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center border border-indigo-100 dark:border-indigo-900/30">
+                                                            <Calendar size={18} />
+                                                        </div>
+                                                        <div>
+                                                            <span className="text-sm font-black text-slate-800 dark:text-white">{day.date}</span>
+                                                            <div className="text-[10px] font-bold text-slate-400 mt-0.5">عدد المبيعات اليومية: {day.count} كارت</div>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="flex items-center gap-4 sm:gap-6 justify-between sm:justify-start">
+                                                        <div className="text-right">
+                                                            <span className="text-[10px] font-bold text-slate-400 block">إجمالي مبيعات اليوم</span>
+                                                            <span className="text-sm font-black text-emerald-600 dark:text-emerald-400">{day.totalSales.toFixed(2)} ريال</span>
+                                                        </div>
+
+                                                        <div className="text-right">
+                                                            <span className="text-[10px] font-bold text-slate-400 block">العمولة اليومية (10%)</span>
+                                                            <span className="inline-flex bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-100 dark:border-purple-900 px-2.5 py-1 rounded-xl text-xs font-black">
+                                                                {day.commission.toFixed(2)} ريال
+                                                            </span>
+                                                        </div>
+
+                                                        <div className="text-slate-400 hover:text-indigo-600 transition">
+                                                            {isExpanded ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                {/* Day Row Breakdown */}
+                                                {isExpanded && (
+                                                    <div className="border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/40 p-4">
+                                                        <div className="text-xs font-black text-slate-400 mb-3 block">تفاصيل مبيعات البائعين لهذا اليوم:</div>
+                                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                                            {Object.entries(day.sellers).map(([sellerName, sellerData]) => (
+                                                                <div 
+                                                                    key={sellerName}
+                                                                    className="bg-white dark:bg-slate-950 border border-slate-200/60 dark:border-slate-850 p-3 rounded-xl flex items-center justify-between shadow-sm hover:shadow-md transition"
+                                                                >
+                                                                    <div className="flex items-center gap-2">
+                                                                        <div className="w-7 h-7 rounded-full bg-teal-50 dark:bg-teal-950/60 text-teal-600 dark:text-teal-400 flex items-center justify-center font-black text-xs border border-teal-100/30">
+                                                                            <UserCheck size={12} />
+                                                                        </div>
+                                                                        <div>
+                                                                            <span className="text-xs font-black text-slate-800 dark:text-slate-200">{sellerName}</span>
+                                                                            <span className="text-[10px] font-bold text-slate-400 block mt-0.5">باع {sellerData.count} كارت</span>
+                                                                        </div>
+                                                                    </div>
+                                                                    <div className="text-left">
+                                                                        <span className="text-[10px] font-bold text-slate-400 block">صافي مبيعاته</span>
+                                                                        <span className="text-xs font-black text-emerald-600 dark:text-emerald-400 block">{sellerData.totalSales.toFixed(2)} ريال</span>
+                                                                        <span className="text-[10px] font-black text-purple-600 dark:text-purple-400 mt-1 block">عمولته: {sellerData.commission.toFixed(2)} ريال</span>
+                                                                    </div>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        );
+                                    })
+                                )}
+                            </div>
+                        )}
                     </div>
                 );
             })()}
@@ -3366,107 +3678,7 @@ export default function CardsManagement() {
                 </div>
             )}
 
-            {/* SECTION: البائعين (Sellers) */}
-            {activeSection === 'sellers' && (() => {
-                const retailSales = sales.filter(s => s.saleType === 'retail' && (s.status === 'completed' || !s.status));
-                const sellersMap = new Map<string, { userName: string; count: number; totalSales: number; commission: number }>();
-                
-                retailSales.forEach(sale => {
-                    const name = sale.userName?.trim() || 'بائع مجهول';
-                    const amount = sale.netTotal || sale.totalAmount || 0;
-                    const current = sellersMap.get(name) || { userName: name, count: 0, totalSales: 0, commission: 0 };
-                    current.count += sale.quantity || 0;
-                    current.totalSales += amount;
-                    current.commission = current.totalSales * 0.10;
-                    sellersMap.set(name, current);
-                });
 
-                const sellersList = Array.from(sellersMap.values());
-                const grandRetailSales = sellersList.reduce((sum, s) => sum + s.totalSales, 0);
-                const grandCommission = sellersList.reduce((sum, s) => sum + s.commission, 0);
-
-                return (
-                    <div className="space-y-6 animate-in fade-in duration-200">
-                        <div className="bg-white dark:bg-slate-900 p-4 sm:p-5 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between gap-3">
-                            <h2 className="text-lg font-black text-slate-900 dark:text-white">سجل البائعين وعمولات التجزئة (10%)</h2>
-                        </div>
-
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                            <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center gap-3">
-                                <div className="w-10 h-10 rounded-xl bg-teal-50 dark:bg-teal-950/60 text-teal-600 dark:text-teal-400 flex items-center justify-center font-black">
-                                    <UserCheck size={20} />
-                                </div>
-                                <div>
-                                    <span className="text-[10px] font-black text-slate-400">إجمالي البائعين</span>
-                                    <div className="text-base font-black text-slate-900 dark:text-white">{sellersList.length} بائع</div>
-                                </div>
-                            </div>
-
-                            <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center gap-3">
-                                <div className="w-10 h-10 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center font-black">
-                                    <DollarSign size={20} />
-                                </div>
-                                <div>
-                                    <span className="text-[10px] font-black text-slate-400">إجمالي مبيعات التجزئة</span>
-                                    <div className="text-base font-black text-emerald-600 dark:text-emerald-400">{grandRetailSales.toFixed(2)} ريال</div>
-                                </div>
-                            </div>
-
-                            <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center gap-3">
-                                <div className="w-10 h-10 rounded-xl bg-purple-50 dark:bg-purple-950/60 text-purple-600 dark:text-purple-400 flex items-center justify-center font-black">
-                                    <Sparkles size={20} />
-                                </div>
-                                <div>
-                                    <span className="text-[10px] font-black text-slate-400">إجمالي عمولات البائعين (10%)</span>
-                                    <div className="text-base font-black text-purple-600 dark:text-purple-400">{grandCommission.toFixed(2)} ريال</div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
-                            <div className="overflow-x-auto">
-                                <table className="w-full text-right text-xs">
-                                    <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-400 font-black border-b border-slate-200 dark:border-slate-800">
-                                        <tr>
-                                            <th className="p-4">اسم البائع</th>
-                                            <th className="p-4 text-center">عدد الكروت المباعة (تجزئة)</th>
-                                            <th className="p-4 text-left">إجمالي مبيعات التجزئة</th>
-                                            <th className="p-4 text-left">نسبة العمولة (10%)</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-bold text-slate-800 dark:text-slate-200">
-                                        {sellersList.length === 0 ? (
-                                            <tr>
-                                                <td colSpan={4} className="p-8 text-center text-slate-400 font-bold">
-                                                    لا توجد مبيعات تجزئة مسجلة للبائعين حتى الآن.
-                                                </td>
-                                            </tr>
-                                        ) : (
-                                            sellersList.map((seller) => (
-                                                <tr key={seller.userName} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                                                    <td className="p-4 font-black flex items-center gap-2">
-                                                        <div className="w-8 h-8 rounded-full bg-teal-50 dark:bg-teal-950/60 text-teal-600 dark:text-teal-400 flex items-center justify-center font-black text-xs">
-                                                            <UserCheck size={14} />
-                                                        </div>
-                                                        <span>{seller.userName}</span>
-                                                    </td>
-                                                    <td className="p-4 text-center font-black text-indigo-600 dark:text-indigo-400">{seller.count} كارت</td>
-                                                    <td className="p-4 text-left font-black text-emerald-600 dark:text-emerald-400">{seller.totalSales.toFixed(2)} ريال</td>
-                                                    <td className="p-4 text-left">
-                                                        <span className="bg-purple-50 dark:bg-purple-950/70 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800 px-3 py-1 rounded-xl font-black text-xs">
-                                                            {seller.commission.toFixed(2)} ريال (10%)
-                                                        </span>
-                                                    </td>
-                                                </tr>
-                                            ))
-                                        )}
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-                    </div>
-                );
-            })()}
 
             {/* SECTION 4: المبيعات الشهرية (Monthly Sales Report) */}
             {activeSection === 'monthly_sales' && (
@@ -4024,9 +4236,33 @@ export default function CardsManagement() {
                 </div>
             )}
 
+            {/* SECTION: مبيعات الكروت الفردية (Sales) */}
+            {activeSection === 'card_sales_section' && (
+                <CardSalesSection 
+                    sales={sales}
+                    onViewInvoice={(invoice) => {
+                        setActionModalInvoice(invoice);
+                        setActionModalOpen(true);
+                    }}
+                    appUser={appUser}
+                />
+            )}
+
+            {/* SECTION: مشتريات الكروت الفردية (Purchases) */}
+            {activeSection === 'card_purchases_section' && (
+                <CardPurchasesSection 
+                    purchases={purchases}
+                    onViewInvoice={(invoice) => {
+                        setActionModalInvoice(invoice);
+                        setActionModalOpen(true);
+                    }}
+                    appUser={appUser}
+                />
+            )}
+
             {/* MODAL: Category Create / Edit */}
             {isCategoryModalOpen && (
-                <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+                <div className="fixed inset-0 z-50 bg-black/20 flex items-center justify-center p-4">
                     <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4">
                         <div className="relative flex items-center justify-center border-b border-slate-100 dark:border-slate-800 pb-3">
                             <h3 className="font-black text-slate-900 dark:text-white text-base text-center">
@@ -4105,7 +4341,7 @@ export default function CardsManagement() {
 
             {/* MODAL: Distributor Create / Edit */}
             {isDistributorModalOpen && (
-                <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+                <div className="fixed inset-0 z-50 bg-black/20 flex items-center justify-center p-4">
                     <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4">
                         <div className="relative flex items-center justify-center border-b border-slate-100 dark:border-slate-800 pb-3">
                             <h3 className="font-black text-slate-900 dark:text-white text-base text-center">
@@ -4186,7 +4422,7 @@ export default function CardsManagement() {
 
             {/* MODAL: Add Stock (إضافة رصيد كروت) */}
             {isStockModalOpen && (
-                <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+                <div className="fixed inset-0 z-50 bg-black/20 flex items-center justify-center p-4">
                     <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4">
                         <div className="relative flex items-center justify-center border-b border-slate-100 dark:border-slate-800 pb-3">
                             <h3 className="font-black text-slate-900 dark:text-white text-base text-center">إضافة رصيد كروت جديد</h3>
@@ -4241,7 +4477,7 @@ export default function CardsManagement() {
 
             {/* MODAL: Add/Edit Supplier */}
             {isSupplierModalOpen && (
-                <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+                <div className="fixed inset-0 z-50 bg-black/20 flex items-center justify-center p-4">
                     <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4">
                         <div className="relative flex items-center justify-center border-b border-slate-100 dark:border-slate-800 pb-3">
                             <h3 className="font-black text-slate-900 dark:text-white text-base text-center">
@@ -4298,7 +4534,7 @@ export default function CardsManagement() {
 
             {/* MODAL: Purchase Voucher */}
             {isPurchaseVoucherModalOpen && (
-                <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+                <div className="fixed inset-0 z-50 bg-black/20 flex items-center justify-center p-4">
                     <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4">
                         <div className="relative flex items-center justify-center border-b border-slate-100 dark:border-slate-800 pb-3">
                             <h3 className="font-black text-slate-900 dark:text-white text-base text-center">إنشاء سند للمورد</h3>
@@ -4373,7 +4609,7 @@ export default function CardsManagement() {
 
             {/* MODAL: Distributor Voucher (سند قبض أو صرف) */}
             {isVoucherModalOpen && (
-                <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+                <div className="fixed inset-0 z-50 bg-black/20 flex items-center justify-center p-4">
                     <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4">
                         <div className="relative flex items-center justify-center border-b border-slate-100 dark:border-slate-800 pb-3">
                             <h3 className="font-black text-slate-900 dark:text-white text-base text-center">إنشاء سند للموزع</h3>
@@ -4457,7 +4693,7 @@ export default function CardsManagement() {
 
             {/* MODAL: Cashbox Manual Transaction */}
             {isCashboxModalOpen && (
-                <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+                <div className="fixed inset-0 z-50 bg-black/20 flex items-center justify-center p-4">
                     <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4">
                         <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
                             <h3 className="font-black text-slate-900 dark:text-white text-base">تسجيل حركة صندوق الكروت</h3>
@@ -4543,7 +4779,7 @@ export default function CardsManagement() {
 
             {/* MODAL: Share Distributor Account */}
             {isShareModalOpen && (
-                <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+                <div className="fixed inset-0 z-50 bg-black/20 flex items-center justify-center p-4">
                     <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4 text-right animate-in fade-in zoom-in-95 duration-150" dir="rtl">
                         <div className="relative flex items-center justify-center border-b border-slate-100 dark:border-slate-800 pb-3">
                             <h3 className="font-black text-slate-900 dark:text-white text-base text-center">مشاركة كشف الحساب</h3>

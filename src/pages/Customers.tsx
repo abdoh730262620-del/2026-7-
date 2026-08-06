@@ -8,6 +8,7 @@ import { Plus, Search, UserCircle, Edit2, X, Upload, Trash2, Receipt, MoreVertic
 import { logUserAction } from '../lib/logger';
 import * as XLSX from 'xlsx';
 import ImportMapper from '../components/ImportMapper';
+import { generateImportReportPdf } from '../lib/pdfHelper';
 
 interface Customer {
     id: string;
@@ -53,6 +54,15 @@ export default function Customers() {
         invoice: null
     });
     const [notification, setNotification] = useState<{message: string, type: 'success' | 'error'} | null>(null);
+    const [customerImportReport, setCustomerImportReport] = useState<{
+        isOpen: boolean;
+        total: number;
+        added: number;
+        skipped: number;
+        addedDetails: string[];
+        skippedDetails: string[];
+    } | null>(null);
+    const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
 
     const showNotification = (message: string, type: 'success' | 'error' = 'success') => {
         setNotification({ message, type });
@@ -66,6 +76,102 @@ export default function Customers() {
                     {notification.message}
                 </div>
             )}
+            {customerImportReport && customerImportReport.isOpen && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[250] flex items-center justify-center p-4">
+                    <div className="bg-white dark:bg-slate-900 rounded-2xl p-6 max-w-lg w-full shadow-2xl border border-gray-100 dark:border-slate-800 text-right dir-rtl animate-in fade-in zoom-in-95 duration-200">
+                        <div className="flex justify-between items-center pb-4 border-b border-gray-100 dark:border-slate-800">
+                            <h3 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
+                                <FileText className="text-blue-600" size={20} />
+                                <span>تقرير استيراد العملاء وملخص التجاوزات</span>
+                            </h3>
+                            <button onClick={() => setCustomerImportReport(null)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
+                                <X size={20} />
+                            </button>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-3 my-5">
+                            <div className="bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl border border-slate-100 dark:border-slate-800 text-center">
+                                <div className="text-xs text-slate-500 dark:text-slate-400 font-bold">إجمالي المجموع</div>
+                                <div className="text-xl font-black text-slate-800 dark:text-slate-100 mt-1">{customerImportReport.total}</div>
+                            </div>
+                            <div className="bg-emerald-50 dark:bg-emerald-950/20 p-3 rounded-xl border border-emerald-100 dark:border-emerald-900/30 text-center">
+                                <div className="text-xs text-emerald-600 dark:text-emerald-400 font-bold">تمت إضافتهم</div>
+                                <div className="text-xl font-black text-emerald-700 dark:text-emerald-400 mt-1">{customerImportReport.added}</div>
+                            </div>
+                            <div className="bg-blue-50 dark:bg-blue-950/20 p-3 rounded-xl border border-blue-100 dark:border-blue-900/30 text-center">
+                                <div className="text-xs text-blue-600 dark:text-blue-400 font-bold">تم تجاوزهم (مكرر)</div>
+                                <div className="text-xl font-black text-blue-700 dark:text-blue-400 mt-1">{customerImportReport.skipped}</div>
+                            </div>
+                        </div>
+
+                        <div className="space-y-4 max-h-60 overflow-y-auto pr-1">
+                            {customerImportReport.skippedDetails.length > 0 && (
+                                <div>
+                                    <h4 className="font-bold text-blue-700 dark:text-blue-400 mb-2 text-xs">
+                                        عملاء تم تجاوزهم لوجود الاسم مسبقاً ({customerImportReport.skippedDetails.length}):
+                                    </h4>
+                                    <ul className="bg-blue-50/60 dark:bg-blue-950/20 rounded-xl p-3 text-xs space-y-1 text-blue-900 dark:text-blue-300 border border-blue-100">
+                                        {customerImportReport.skippedDetails.map((detail, idx) => (
+                                            <li key={idx} className="list-disc list-inside">{detail}</li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            )}
+
+                            {customerImportReport.addedDetails.length > 0 && (
+                                <div>
+                                    <h4 className="font-bold text-emerald-700 dark:text-emerald-400 mb-2 text-xs">
+                                        عملاء تم استيرادهم بنجاح ({customerImportReport.addedDetails.length}):
+                                    </h4>
+                                    <ul className="bg-emerald-50/60 dark:bg-emerald-950/20 rounded-xl p-3 text-xs space-y-1 text-emerald-900 dark:text-emerald-300 border border-emerald-100">
+                                        {customerImportReport.addedDetails.map((detail, idx) => (
+                                            <li key={idx} className="list-disc list-inside">{detail}</li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="mt-6 pt-4 border-t border-gray-100 dark:border-slate-800 flex items-center justify-between gap-3">
+                            <button
+                                onClick={async () => {
+                                    if (!customerImportReport) return;
+                                    setIsDownloadingPdf(true);
+                                    try {
+                                        const { download } = await generateImportReportPdf({
+                                            title: 'تقرير استيراد العملاء وملخص التجاوزات',
+                                            total: customerImportReport.total,
+                                            added: customerImportReport.added,
+                                            skipped: customerImportReport.skipped,
+                                            addedDetails: customerImportReport.addedDetails,
+                                            skippedDetails: customerImportReport.skippedDetails,
+                                        });
+                                        download();
+                                    } catch (err) {
+                                        console.error('PDF error', err);
+                                        alert('حدث خطأ أثناء إنشاء ملف PDF');
+                                    } finally {
+                                        setIsDownloadingPdf(false);
+                                    }
+                                }}
+                                disabled={isDownloadingPdf}
+                                className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl font-bold transition duration-200 flex items-center gap-2 text-sm shadow-sm cursor-pointer"
+                            >
+                                <FileText size={18} />
+                                <span>{isDownloadingPdf ? 'جاري إنشاء PDF...' : 'تحميل التقرير PDF'}</span>
+                            </button>
+
+                            <button
+                                onClick={() => setCustomerImportReport(null)}
+                                className="px-6 py-2.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl font-bold transition duration-200 text-sm cursor-pointer"
+                            >
+                                إغلاق التقرير
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             <ImportMapper 
                 isOpen={mapperState.isOpen}
                 onClose={() => setMapperState(prev => ({ ...prev, isOpen: false }))}
@@ -148,7 +254,7 @@ export default function Customers() {
                                             partyName: selectedCustomer.name,
                                             description: `تسوية جزء/كامل الفاتورة #${inv.invoiceNumber} خصماً من رصيد العميل الدائن مباشرة`,
                                             createdBy: appUser?.uid,
-                                            tenantId: appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial'),
+                                            tenantId: appUser?.tenantId || 'single_store',
                                             createdAt: Date.now()
                                         });
 
@@ -161,7 +267,7 @@ export default function Customers() {
                                             description: `تسوية للفاتورة #${inv.invoiceNumber} (خصماً من الرصيد الدائن) - عميل: ${selectedCustomer.name}`,
                                             referenceId: vRef.id,
                                             createdBy: appUser?.uid,
-                                            tenantId: appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial'),
+                                            tenantId: appUser?.tenantId || 'single_store',
                                             createdAt: Date.now(),
                                             affectsCash: true
                                         });
@@ -511,7 +617,7 @@ export default function Customers() {
             setCustomerInvoices([]);
             return;
         }
-        const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+        const tenantId = appUser?.tenantId || 'single_store';
         const q = query(collection(db, 'sales'), where('tenantId', '==', tenantId), where('customerId', '==', selectedCustomer.id));
         const unsubscribe = onSnapshot(q, (snapshot) => {
             const list: any[] = [];
@@ -534,7 +640,7 @@ export default function Customers() {
 
     useEffect(() => {
         if (!isPaymentModalOpen) return;
-        const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+        const tenantId = appUser?.tenantId || 'single_store';
         const qNum = query(collection(db, 'vouchers'), where('tenantId', '==', tenantId), orderBy('voucherNumber', 'desc'));
         const unsubscribe = onSnapshot(qNum, snap => {
             if (!snap.empty) {
@@ -794,7 +900,7 @@ export default function Customers() {
     const [balance, setBalance] = useState('');
 
     useEffect(() => {
-        const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+        const tenantId = appUser?.tenantId || 'single_store';
         const qSales = query(collection(db, 'sales'), where('tenantId', '==', tenantId));
         const unsubscribeSales = onSnapshot(qSales, (snapshot) => {
             const ids = new Set<string>();
@@ -923,16 +1029,24 @@ export default function Customers() {
     const handleSaveCustomer = async (e: React.FormEvent) => {
         e.preventDefault();
         try {
+            // Check if name already exists (case-insensitive, trimmed)
+            const nameTrimmed = name.trim().toLowerCase();
+            if (customers.some(c => c.name.trim().toLowerCase() === nameTrimmed && (!editingCustomer || c.id !== editingCustomer.id))) {
+                alert('عذراً، اسم العميل مسجل مسبقاً! يرجى عدم تكرار أسماء العملاء.');
+                return;
+            }
+
             // Check if phone already exists for a DIFFERENT customer
-            if (customers.some(c => c.phone === phone && (!editingCustomer || c.id !== editingCustomer.id))) {
+            const phoneTrimmed = phone.trim();
+            if (phoneTrimmed !== '' && customers.some(c => c.phone && c.phone.trim() === phoneTrimmed && (!editingCustomer || c.id !== editingCustomer.id))) {
                 alert('رقم الهاتف مسجل مسبقاً لعميل آخر.');
                 return;
             }
 
-            const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+            const tenantId = appUser?.tenantId || 'single_store';
             if (editingCustomer) {
                 await updateDoc(doc(db, 'customers', editingCustomer.id), {
-                    name,
+                    name: name.trim(),
                     phone,
                     address,
                     balance: parseFloat(balance) || 0,
@@ -941,7 +1055,7 @@ export default function Customers() {
                 await logUserAction('تعديل عميل', `تم تعديل بيانات العميل: ${name}`);
             } else {
                 await addDoc(collection(db, 'customers'), {
-                    name,
+                    name: name.trim(),
                     phone,
                     address,
                     balance: parseFloat(balance) || 0,
@@ -974,19 +1088,35 @@ export default function Customers() {
                 const arrayBuffer = evt.target?.result as ArrayBuffer;
                 const dataArray = new Uint8Array(arrayBuffer);
                 const wb = XLSX.read(dataArray, { type: 'array' });
+                if (!wb.SheetNames || wb.SheetNames.length === 0) {
+                    alert("ملف الإكسل فارغ ولا يحتوي على صفحات بيانات");
+                    return;
+                }
                 const wsname = wb.SheetNames[0];
                 const ws = wb.Sheets[wsname];
-                const data = XLSX.utils.sheet_to_json(ws);
+                const data: any[] = XLSX.utils.sheet_to_json(ws, { defval: '' });
 
-                if (data.length > 0) {
-                    const headers = Object.keys(data[0] as any);
-                    setMapperState({ isOpen: true, headers, rows: data });
+                if (data && data.length > 0) {
+                    const allKeys = new Set<string>();
+                    data.forEach((row: any) => {
+                        Object.keys(row).forEach(k => {
+                            if (k && !k.startsWith('__EMPTY')) {
+                                allKeys.add(k.trim());
+                            }
+                        });
+                    });
+                    const headers = Array.from(allKeys);
+                    if (headers.length > 0) {
+                        setMapperState({ isOpen: true, headers, rows: data });
+                    } else {
+                        alert("لم يتم العثور على عناوين أعمدة صالحة في ملف الإكسل");
+                    }
                 } else {
-                    alert("الملف فارغ");
+                    alert("الملف فارغ أو لا يحتوي على أسطر بيانات");
                 }
-            } catch (err) {
+            } catch (err: any) {
                 console.error("Import error", err);
-                alert("حدث خطأ أثناء قراءة الملف");
+                alert("حدث خطأ أثناء قراءة الملف: " + (err?.message || "يرجى التأكد من اختيار ملف Excel صحيح"));
             } finally {
                 if (fileInputRef.current) fileInputRef.current.value = '';
             }
@@ -995,10 +1125,17 @@ export default function Customers() {
     };
 
     const processMappedImport = async (mappedData: any[]) => {
-        const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+        const tenantId = appUser?.tenantId || 'single_store';
         setMapperState(prev => ({ ...prev, isOpen: false }));
         setIsImporting(true);
         let imported = 0;
+        let skipped = 0;
+        const addedDetails: string[] = [];
+        const skippedDetails: string[] = [];
+
+        // Track existing customer names for duplicate checks
+        const existingNamesSet = new Set(customers.map(c => c.name.trim().toLowerCase()));
+
         try {
             const batchSize = 500;
             let batch = writeBatch(db);
@@ -1006,8 +1143,21 @@ export default function Customers() {
 
             for (const row of mappedData) {
                 try {
+                    const custName = String(row.name || 'بدون اسم').trim();
+                    if (!custName || custName === 'بدون اسم') {
+                        continue;
+                    }
+                    const nameKey = custName.toLowerCase();
+
+                    // Check if duplicate name exists
+                    if (existingNamesSet.has(nameKey)) {
+                        skipped++;
+                        skippedDetails.push(`العميل "${custName}" (تم التجاوز: اسم العميل موجود مسبقاً في النظام)`);
+                        continue;
+                    }
+
                     const newCust = {
-                        name: String(row.name || 'بدون اسم'),
+                        name: custName,
                         phone: String(row.phone || ''),
                         address: String(row.address || ''),
                         balance: parseFloat(row.balance) || 0,
@@ -1018,7 +1168,9 @@ export default function Customers() {
                     
                     const docRef = doc(collection(db, 'customers'));
                     batch.set(docRef, newCust);
+                    existingNamesSet.add(nameKey);
                     imported++;
+                    addedDetails.push(`العميل "${custName}" (الهاتف: ${row.phone || 'غير مدخل'})`);
                     batchCount++;
 
                     if (batchCount >= batchSize) {
@@ -1035,8 +1187,16 @@ export default function Customers() {
                 await batch.commit();
             }
 
-            await logUserAction('استيراد عملاء', `استيراد ${imported} عميل من ملف إكسل`);
-            alert(`تم استيراد ${imported} عميل بنجاح`);
+            await logUserAction('استيراد عملاء', `استيراد ${imported} عميل جديد وتجاوز ${skipped} مكرر`);
+
+            setCustomerImportReport({
+                isOpen: true,
+                total: mappedData.length,
+                added: imported,
+                skipped,
+                addedDetails,
+                skippedDetails
+            });
         } catch (error) {
             console.error(error);
             alert("حدث خطأ أثناء الحفظ");
@@ -1490,7 +1650,7 @@ function OpeningBalanceModal({ customer, onClose }: { customer: Customer; onClos
 
     useEffect(() => {
         if (!appUser) return;
-        const tenantId = appUser.tenantId || (appUser.role === 'admin' ? appUser.uid : 'admin_initial');
+        const tenantId = appUser.tenantId || 'single_store';
 
         // Load next voucher number from vouchers collection
         const qNum = query(collection(db, 'vouchers'), where('tenantId', '==', tenantId), orderBy('voucherNumber', 'desc'));
@@ -1529,7 +1689,7 @@ function OpeningBalanceModal({ customer, onClose }: { customer: Customer; onClos
             const vType = opType === 'له' ? 'receipt' : 'payment';
             const vNum = voucherNum === '...' ? '0' : voucherNum;
 
-            const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+            const tenantId = appUser?.tenantId || 'single_store';
             
             // Create a voucher record for numbering consistency
             const vRef = doc(collection(db, 'vouchers'));

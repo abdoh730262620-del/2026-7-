@@ -4,14 +4,14 @@ import {
     initializeFirestore, 
     memoryLocalCache, 
     persistentLocalCache, 
-    persistentSingleTabManager,
+    persistentMultipleTabManager,
     CACHE_SIZE_UNLIMITED,
     onSnapshotsInSync,
     disableNetwork,
     enableNetwork,
     terminate
 } from "firebase/firestore";
-import { getAuth } from "firebase/auth";
+import { getAuth, setPersistence, indexedDBLocalPersistence } from "firebase/auth";
 import firebaseConfig from "../../firebase-applet-config.json";
 import { updateLastSyncTime } from "./syncTracker";
 import { ErrorNotifier } from "./errorNotifier";
@@ -22,17 +22,6 @@ let dbInstance: any;
 
 function setupNetworkSync(dbRef: any) {
     if (!dbRef) return;
-
-    try {
-        // Global listener to track when snapshots are in sync with server
-        onSnapshotsInSync(dbRef, () => {
-            if (window.navigator.onLine) {
-                updateLastSyncTime();
-            }
-        });
-    } catch (e) {
-        console.warn("onSnapshotsInSync listener setup failed:", e);
-    }
 
     const handleNetworkChange = () => {
         if (window.navigator.onLine) {
@@ -55,30 +44,51 @@ function setupNetworkSync(dbRef: any) {
 }
 
 // We use persistence by default to satisfy the "local database" requirement.
-// If persistence fails (e.g. in some iframe environments), we fall back to memory.
-try {
-    dbInstance = initializeFirestore(app, {
-        localCache: persistentLocalCache({
-            tabManager: persistentSingleTabManager({ forceOwningTab: true } as any),
-            cacheSizeBytes: CACHE_SIZE_UNLIMITED
-        }),
-        experimentalForceLongPolling: true
-    }, firebaseConfig.firestoreDatabaseId);
-    console.log("Firestore initialized with persistent single tab local cache (forceOwningTab: true) and experimentalForceLongPolling.");
-    setupNetworkSync(dbInstance);
-} catch (e) {
-    console.warn("Failed to initialize Firestore with persistent cache, falling back to getFirestore:", e);
+// If persistence fails or causes internal state assertions in iframe environments, we fall back to memoryLocalCache.
+const useMemoryCache = typeof window !== 'undefined' && sessionStorage.getItem('firestore_use_memory_cache') === 'true';
+
+if (useMemoryCache) {
+    console.log("Firestore initializing with memoryLocalCache due to previous persistent cache assertion.");
     try {
-        dbInstance = getFirestore(app);
+        dbInstance = initializeFirestore(app, {
+            localCache: memoryLocalCache()
+        }, firebaseConfig.firestoreDatabaseId);
+    } catch (e) {
+        dbInstance = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+    }
+    setupNetworkSync(dbInstance);
+} else {
+    try {
+        dbInstance = initializeFirestore(app, {
+            localCache: persistentLocalCache({
+                tabManager: persistentMultipleTabManager(),
+                cacheSizeBytes: CACHE_SIZE_UNLIMITED
+            }),
+            experimentalForceLongPolling: false
+        }, firebaseConfig.firestoreDatabaseId);
+        console.log("Firestore initialized with persistent multiple tab local cache.");
         setupNetworkSync(dbInstance);
-    } catch (fallbackError) {
-        console.error("Firestore initialization fallback failure:", fallbackError);
-        dbInstance = getFirestore(app);
+    } catch (e) {
+        console.warn("Failed to initialize Firestore with persistent cache, falling back to memoryLocalCache:", e);
+        try {
+            dbInstance = initializeFirestore(app, {
+                localCache: memoryLocalCache()
+            }, firebaseConfig.firestoreDatabaseId);
+            setupNetworkSync(dbInstance);
+        } catch (fallbackError) {
+            console.error("Firestore initialization fallback failure:", fallbackError);
+            dbInstance = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+        }
     }
 }
 
 export const db = dbInstance;
 export const auth = getAuth(app);
+
+// Set persistence to indexedDBLocalPersistence to avoid session conflicts in multi-tab/iframe environments
+setPersistence(auth, indexedDBLocalPersistence).catch(err => {
+    console.error("Auth persistence setup failed:", err);
+});
 
 // Graceful cache clear helper using native browser indexedDB deletion
 export async function clearFirestoreCache() {
@@ -188,20 +198,43 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   }
 }
 
-// Global Exception Interceptors to capture and silence "Target ID already exists" errors in iframe environments
+// Global Exception Interceptors to capture and silence internal Firestore errors in iframe environments
 if (typeof window !== 'undefined') {
-    const isTargetIdConflict = (str: string) => {
-        return str.includes('already-exists') || 
-               str.includes('Target ID already exists') || 
-               str.includes('code=already-exists') || 
-               str.includes('Uncaught Error: {"error":"Target ID already exists:');
+    const isSuppressedError = (str: string) => {
+        const lower = str.toLowerCase();
+        return lower.includes('already-exists') || 
+               lower.includes('target id already exists') || 
+               lower.includes('unexpected state') ||
+               lower.includes('internal assertion failed') ||
+               lower.includes('id: ca9') ||
+               lower.includes('id: b815');
+    };
+
+    const handleSuppressed = (source: string) => {
+        console.warn(`[Firestore Safe Guard] Suppressed internal assertion conflict from ${source}. Switching fallback to memory cache.`);
+        try {
+            sessionStorage.setItem('firestore_use_memory_cache', 'true');
+        } catch (e) {
+            // ignore storage quota errors
+        }
+    };
+
+    const originalConsoleError = console.error;
+    console.error = function (...args: any[]) {
+        const fullText = args.map(a => typeof a === 'object' ? (a?.message || a?.stack || String(a)) : String(a)).join(' ');
+        if (isSuppressedError(fullText)) {
+            handleSuppressed('console.error');
+            console.warn('[Firestore Internal Assertion Warn]:', ...args);
+            return;
+        }
+        originalConsoleError.apply(console, args);
     };
 
     const handleGlobalError = (event: ErrorEvent) => {
         const msg = event.message ? String(event.message) : '';
         const errorStr = event.error ? String(event.error) : '';
-        if (isTargetIdConflict(msg) || isTargetIdConflict(errorStr)) {
-            console.warn('Caught and suppressed persistent Firestore Target ID conflict in global error handler to prevent application crash.');
+        if (isSuppressedError(msg) || isSuppressedError(errorStr)) {
+            handleSuppressed('window.error');
             event.preventDefault();
             event.stopPropagation();
         }
@@ -209,8 +242,8 @@ if (typeof window !== 'undefined') {
 
     const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
         const reason = event.reason ? String(event.reason) : '';
-        if (isTargetIdConflict(reason)) {
-            console.warn('Caught and suppressed persistent Firestore Target ID conflict in global unhandled rejection handler to prevent application crash.');
+        if (isSuppressedError(reason)) {
+            handleSuppressed('unhandledrejection');
             event.preventDefault();
             event.stopPropagation();
         }

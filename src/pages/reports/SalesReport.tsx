@@ -90,7 +90,7 @@ export default function SalesReport({ dateRange }: { dateRange: { startDate: str
 
     useEffect(() => {
         if (!appUser) return;
-        const tenantId = appUser.tenantId || (appUser.role === 'admin' ? appUser.uid : 'admin_initial');
+        const tenantId = appUser.tenantId || 'single_store';
 
         const unsubCust = onSnapshot(query(collection(db, 'customers'), where('tenantId', '==', tenantId)), snap => {
             const custs: any = {};
@@ -121,7 +121,7 @@ export default function SalesReport({ dateRange }: { dateRange: { startDate: str
 
     useEffect(() => {
         if (!appUser) return;
-        const tenantId = appUser.tenantId || (appUser.role === 'admin' ? appUser.uid : 'admin_initial');
+        const tenantId = appUser.tenantId || 'single_store';
 
         const start = new Date(dateRange.startDate).getTime();
         const end = new Date(dateRange.endDate).getTime() + 86400000;

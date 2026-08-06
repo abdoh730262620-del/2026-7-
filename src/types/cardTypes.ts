@@ -33,6 +33,7 @@ export interface CardStockLog {
 export interface CardSale {
     id: string;
     tenantId: string;
+    categoryId?: string;
     categoryName: string;
     quantity: number;
     saleType: 'wholesale' | 'retail' | 'distributor'; // جملة | تجزئة | موزع

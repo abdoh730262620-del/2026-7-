@@ -13,50 +13,49 @@ export const MonthlyCustomerSync: React.FC = () => {
             const now = new Date();
             const month = now.getMonth() + 1;
             const year = now.getFullYear();
-            const customerName = `مبيعات يومية لشهر ${month} ${year}`;
+            const generalCustomerName = `مبيعات يومية لشهر ${month} ${year}`;
+            const cardsCustomerName = `سجل مبيعات يومية كروت لشهر ${month} ${year}`;
             
-            const tenantId = appUser.tenantId || (appUser.role === 'admin' ? appUser.uid : 'admin_initial');
+            const tenantId = appUser.tenantId || 'single_store';
 
             try {
-                // Check if this customer already exists for this tenant
-                const q = query(
+                // Check if general monthly customer exists
+                const qGeneral = query(
                     collection(db, 'customers'),
                     where('tenantId', '==', tenantId),
-                    where('name', '==', customerName)
+                    where('name', '==', generalCustomerName)
                 );
 
-                const querySnapshot = await getDocs(q);
+                const snapGeneral = await getDocs(qGeneral);
 
-                if (querySnapshot.empty) {
-                    // Create the customer
+                if (snapGeneral.empty) {
                     await addDoc(collection(db, 'customers'), {
-                        name: customerName,
+                        name: generalCustomerName,
                         phone: '',
                         address: `تلقائي - ${month}/${year}`,
                         balance: 0,
                         tenantId,
                         createdAt: Date.now(),
                         updatedAt: Date.now(),
-                        isMonthlySalesCustomer: true, // Tag it for internal use if needed
+                        isMonthlySalesCustomer: true,
                         month,
                         year
                     });
-                    console.log(`[Sync] Created monthly customer: ${customerName}`);
+                    console.log(`[Sync] Created general monthly customer: ${generalCustomerName}`);
                 }
 
-                // Check if this customer already exists as a distributor for network cards
-                const qDist = query(
+                // Check if cards monthly sales distributor/customer exists
+                const qCardsDist = query(
                     collection(db, 'card_distributors'),
                     where('tenantId', '==', tenantId),
-                    where('name', '==', customerName)
+                    where('name', '==', cardsCustomerName)
                 );
 
-                const querySnapshotDist = await getDocs(qDist);
+                const snapCardsDist = await getDocs(qCardsDist);
 
-                if (querySnapshotDist.empty) {
-                    // Create the distributor
+                if (snapCardsDist.empty) {
                     await addDoc(collection(db, 'card_distributors'), {
-                        name: customerName,
+                        name: cardsCustomerName,
                         phone: '',
                         commission: 0,
                         balance: 0,
@@ -65,10 +64,11 @@ export const MonthlyCustomerSync: React.FC = () => {
                         createdAt: Date.now(),
                         updatedAt: Date.now(),
                         isMonthlySalesCustomer: true,
+                        isCardMonthlySalesCustomer: true,
                         month,
                         year
                     });
-                    console.log(`[Sync] Created monthly distributor: ${customerName}`);
+                    console.log(`[Sync] Created cards monthly distributor: ${cardsCustomerName}`);
                 }
             } catch (error) {
                 console.error('[Sync] Error syncing monthly customer:', error);

@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { X, Database, Archive } from 'lucide-react';
+import { X, Database, Archive, FileText, Download } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import JSZip from 'jszip';
 import * as XLSX from 'xlsx';
@@ -11,6 +11,7 @@ import { collection, addDoc, getDocs, query, where, writeBatch, doc } from 'fire
 import { db } from '../lib/firebase';
 import { useAuthStore } from '../store/authStore';
 import { logUserAction } from '../lib/logger';
+import { generateImportReportPdf } from '../lib/pdfHelper';
 
 interface DataOperationsModalProps {
     isOpen: boolean;
@@ -37,6 +38,7 @@ export default function DataOperationsModal({ isOpen, onClose }: DataOperationsM
 
     // Report state
     const [report, setReport] = useState<ImportReport | null>(null);
+    const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
 
     // Mapping state
     const [mapperState, setMapperState] = useState<{ isOpen: boolean; headers: string[]; rows: any[] }>({
@@ -55,19 +57,35 @@ export default function DataOperationsModal({ isOpen, onClose }: DataOperationsM
                 const arrayBuffer = evt.target?.result as ArrayBuffer;
                 const dataArray = new Uint8Array(arrayBuffer);
                 const wb = XLSX.read(dataArray, { type: 'array' });
+                if (!wb.SheetNames || wb.SheetNames.length === 0) {
+                    alert("ملف الإكسل فارغ ولا يحتوي على صفحات بيانات");
+                    return;
+                }
                 const wsname = wb.SheetNames[0];
                 const ws = wb.Sheets[wsname];
-                const data = XLSX.utils.sheet_to_json(ws);
+                const data: any[] = XLSX.utils.sheet_to_json(ws, { defval: '' });
                 
-                if (data.length > 0) {
-                    const headers = Object.keys(data[0] as any);
-                    setMapperState({ isOpen: true, headers, rows: data });
+                if (data && data.length > 0) {
+                    const allKeys = new Set<string>();
+                    data.forEach((row: any) => {
+                        Object.keys(row).forEach(k => {
+                            if (k && !k.startsWith('__EMPTY')) {
+                                allKeys.add(k.trim());
+                            }
+                        });
+                    });
+                    const headers = Array.from(allKeys);
+                    if (headers.length > 0) {
+                        setMapperState({ isOpen: true, headers, rows: data });
+                    } else {
+                        alert("لم يتم العثور على عناوين أعمدة صالحة في ملف الإكسل");
+                    }
                 } else {
-                    alert("الملف فارغ");
+                    alert("الملف فارغ أو لا يحتوي على أسطر بيانات");
                 }
-            } catch (err) {
+            } catch (err: any) {
                 console.error("Import error", err);
-                alert("حدث خطأ أثناء قراءة الملف");
+                alert("حدث خطأ أثناء قراءة الملف: " + (err?.message || "يرجى التأكد من اختيار ملف Excel صحيح"));
             } finally {
                 if (fileInputRef.current) fileInputRef.current.value = '';
             }
@@ -77,7 +95,7 @@ export default function DataOperationsModal({ isOpen, onClose }: DataOperationsM
 
     const processMappedImport = async (mappedData: any[]) => {
         const appUser = useAuthStore.getState().appUser;
-        const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+        const tenantId = appUser?.tenantId || 'single_store';
 
         setMapperState(prev => ({ ...prev, isOpen: false }));
         start(mappedData.length, "جاري استيراد المنتجات...");
@@ -142,40 +160,9 @@ export default function DataOperationsModal({ isOpen, onClose }: DataOperationsM
                     const existing = existingByBarcode || existingByName;
 
                     if (existing) {
-                        // If both price and quantity are identical, skip/bypass it
-                        if (existing.price === price && existing.quantity === quantity) {
-                            skippedCount++;
-                            skippedDetails.push(`المنتج "${name}" (تطابق تام في السعر: ${price} ر.س والكمية: ${quantity})`);
-                        } else {
-                            // Update quantity and price if there is a difference
-                            const updatedFields: any = {
-                                price: price,
-                                quantity: quantity
-                            };
-                            
-                            // Optionally update cost and category if they are valid
-                            if (cost > 0 && cost !== existing.cost) updatedFields.cost = cost;
-                            if (category && category !== 'General' && category !== existing.category) updatedFields.category = category;
-
-                            const docRef = doc(db, 'products', existing.id);
-                            batch.update(docRef, updatedFields);
-                            
-                            const changes: string[] = [];
-                            if (existing.price !== price) changes.push(`تعديل السعر من ${existing.price} إلى ${price}`);
-                            if (existing.quantity !== quantity) changes.push(`تعديل الكمية من ${existing.quantity} إلى ${quantity}`);
-                            if (cost > 0 && existing.cost !== cost) changes.push(`تعديل التكلفة من ${existing.cost} إلى ${cost}`);
-
-                            updatedDetails.push(`المنتج "${name}" (${changes.join(' | ') || 'تحديث الحقول'})`);
-
-                            // Update in local maps for subsequent checks
-                            existing.price = price;
-                            existing.quantity = quantity;
-                            if (cost > 0) existing.cost = cost;
-                            existing.category = category;
-
-                            updatedCount++;
-                            batchCount++;
-                        }
+                        // Product already exists with same name or barcode: skip/bypass without error or duplication
+                        skippedCount++;
+                        skippedDetails.push(`المنتج "${name}" (تم التجاوز: اسم المنتج أو الباركود موجود مسبقاً في النظام)`);
                     } else {
                         // Brand new product
                         const newProd = {
@@ -433,10 +420,40 @@ export default function DataOperationsModal({ isOpen, onClose }: DataOperationsM
                             )}
                         </div>
 
-                        <div className="mt-6 pt-4 border-t border-gray-100 dark:border-slate-800 flex justify-end">
+                        <div className="mt-6 pt-4 border-t border-gray-100 dark:border-slate-800 flex items-center justify-between gap-3">
+                            <button
+                                onClick={async () => {
+                                    if (!report) return;
+                                    setIsDownloadingPdf(true);
+                                    try {
+                                        const { download } = await generateImportReportPdf({
+                                            title: 'تقرير استيراد المنتجات وملخص التجاوزات',
+                                            total: report.total,
+                                            added: report.added,
+                                            skipped: report.skipped,
+                                            updated: report.updated,
+                                            addedDetails: report.addedDetails,
+                                            skippedDetails: report.skippedDetails,
+                                            updatedDetails: report.updatedDetails
+                                        });
+                                        download();
+                                    } catch (err) {
+                                        console.error('PDF error', err);
+                                        alert('حدث خطأ أثناء إنشاء ملف PDF');
+                                    } finally {
+                                        setIsDownloadingPdf(false);
+                                    }
+                                }}
+                                disabled={isDownloadingPdf}
+                                className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl font-bold transition duration-200 flex items-center gap-2 text-sm shadow-sm cursor-pointer"
+                            >
+                                <FileText size={18} />
+                                <span>{isDownloadingPdf ? 'جاري إنشاء PDF...' : 'تحميل التقرير PDF'}</span>
+                            </button>
+
                             <button
                                 onClick={() => setReport(null)}
-                                className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold transition duration-200"
+                                className="px-6 py-2.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl font-bold transition duration-200 text-sm cursor-pointer"
                             >
                                 إغلاق التقرير
                             </button>

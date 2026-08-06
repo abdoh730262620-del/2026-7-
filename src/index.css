@@ -87,6 +87,15 @@
     overscroll-behavior-y: none;
   }
 
+  ::selection {
+    background-color: #bfdbfe !important;
+    color: #000000 !important;
+  }
+  ::-moz-selection {
+    background-color: #bfdbfe !important;
+    color: #000000 !important;
+  }
+
   /* Force background to be white and text to be black for layout grids, headers, nav, and body */
   body, html, #root, main, header, aside, section, table, thead, tbody, tr, th, td, ul, ol, form, blockquote, pre {
     background-color: #ffffff !important;

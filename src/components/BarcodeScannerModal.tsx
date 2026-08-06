@@ -189,7 +189,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
 
     return (
         <AnimatePresence>
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 text-right">
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 p-4 text-right">
                 <motion.div
                     initial={{ opacity: 0, scale: 0.95 }}
                     animate={{ opacity: 1, scale: 1 }}

@@ -131,8 +131,23 @@ export default function Login() {
             }
 
             // Register authentic Firebase Auth account using input email and password
-            const userCredential = await createUserWithEmailAndPassword(auth, trimmedEmail, trimmedPassword);
-            const fbUser = userCredential.user;
+            let fbUser;
+            try {
+                const userCredential = await createUserWithEmailAndPassword(auth, trimmedEmail, trimmedPassword);
+                fbUser = userCredential.user;
+            } catch (authRegErr: any) {
+                if (authRegErr.code === 'auth/email-already-in-use') {
+                    // If email already in use in auth, try signing in instead
+                    try {
+                        const signInCred = await signInWithEmailAndPassword(auth, trimmedEmail, trimmedPassword);
+                        fbUser = signInCred.user;
+                    } catch (signInErr) {
+                        throw authRegErr;
+                    }
+                } else {
+                    throw authRegErr;
+                }
+            }
 
             const newAdmin: AppUser = {
                 uid: fbUser.uid,
@@ -264,15 +279,46 @@ export default function Login() {
             
             try {
                 if ((savedUsername || 'admin') === 'admin') {
-                    const userCredential = await signInWithEmailAndPassword(auth, savedEmail, savedPassword);
-                    const fbUser = userCredential.user;
-                    const qUser = query(collection(db, 'users'), where('uid', '==', fbUser.uid), limit(1));
+                    // For admin, we MUST authenticate via Firebase Auth
+                    let fbUserId: string;
+                    
+                    // Check if already authenticated to same user
+                    if (auth.currentUser && auth.currentUser.email === savedEmail) {
+                        console.log("Using existing authentication for biometric login.");
+                        fbUserId = auth.currentUser.uid;
+                    } else {
+                        try {
+                            const userCredential = await signInWithEmailAndPassword(auth, savedEmail, savedPassword);
+                            fbUserId = userCredential.user.uid;
+                        } catch (signInErr: any) {
+                            // Resilience fallback: If sign-in fails but we've already verified the password against Firestore,
+                            // attempt to create the account if it doesn't exist or re-auth if needed.
+                            if (signInErr.code === 'auth/invalid-credential' || signInErr.code === 'auth/user-not-found') {
+                                try {
+                                    const createdCred = await createUserWithEmailAndPassword(auth, savedEmail, savedPassword);
+                                    fbUserId = createdCred.user.uid;
+                                } catch (createErr: any) {
+                                    // If creation fails because it exists, try one final sign-in or throw original
+                                    if (createErr.code === 'auth/email-already-in-use') {
+                                        const finalCred = await signInWithEmailAndPassword(auth, savedEmail, savedPassword);
+                                        fbUserId = finalCred.user.uid;
+                                    } else {
+                                        throw signInErr;
+                                    }
+                                }
+                            } else {
+                                throw signInErr;
+                            }
+                        }
+                    }
+                    
+                    const qUser = query(collection(db, 'users'), where('uid', '==', fbUserId), limit(1));
                     const snapUser = await getDocs(qUser);
 
                     let userDoc = snapUser.empty ? null : snapUser.docs[0];
                     if (!userDoc) {
                         const newAdmin: AppUser = {
-                            uid: fbUser.uid,
+                            uid: fbUserId,
                             name: savedUsername || 'admin',
                             email: savedEmail,
                             role: 'admin',
@@ -281,7 +327,7 @@ export default function Login() {
                             tenantId: 'single_store',
                             password: savedPassword
                         };
-                        await setDoc(doc(db, 'users', fbUser.uid), {
+                        await setDoc(doc(db, 'users', fbUserId), {
                             ...newAdmin,
                             createdAt: Date.now()
                         });
@@ -414,17 +460,44 @@ export default function Login() {
                     if (userData.role === 'admin') {
                         // Admin/Owner - Auth via Firebase Auth using their email
                         const adminEmail = userData.email || trimmedEmail || 'habob19940@gmail.com';
-                        const userCredential = await signInWithEmailAndPassword(auth, adminEmail, trimmedPassword);
-                        const fbUser = userCredential.user;
+                        let fbUserId: string;
+                        
+                        // ADDED CHECK: Check if already authenticated to same user to prevent "Unexpected state" errors
+                        if (auth.currentUser && auth.currentUser.email === adminEmail) {
+                            console.log("Using existing authentication session.");
+                            fbUserId = auth.currentUser.uid;
+                        } else {
+                            try {
+                                const userCredential = await signInWithEmailAndPassword(auth, adminEmail, trimmedPassword);
+                                fbUserId = userCredential.user.uid;
+                            } catch (signInErr: any) {
+                                // Resilience fallback: If user exists in Firestore but Auth is missing/broken
+                                if (signInErr.code === 'auth/invalid-credential' || signInErr.code === 'auth/user-not-found') {
+                                    try {
+                                        const createdCred = await createUserWithEmailAndPassword(auth, adminEmail, trimmedPassword);
+                                        fbUserId = createdCred.user.uid;
+                                    } catch (createErr: any) {
+                                        if (createErr.code === 'auth/email-already-in-use') {
+                                            const finalCred = await signInWithEmailAndPassword(auth, adminEmail, trimmedPassword);
+                                            fbUserId = finalCred.user.uid;
+                                        } else {
+                                            throw signInErr;
+                                        }
+                                    }
+                                } else {
+                                    throw signInErr;
+                                }
+                            }
+                        }
 
                         // Ensure tenantId is updated to single_store in Firestore for existing accounts
                         try {
-                            await setDoc(doc(db, 'users', fbUser.uid), { tenantId: 'single_store' }, { merge: true });
+                            await setDoc(doc(db, 'users', fbUserId), { tenantId: 'single_store' }, { merge: true });
                         } catch (e) {
                             console.warn("Could not sync tenantId to single_store online:", e);
                         }
 
-                        const dbUser = { uid: fbUser.uid, ...userData, tenantId: 'single_store', password: trimmedPassword } as AppUser;
+                        const dbUser = { uid: fbUserId, ...userData, tenantId: 'single_store', password: trimmedPassword } as AppUser;
                         try {
                             localStorage.setItem('last_logged_in_user', JSON.stringify(dbUser));
                         } catch (e) {}
@@ -502,9 +575,12 @@ export default function Login() {
                 let arabicError = 'فشل تسجيل الدخول: ';
                 if (err.code === 'auth/wrong-password' || err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential') {
                     arabicError += 'اسم المستخدم أو كلمة المرور غير صحيحة.';
+                } else if (err.code === 'auth/too-many-requests') {
+                    arabicError += 'تم حظر المحاولات مؤقتاً بسبب كثرة الطلبات. حاول لاحقاً.';
                 } else {
-                    arabicError += err.message || 'المعلومات المكتوبة خطأ أو مشكلة بالاتصال';
+                    arabicError += err.message || 'المعلومات المكتوبة خطأ أو مشكلة بالاتصال بالخادم';
                 }
+                
                 setError(arabicError);
                 setIsLoading(false);
             }

@@ -38,7 +38,7 @@ export default function PurchasesReport({ dateRange }: { dateRange: { startDate:
 
     useEffect(() => {
         if (!appUser) return;
-        const tenantId = appUser.tenantId || (appUser.role === 'admin' ? appUser.uid : 'admin_initial');
+        const tenantId = appUser.tenantId || 'single_store';
 
         const unsubSupp = onSnapshot(query(collection(db, 'suppliers'), where('tenantId', '==', tenantId)), snap => {
             setSuppliers(snap.docs.map(d => ({id: d.id, ...d.data()})));
@@ -55,7 +55,7 @@ export default function PurchasesReport({ dateRange }: { dateRange: { startDate:
 
     const runReport = async (reportId: string) => {
         if (!appUser) return;
-        const tenantId = appUser.tenantId || (appUser.role === 'admin' ? appUser.uid : 'admin_initial');
+        const tenantId = appUser.tenantId || 'single_store';
 
         setIsLoading(true);
         try {

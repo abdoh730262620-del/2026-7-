@@ -33,7 +33,7 @@ export default function InventoryAudit() {
 
     useEffect(() => {
         if (!appUser) return;
-        const tenantId = appUser.tenantId || (appUser.role === 'admin' ? appUser.uid : 'admin_initial');
+        const tenantId = appUser.tenantId || 'single_store';
         const q = query(collection(db, 'products'), where('tenantId', '==', tenantId));
         return onSnapshot(q, (snap) => {
             const list: Product[] = [];
@@ -68,7 +68,7 @@ export default function InventoryAudit() {
         if (auditItems.length === 0 || !appUser) return;
         setIsSaving(true);
         try {
-            const tenantId = appUser.tenantId || (appUser.role === 'admin' ? appUser.uid : 'admin_initial');
+            const tenantId = appUser.tenantId || 'single_store';
             for (const item of auditItems) {
                 if (item.actualQuantity !== item.systemQuantity) {
                     // Update stock

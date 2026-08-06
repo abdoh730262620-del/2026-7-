@@ -46,7 +46,7 @@ export default function DemoData() {
                 return;
             }
 
-            const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+            const tenantId = appUser?.tenantId || 'single_store';
             const collectionsToClear = [
                 'customers', 'suppliers', 'products', 'sales', 'purchases', 
                 'cash', 'vouchers', 'quotations', 'expenses', 'logs',
@@ -135,7 +135,7 @@ export default function DemoData() {
                 return;
             }
 
-            const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+            const tenantId = appUser?.tenantId || 'single_store';
             const now = Date.now();
             let batch = writeBatch(db);
             let operations = 0;

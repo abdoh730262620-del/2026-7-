@@ -1,11 +1,13 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useSyncStore } from '../store/syncStore';
+import { useUIStore } from '../store/uiStore';
 
 export default function SyncProgressIndicator() {
     const { isSyncing, syncProgress } = useSyncStore();
+    const { hasActiveModal } = useUIStore();
 
-    if (!isSyncing) {
+    if (!isSyncing || hasActiveModal()) {
         return null;
     }
 

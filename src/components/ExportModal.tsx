@@ -74,7 +74,7 @@ export default function ExportModal({ isOpen, onClose }: ExportModalProps) {
 
     const handleExport = async () => {
         if (!appUser) return;
-        const tenantId = appUser?.tenantId || (appUser?.role === 'admin' ? appUser?.uid : 'admin_initial');
+        const tenantId = appUser?.tenantId || 'single_store';
 
         start(100, "جاري التصدير...");
         update(10);

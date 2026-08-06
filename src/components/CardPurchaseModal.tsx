@@ -3,6 +3,7 @@ import { X, ShoppingBag, Plus, Trash2, CheckCircle2, User, Phone, Search, Credit
 import { collection, query, where, onSnapshot, addDoc, doc, updateDoc, runTransaction, getDocs } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { useAuthStore } from '../store/authStore';
+import { useUIStore } from '../store/uiStore';
 import { CardCategory, CardSupplier } from '../types/cardTypes';
 import SearchableSelect from './SearchableSelect';
 import { printReport } from '../lib/printHelper';
@@ -39,6 +40,16 @@ const DEFAULT_DENOMINATIONS = [
 
 export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuccess, onInvoiceCreated }: CardPurchaseModalProps) {
     const { appUser } = useAuthStore();
+    const { registerModal, unregisterModal } = useUIStore();
+
+    useEffect(() => {
+        if (isOpen) {
+            registerModal('card-purchase');
+        } else {
+            unregisterModal('card-purchase');
+        }
+        return () => unregisterModal('card-purchase');
+    }, [isOpen, registerModal, unregisterModal]);
     const tenantId = 'single_store';
     const staffName = appUser?.name || appUser?.email || 'المستخدم';
 
@@ -335,6 +346,24 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                             updatedAt: Date.now()
                         });
                     }
+
+                    // Manager Invoice Notification
+                    const notifRef = doc(collection(db, 'notifications'));
+                    transaction.set(notifRef, {
+                        tenantId,
+                        type: 'invoice_created',
+                        invoiceType: 'card_purchase',
+                        invoiceNumber: String(nextInvoiceNumber),
+                        amount: invoiceTotal,
+                        createdById: appUser?.uid || '',
+                        createdByName: staffName,
+                        createdByRole: appUser?.role || 'user',
+                        recipientRole: 'admin',
+                        createdAt: Date.now(),
+                        read: false,
+                        title: `🧾 فاتورة شراء كروت جديدة #${nextInvoiceNumber}`,
+                        body: `قام المستخدم (${staffName}) بإنشاء فاتورة شراء كروت بمبلغ ${invoiceTotal.toLocaleString('ar-SA')} ر.س`
+                    });
                 } else {
                     // For draft or cancelled, we only save the purchase records themselves
                     for (const item of cartItems) {
@@ -397,7 +426,7 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
     if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-md flex items-stretch justify-center p-0 animate-in fade-in duration-200 dir-rtl overflow-hidden" dir="rtl">
+        <div className="fixed inset-0 z-50 bg-black/20  flex items-stretch justify-center p-0 animate-in fade-in duration-200 dir-rtl overflow-hidden" dir="rtl">
             <div className="bg-white dark:bg-slate-900 w-full h-full max-w-full p-4 sm:p-6 shadow-none flex flex-col justify-between overflow-hidden space-y-4">
                 {/* Header */}
                 <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2 shrink-0">
@@ -553,8 +582,8 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                                                 </td>
                                             </tr>
                                         ) : (
-                                            cartItems.map((item) => (
-                                                <tr key={item.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                                            cartItems.map((item, idx) => (
+                                                <tr key={`${item.id}-${idx}`} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
                                                     <td className="p-3 font-black text-slate-900 dark:text-white">{item.categoryName}</td>
                                                     <td className="p-3">{item.unitPrice} ريال</td>
                                                     <td className="p-3 font-black text-indigo-600 dark:text-indigo-400">{item.quantity} كارت</td>
@@ -614,7 +643,7 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
 
             {/* CHECKOUT PAYMENT MODAL */}
             {showPaymentModal && (
-                <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200 dir-rtl" dir="rtl">
+                <div className="fixed inset-0 z-50 bg-black/20  flex items-center justify-center p-4 animate-in fade-in duration-200 dir-rtl" dir="rtl">
                     <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-5 my-auto">
                         <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
                             <div className="flex items-center gap-3">

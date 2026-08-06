@@ -23,19 +23,39 @@ export default function MonthlySalesSummary({ dateRange }: { dateRange: { startD
 
     useEffect(() => {
         if (!appUser) return;
-        const tenantId = appUser.tenantId || (appUser.role === 'admin' ? appUser.uid : 'admin_initial');
+        const tenantId = appUser.tenantId || 'single_store';
 
         const fetchMonthlyData = async () => {
             setLoading(true);
             try {
-                // 1. Get all monthly customers
+                // 1. Get all monthly customers and card distributors
                 const qCust = query(
                     collection(db, 'customers'),
                     where('tenantId', '==', tenantId),
                     where('isMonthlySalesCustomer', '==', true)
                 );
                 const custSnap = await getDocs(qCust);
-                const monthlyCusts = custSnap.docs.map(doc => ({ id: doc.id, ...doc.data() as any }));
+
+                const qDist = query(
+                    collection(db, 'card_distributors'),
+                    where('tenantId', '==', tenantId),
+                    where('isMonthlySalesCustomer', '==', true)
+                );
+                const distSnap = await getDocs(qDist);
+
+                const monthlyEntitiesMap = new Map<string, any>();
+                custSnap.docs.forEach(doc => {
+                    const d = doc.data();
+                    monthlyEntitiesMap.set(doc.id, { id: doc.id, ...d });
+                });
+                distSnap.docs.forEach(doc => {
+                    const d = doc.data();
+                    if (!monthlyEntitiesMap.has(doc.id)) {
+                        monthlyEntitiesMap.set(doc.id, { id: doc.id, ...d });
+                    }
+                });
+
+                const monthlyCusts = Array.from(monthlyEntitiesMap.values());
 
                 const results: MonthlySummary[] = [];
 
