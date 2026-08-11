@@ -280,14 +280,14 @@ export const generateInvoicePdf = async (
                             <tr>
                                 <td>كروت فئة: ${item.categoryName}</td>
                                 <td>${Math.abs(item.quantity)}</td>
-                                <td>${Math.abs(item.totalAmount).toFixed(2)} ر.س</td>
+                                <td>${Math.abs(item.totalAmount).toFixed(2)} ريال يمني</td>
                             </tr>
                         `).join('')
                         : `
                             <tr>
                                 <td>كروت فئة: ${invoice.categoryName || ''}</td>
                                 <td>${Math.abs(invoice.quantity || 0)}</td>
-                                <td>${Math.abs(invoice.totalAmount).toFixed(2)} ر.س</td>
+                                <td>${Math.abs(invoice.totalAmount).toFixed(2)} ريال يمني</td>
                             </tr>
                         `
                     }
@@ -297,7 +297,7 @@ export const generateInvoicePdf = async (
             <div class="pdf-total-section">
                 <div class="pdf-total-row">
                     <span>الإجمالي الصافي</span>
-                    <span dir="ltr">${Math.abs(invoice.totalAmount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ر.س</span>
+                    <span dir="ltr">${Math.abs(invoice.totalAmount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ريال يمني</span>
                 </div>
             </div>
 

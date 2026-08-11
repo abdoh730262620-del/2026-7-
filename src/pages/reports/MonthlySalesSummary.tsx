@@ -199,7 +199,7 @@ export default function MonthlySalesSummary({ dateRange }: { dateRange: { startD
                                         </td>
                                         <td className="p-4 border-b border-border-main text-sm font-bold text-slate-500">{s.invoiceCount} فواتير</td>
                                         <td className="p-4 border-b border-border-main font-black text-amber-600 dark:text-amber-400">
-                                            {s.totalCardSales.toLocaleString()} <small className="text-[10px] font-normal">ر.س</small>
+                                            {s.totalCardSales.toLocaleString()} <small className="text-[10px] font-normal">ريال يمني</small>
                                         </td>
                                         <td className="p-4 border-b border-border-main">
                                             <span className="bg-slate-100 dark:bg-slate-800 px-3 py-1.5 rounded-lg font-black text-slate-800 dark:text-white">

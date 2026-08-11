@@ -61,7 +61,7 @@ const defaultSettings: AppSettings = {
   expiryAlertMonths: 3,
   isMultiCurrencyEnabled: false,
   exchangeRate: 1,
-  currencySymbol: '$',
+  currencySymbol: 'ر.س',
   baseCurrency: 'SAR',
   additionalCurrencies: [
     { code: 'USD', name: 'دولار أمريكي', rate: 3.75, symbol: '$' },

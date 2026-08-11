@@ -6,7 +6,7 @@ import { useAuthStore } from '../store/authStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { useInvoiceStore, CartItem } from '../store/invoiceStore';
 import { logUserAction } from '../lib/logger';
-import { Truck, Plus, Minus, Trash2, Search, FileText, Printer, ShoppingCart, MoreVertical, ArrowLeft, X, RefreshCw, GripVertical } from 'lucide-react';
+import { Truck, Plus, Minus, Trash2, Search, FileText, Printer, ShoppingCart, MoreVertical, ArrowLeft, X, RefreshCw, GripVertical, CheckCircle2, RotateCcw } from 'lucide-react';
 import { printInvoice } from '../lib/printHelper';
 import { InvoicePreviewModal } from '../components/InvoicePreviewModal';
 import SearchableSelect from '../components/SearchableSelect';
@@ -17,6 +17,7 @@ interface PurchaseInvoice {
     invoiceNumber: string;
     date: number;
     supplierId: string;
+    supplierName?: string;
     items: any[];
     total: number;
     paymentType: string;
@@ -87,6 +88,7 @@ export default function Purchases() {
     const [newPartyBalance, setNewPartyBalance] = useState('');
     const [invoices, setInvoices] = useState<PurchaseInvoice[]>([]);
     const [searchInvoice, setSearchInvoice] = useState('');
+    const [showCancelledOnly, setShowCancelledOnly] = useState(false);
     const [autoUpdateCostPrice, setAutoUpdateCostPrice] = useState<boolean>(true);
     const [isAddProductOpen, setIsAddProductOpen] = useState(false);
     const [newProdName, setNewProdName] = useState('');
@@ -250,6 +252,47 @@ export default function Purchases() {
                 }
             }
         });
+    };
+
+    const handleCancelEdit = () => {
+        let hasChanges = false;
+        if (editingInvoice) {
+            const originalCart = editingInvoice.items || [];
+            if (originalCart.length !== cart.length) {
+                hasChanges = true;
+            } else {
+                for (let i = 0; i < cart.length; i++) {
+                    const originalItem = originalCart.find((it: any) => it.productId === cart[i].id);
+                    if (!originalItem || originalItem.quantity !== cart[i].cartQuantity || originalItem.cost !== cart[i].cost) {
+                        hasChanges = true;
+                        break;
+                    }
+                }
+            }
+            if (editingInvoice.discountPercent !== discountPercent) hasChanges = true;
+            if (editingInvoice.paymentType !== paymentMethod) hasChanges = true;
+        }
+
+        if (hasChanges) {
+            setConfirmDialog({
+                isOpen: true,
+                message: 'لقد قمت بإجراء تغييرات. هل أنت متأكد من إلغاء التعديل والخروج دون حفظ؟',
+                onConfirm: () => {
+                    setConfirmDialog(p => ({ ...p, isOpen: false }));
+                    clearPurchases();
+                    setDiscountPercent(0);
+                    setNotes('');
+                    setEditingInvoice(null);
+                    setActiveTab('list');
+                }
+            });
+        } else {
+            clearPurchases();
+            setDiscountPercent(0);
+            setNotes('');
+            setEditingInvoice(null);
+            setActiveTab('list');
+        }
     };
 
     const handleEditInvoice = async (invoice: any) => {
@@ -449,6 +492,7 @@ export default function Purchases() {
     };
 
     const handleCheckout = async () => {
+        if (isCheckingOut) return;
         if (cart.length === 0 || !appUser) return;
         if (!supplierSearchName.trim()) {
             alert("يرجى إدخال المورد لإتمام العملية.");
@@ -456,9 +500,11 @@ export default function Purchases() {
         }
 
         let finalSupplierId: string | null = null;
-        const existingSupplier = suppliers.find(s => s.name.toLowerCase() === supplierSearchName.trim().toLowerCase());
+        const existingSupplier = suppliers.find(s => s.name.trim().toLowerCase() === supplierSearchName.trim().toLowerCase());
         if (existingSupplier) {
             finalSupplierId = existingSupplier.id;
+        } else if (editingInvoice && editingInvoice.supplierId) {
+            finalSupplierId = editingInvoice.supplierId;
         } else {
             setIsNewPartyModalOpen(true);
             return;
@@ -468,7 +514,12 @@ export default function Purchases() {
     };
 
     const processCheckout = async (supplierId: string | null) => {
+        if (isCheckingOut) return;
         setIsCheckingOut(true);
+        // Close payment modals immediately to prevent repeated clicks and remove the window right away
+        setIsCheckoutModalOpen(false);
+        setIsNewPartyModalOpen(false);
+
         let invoiceNum = '';
         if (!editingInvoice) {
             const existingNums = invoices
@@ -484,7 +535,7 @@ export default function Purchases() {
             const now = Date.now();
             const tenantId = appUser?.tenantId || 'single_store';
             
-            if (editingInvoice) {
+            if (editingInvoice && editingInvoice.status !== 'cancelled' && editingInvoice.status !== 'returned') {
                 await _reverseInvoice(editingInvoice, 'cancelled', batch);
             }
 
@@ -510,6 +561,7 @@ export default function Purchases() {
                 invoiceNumber: invoiceNum,
                 date: now,
                 supplierId: finalSupplierId,
+                supplierName: supplierSearchName.trim() || 'مورد عام',
                 items: cart.map(item => ({
                     productId: item.id,
                     name: item.name,
@@ -523,6 +575,9 @@ export default function Purchases() {
                 paymentType: paymentMethod,
                 status: 'active',
                 createdBy: appUser?.uid,
+                sellerName: appUser?.name || appUser?.email || 'المستخدم',
+                createdByName: appUser?.name || appUser?.email || 'المستخدم',
+                userName: appUser?.name || appUser?.email || 'المستخدم',
                 createdAt: now,
                 tenantId,
                 notes: notes.trim()
@@ -592,21 +647,18 @@ export default function Purchases() {
                 body: `قام المستخدم (${appUser?.name || appUser?.email || 'المستخدم'}) بإنشاء فاتورة مشتريات بمبلغ ${total.toLocaleString('ar-SA')} ر.س`
             });
             
-            // Background optimistic commit
-            batch.commit().catch(e => console.error("purchases sync error:", e));
+            await batch.commit();
 
             logUserAction('عملية شراء', `إتمام عملية شراء برقم ${invoiceNum} بقيمة ${total} ر.س. طريقة الدفع: ${paymentMethod}`).catch(() => {});
-            const clearAndClose = () => {
-                setCart([]);
-                setNotes('');
-                setIsCheckoutModalOpen(false);
-                setIsNewPartyModalOpen(false);
-                setNewPartyPhone('');
-                setNewPartyAddress('');
-                setNewPartyBalance('0');
-                setSupplierSearchName('');
-                setActiveTab('list');
-            };
+            
+            setCart([]);
+            setNotes('');
+            setNewPartyPhone('');
+            setNewPartyAddress('');
+            setNewPartyBalance('0');
+            setSupplierSearchName('');
+            setEditingInvoice(null);
+            setActiveTab('list');
 
             setConfirmDialog({
                 isOpen: true,
@@ -614,11 +666,9 @@ export default function Purchases() {
                 onConfirm: () => {
                     setConfirmDialog(p => ({ ...p, isOpen: false }));
                     setPreviewInvoiceId(purchaseRef.id);
-                    clearAndClose();
                 },
                 onCancel: () => {
                     setConfirmDialog(p => ({ ...p, isOpen: false }));
-                    clearAndClose();
                 }
             });
         } catch (error: any) {
@@ -640,11 +690,20 @@ export default function Purchases() {
         });
 
         return invoices.filter(inv => {
-            const suppName = supplierMap.get(inv.supplierId) || '';
-            return suppName.includes(lowerSearchInvoice) || 
-                   (inv.invoiceNumber || '').toLowerCase().includes(lowerSearchInvoice);
+            const suppName = supplierMap.get(inv.supplierId) || (inv.supplierName || '').toLowerCase();
+            const matchSearch = suppName.includes(lowerSearchInvoice) || 
+                                (inv.invoiceNumber || '').toLowerCase().includes(lowerSearchInvoice);
+            if (!matchSearch) return false;
+
+            if (showCancelledOnly) {
+                return inv.status === 'cancelled';
+            } else {
+                if (inv.status === 'cancelled') return false;
+            }
+
+            return true;
         });
-    }, [invoices, suppliers, searchInvoice]);
+    }, [invoices, suppliers, searchInvoice, showCancelledOnly]);
 
     if (!canView) {
         return <div className="p-5 md:p-8 text-center text-red-600 font-bold text-base md:text-xl">ليس لديك صلاحية للوصول إلى صفحة المشتريات</div>;
@@ -673,15 +732,30 @@ export default function Purchases() {
             {activeTab === 'list' && (
                 <div className="flex-1 bg-card-bg rounded-xl shadow-sm border border-border-main flex flex-col overflow-hidden min-h-0">
                     <div className="p-3 border-b border-border-main flex flex-col md:flex-row gap-3 justify-between items-center bg-bg-main shrink-0">
-                        <div className="relative w-full md:w-80 group">
-                            <Search className="absolute right-3 top-2.5 text-gray-400 group-focus-within:text-purple-600 transition-colors" size={16} />
-                            <input 
-                                type="text"
-                                placeholder="بحث برقم الفاتورة أو اسم المورد..."
-                                className="w-full bg-card-bg border border-border-main rounded-xl pr-9 pl-3 py-2 outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-50 transition-all font-bold text-text-main text-[11px]"
-                                value={searchInvoice}
-                                onChange={(e) => setSearchInvoice(e.target.value)}
-                            />
+                        <div className="flex flex-col md:flex-row gap-3 items-center w-full">
+                            <div className="relative w-full md:w-80 group">
+                                <Search className="absolute right-3 top-2.5 text-gray-400 group-focus-within:text-purple-600 transition-colors" size={16} />
+                                <input 
+                                    type="text"
+                                    placeholder="بحث برقم الفاتورة أو اسم المورد..."
+                                    className="w-full bg-card-bg border border-border-main rounded-xl pr-9 pl-3 py-2 outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-50 transition-all font-bold text-text-main text-[11px]"
+                                    value={searchInvoice}
+                                    onChange={(e) => setSearchInvoice(e.target.value)}
+                                />
+                            </div>
+
+                            <label className={`flex items-center gap-2 cursor-pointer px-3 py-2 rounded-xl text-[11px] font-bold transition border ${showCancelledOnly ? 'bg-red-50 text-red-700 border-red-300 dark:bg-red-950/40 dark:border-red-800 dark:text-red-300' : 'bg-white text-black dark:text-gray-200 border-border-main hover:bg-white'}`}>
+                                <input 
+                                    type="checkbox" 
+                                    className="rounded text-red-600"
+                                    checked={showCancelledOnly}
+                                    onChange={e => setShowCancelledOnly(e.target.checked)}
+                                />
+                                <span>عرض الفواتير الملغاة</span>
+                                <span className={`px-2 py-0.5 text-[10px] rounded-full font-black ${showCancelledOnly ? 'bg-red-200 text-red-800 dark:bg-red-900 dark:text-red-100' : 'bg-gray-100 dark:bg-slate-800 text-gray-600 dark:text-gray-300'}`}>
+                                    {invoices.filter(i => i.status === 'cancelled').length}
+                                </span>
+                            </label>
                         </div>
                     </div>
                     
@@ -753,10 +827,7 @@ export default function Purchases() {
                                 وضع التعديل الفاتورة رقم: {editingInvoice.invoiceNumber}
                             </span>
                             <button 
-                                onClick={() => {
-                                    clearPurchases();
-                                    setActiveTab('list');
-                                }}
+                                onClick={handleCancelEdit}
                                 className="text-yellow-700 hover:text-yellow-900 bg-white hover:bg-white px-3 py-1.5 rounded-lg text-xs font-bold transition"
                             >
                                 إلغاء التعديل
@@ -1198,6 +1269,11 @@ export default function Purchases() {
                                     <FileText size={18} /> معاينة الفاتورة ومشاركتها
                                 </button>
                                 
+                                {invoice.status === 'cancelled' && (
+                                    <button onClick={() => { setActiveDropdownId(null); handleEditInvoice(invoice); }} className="col-span-2 py-3 bg-white text-blue-700 hover:bg-white rounded-xl font-bold flex justify-center items-center gap-2 border border-blue-100 transition">
+                                        <RotateCcw size={18} /> استعادة الفاتورة (تعديل)
+                                    </button>
+                                )}
                                 {invoice.status !== 'cancelled' && invoice.status !== 'returned' && (
                                     <>
                                         <button onClick={() => { setActiveDropdownId(null); handleEditInvoice(invoice); }} className="col-span-2 py-3 bg-white dark:bg-slate-800 text-indigo-700 hover:bg-white rounded-xl font-bold flex justify-center items-center gap-2 border border-gray-200 transition">
@@ -1270,8 +1346,8 @@ export default function Purchases() {
             })()}
 
             {editingItem && (
-                <div className="fixed inset-0 bg-black/60 z-[110] flex items-center justify-center p-4 backdrop-blur-xs">
-                    <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-sm shadow-2xl flex flex-col overflow-hidden border border-gray-100 dark:border-slate-800 text-right" dir="rtl">
+                <div className="fixed inset-0 z-[110] flex items-center justify-center p-4" onClick={() => setEditingItem(null)}>
+                    <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-sm shadow-2xl flex flex-col overflow-hidden border border-gray-100 dark:border-slate-800 text-right" dir="rtl" onClick={(e) => e.stopPropagation()}>
                         {/* Header */}
                         <div className="p-4 md:p-5 border-b border-gray-100 dark:border-slate-800 bg-white dark:bg-slate-900 flex justify-between items-center">
                             <div className="flex flex-col">

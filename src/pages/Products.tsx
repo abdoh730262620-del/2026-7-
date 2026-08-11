@@ -871,8 +871,8 @@ export default function Products() {
 
 
             {isActionModalOpen && (
-                <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-                    <div className="bg-white rounded-2xl w-full max-w-md flex flex-col max-h-[90vh]">
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50" onClick={() => setActionModalOpen(false)}>
+                    <div className="bg-white rounded-2xl w-full max-w-md flex flex-col max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
                         <div className="flex justify-between items-center mb-4 md:mb-6 p-4 md:p-6 pb-0 shrink-0">
                             <h2 className="text-base md:text-xl font-bold">{editingProduct ? 'تعديل منتج' : 'إضافة منتج جديد'}</h2>
                             <button onClick={() => setActionModalOpen(false)} className="text-gray-400 hover:text-gray-600">

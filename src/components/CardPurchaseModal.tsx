@@ -15,6 +15,10 @@ interface CardPurchaseModalProps {
     categoryName?: string;
     onSuccess?: () => void;
     onInvoiceCreated?: (invoice: InvoicePdfInput) => void;
+    editingInvoice?: any;
+    onReverseInvoice?: () => Promise<boolean>;
+    prefetchedCategories?: CardCategory[];
+    prefetchedSuppliers?: CardSupplier[];
 }
 
 interface CartItem {
@@ -38,7 +42,7 @@ const DEFAULT_DENOMINATIONS = [
     { name: 'فئة 5000 ريال', retailPrice: 5000, wholesalePrice: 4750 },
 ];
 
-export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuccess, onInvoiceCreated }: CardPurchaseModalProps) {
+export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuccess, onInvoiceCreated, editingInvoice, onReverseInvoice, prefetchedCategories, prefetchedSuppliers }: CardPurchaseModalProps) {
     const { appUser } = useAuthStore();
     const { registerModal, unregisterModal } = useUIStore();
 
@@ -74,21 +78,59 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
     const [notes, setNotes] = useState<string>('');
     const [saving, setSaving] = useState<boolean>(false);
 
+    // Pre-fill if editingInvoice is provided
+    useEffect(() => {
+        if (isOpen && editingInvoice) {
+            setPaymentType(editingInvoice.paymentType || 'cash');
+            if (editingInvoice.supplierId) {
+                setSelectedSupplierId(editingInvoice.supplierId);
+            }
+            if (editingInvoice.notes) {
+                setNotes(editingInvoice.notes);
+            }
+            
+            if (editingInvoice.items && Array.isArray(editingInvoice.items)) {
+                const initialCart = editingInvoice.items.map((it: any) => ({
+                    id: Math.random().toString(36).substr(2, 9),
+                    categoryName: it.categoryName,
+                    unitPrice: it.unitPrice || 0,
+                    quantity: it.quantity || 1,
+                    totalAmount: (it.unitPrice || 0) * (it.quantity || 1),
+                    availableStock: 99999
+                }));
+                setCartItems(initialCart);
+            }
+        } else if (isOpen && !editingInvoice) {
+            setCartItems([]);
+            setPaymentType('cash');
+            setSelectedSupplierId('');
+            setNotes('');
+        }
+    }, [isOpen, editingInvoice]);
+
+
     // Fetch Categories & Suppliers
     useEffect(() => {
         if (!isOpen) return;
 
-        const qCat = query(collection(db, 'card_categories'), where('tenantId', '==', tenantId));
-        const unsubCat = onSnapshot(qCat, (snap) => {
-            const list: CardCategory[] = snap.docs.map(d => ({ id: d.id, ...d.data() } as CardCategory));
-            setCategories(list);
-        });
+        let unsubCat = () => {};
+        let unsubSupp = () => {};
 
-        const qSupp = query(collection(db, 'card_suppliers'), where('tenantId', '==', tenantId));
-        const unsubSupp = onSnapshot(qSupp, (snap) => {
-            const list: CardSupplier[] = snap.docs.map(d => ({ id: d.id, ...d.data() } as CardSupplier));
-            setSuppliers(list);
-        });
+        if (!prefetchedCategories) {
+            const qCat = query(collection(db, 'card_categories'), where('tenantId', '==', tenantId));
+            unsubCat = onSnapshot(qCat, (snap) => {
+                const list: CardCategory[] = snap.docs.map(d => ({ id: d.id, ...d.data() } as CardCategory));
+                setCategories(list);
+            });
+        }
+
+        if (!prefetchedSuppliers) {
+            const qSupp = query(collection(db, 'card_suppliers'), where('tenantId', '==', tenantId));
+            unsubSupp = onSnapshot(qSupp, (snap) => {
+                const list: CardSupplier[] = snap.docs.map(d => ({ id: d.id, ...d.data() } as CardSupplier));
+                setSuppliers(list);
+            });
+        }
 
         return () => {
             unsubCat();
@@ -96,19 +138,49 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
         };
     }, [isOpen]);
 
-    // Available categories display list (from default 8 network card sections, linked with category stocks)
-    const displayCategories = DEFAULT_DENOMINATIONS.map(denom => {
-        const matching = categories.filter(c => c.name.trim() === denom.name.trim() || c.linkedSection?.trim() === denom.name.trim());
-        const totalStock = matching.reduce((sum, c) => sum + (c.availableCount || 0), 0);
-        const mainCat = matching.find(c => c.name.trim() === denom.name.trim()) || matching[0];
-        return {
-            id: mainCat?.id,
-            name: denom.name,
-            retailPrice: mainCat?.retailPrice || denom.retailPrice,
-            wholesalePrice: mainCat?.wholesalePrice || denom.wholesalePrice,
-            availableCount: totalStock
-        };
-    });
+    useEffect(() => {
+        if (prefetchedCategories) setCategories(prefetchedCategories);
+    }, [prefetchedCategories]);
+
+    useEffect(() => {
+        if (prefetchedSuppliers) setSuppliers(prefetchedSuppliers);
+    }, [prefetchedSuppliers]);
+
+    // Available categories display list (from default 8 network card sections + custom categories)
+    const displayCategories = (() => {
+        const processedNames = new Set<string>();
+        const list = DEFAULT_DENOMINATIONS.map(denom => {
+            processedNames.add(denom.name.trim());
+            const matching = categories.filter(c => c.name.trim() === denom.name.trim() || c.linkedSection?.trim() === denom.name.trim());
+            const totalStock = matching.reduce((sum, c) => sum + (c.availableCount || 0), 0);
+            const mainCat = matching.find(c => c.name.trim() === denom.name.trim()) || matching[0];
+            return {
+                id: mainCat?.id,
+                name: denom.name,
+                retailPrice: mainCat?.retailPrice || denom.retailPrice,
+                wholesalePrice: mainCat?.wholesalePrice || denom.wholesalePrice,
+                availableCount: totalStock
+            };
+        });
+
+        categories.forEach(cat => {
+            const catName = cat.name?.trim();
+            if (catName && !processedNames.has(catName)) {
+                processedNames.add(catName);
+                const matching = categories.filter(c => c.name.trim() === catName);
+                const totalStock = matching.reduce((sum, c) => sum + (c.availableCount || 0), 0);
+                list.push({
+                    id: cat.id,
+                    name: cat.name,
+                    retailPrice: cat.retailPrice || 0,
+                    wholesalePrice: cat.wholesalePrice || 0,
+                    availableCount: totalStock
+                });
+            }
+        });
+
+        return list;
+    })();
 
     // Initialize initial category when opened
     useEffect(() => {
@@ -181,6 +253,7 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
 
     // Execute Purchase Transaction
     const handleConfirmCheckout = async () => {
+        if (saving) return;
         if (cartItems.length === 0) {
             alert('السلة فارغة، يرجى إضافة كروت للجدول أولاً.');
             return;
@@ -199,22 +272,33 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
         const timeStr = now.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
 
         try {
+            if (editingInvoice && onReverseInvoice) {
+                const reversed = await onReverseInvoice();
+                if (!reversed) {
+                    throw new Error('فشل إلغاء الفاتورة السابقة أثناء التعديل.');
+                }
+            }
+
             // Generate purely numeric invoice number
             let nextInvoiceNumber = '';
-            try {
-                const q = query(collection(db, 'card_purchases'), where('tenantId', '==', tenantId));
-                const snap = await getDocs(q);
-                const existingNums = snap.docs
-                    .map(d => {
-                        const numStr = d.data().invoiceNumber;
-                        return numStr ? parseInt(numStr.replace(/\D/g, '')) : NaN;
-                    })
-                    .filter(n => !isNaN(n));
-                const maxNum = existingNums.length > 0 ? Math.max(...existingNums) : 1000;
-                nextInvoiceNumber = String(maxNum + 1).padStart(5, '0');
-            } catch (e) {
-                console.error('Error generating purchase invoice number:', e);
-                nextInvoiceNumber = String(Date.now()).slice(-8);
+            if (editingInvoice && editingInvoice.invoiceNumber) {
+                nextInvoiceNumber = String(editingInvoice.invoiceNumber);
+            } else {
+                try {
+                    const q = query(collection(db, 'card_purchases'), where('tenantId', '==', tenantId));
+                    const snap = await getDocs(q);
+                    const existingNums = snap.docs
+                        .map(d => {
+                            const numStr = d.data().invoiceNumber;
+                            return numStr ? parseInt(numStr.replace(/\D/g, '')) : NaN;
+                        })
+                        .filter(n => !isNaN(n));
+                    const maxNum = existingNums.length > 0 ? Math.max(...existingNums) : 1000;
+                    nextInvoiceNumber = String(maxNum + 1).padStart(5, '0');
+                } catch (e) {
+                    console.error('Error generating purchase invoice number:', e);
+                    nextInvoiceNumber = String(Date.now()).slice(-8);
+                }
             }
 
             await runTransaction(db, async (transaction) => {
@@ -302,6 +386,8 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                             date: dateStr,
                             dateTime: `${dateStr} ${timeStr}`,
                             userName: staffName,
+                            sellerName: staffName,
+                            createdByName: staffName,
                             invoiceNumber: nextInvoiceNumber,
                             status: invoiceStatus,
                             notes: notes.trim(),
@@ -362,7 +448,7 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                         createdAt: Date.now(),
                         read: false,
                         title: `🧾 فاتورة شراء كروت جديدة #${nextInvoiceNumber}`,
-                        body: `قام المستخدم (${staffName}) بإنشاء فاتورة شراء كروت بمبلغ ${invoiceTotal.toLocaleString('ar-SA')} ر.س`
+                        body: `قام المستخدم (${staffName}) بإنشاء فاتورة شراء كروت بمبلغ ${invoiceTotal.toLocaleString('ar-SA')} ريال يمني`
                     });
                 } else {
                     // For draft or cancelled, we only save the purchase records themselves
@@ -383,6 +469,8 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                             date: dateStr,
                             dateTime: `${dateStr} ${timeStr}`,
                             userName: staffName,
+                            sellerName: staffName,
+                            createdByName: staffName,
                             invoiceNumber: nextInvoiceNumber,
                             status: invoiceStatus,
                             notes: notes.trim(),
@@ -463,7 +551,7 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                             </label>
                             {activeCatObj && (
                                 <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400">
-                                    الرصيد الحالي بالمخزن: <strong>{availableStock} كارت</strong>
+                                    المتبقي: <strong>{availableStock} كارت</strong>
                                 </span>
                             )}
                         </div>
@@ -490,7 +578,7 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                                             {cat.name}
                                         </div>
                                         <span className={`text-[10px] font-black mt-1 px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300`}>
-                                            المخزون الحالي: {cat.availableCount}
+                                            المتبقي: {cat.availableCount}
                                         </span>
                                     </button>
                                 );
@@ -503,7 +591,7 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                         <div className="grid grid-cols-12 gap-2.5 items-end">
                             <div className="col-span-4">
                                 <label className="block text-xs font-black text-slate-700 dark:text-slate-300 mb-1.5 text-center">
-                                    سعر الشراء الفردي (ريال)
+                                    سعر الشراء الفردي (ريال يمني)
                                 </label>
                                 <input
                                     type="number"
@@ -585,9 +673,9 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                                             cartItems.map((item, idx) => (
                                                 <tr key={`${item.id}-${idx}`} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
                                                     <td className="p-3 font-black text-slate-900 dark:text-white">{item.categoryName}</td>
-                                                    <td className="p-3">{item.unitPrice} ريال</td>
+                                                    <td className="p-3">{item.unitPrice} ريال يمني</td>
                                                     <td className="p-3 font-black text-indigo-600 dark:text-indigo-400">{item.quantity} كارت</td>
-                                                    <td className="p-3 font-black text-emerald-600 dark:text-emerald-400">{item.totalAmount} ريال</td>
+                                                    <td className="p-3 font-black text-emerald-600 dark:text-emerald-400">{item.totalAmount} ريال يمني</td>
                                                     <td className="p-3 text-center">
                                                         <button
                                                             onClick={() => handleRemoveFromCart(item.id)}
@@ -612,7 +700,7 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                                     </span>
                                     <div className="flex items-center gap-2">
                                         <span className="text-slate-600 dark:text-slate-400">الإجمالي العام للفاتورة:</span>
-                                        <span className="text-sm font-black text-emerald-600 dark:text-emerald-400">{invoiceTotal} ريال</span>
+                                        <span className="text-sm font-black text-emerald-600 dark:text-emerald-400">{invoiceTotal} ريال يمني</span>
                                     </div>
                                 </div>
                             )}
@@ -629,7 +717,7 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                         className="flex-1 py-3.5 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-black text-sm rounded-2xl shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2 transition disabled:opacity-40 disabled:pointer-events-none"
                     >
                         <ShoppingBag size={20} />
-                        <span>إتمام وحفظ فاتورة الشراء - الإجمالي: {invoiceTotal} ريال</span>
+                        <span>إتمام وحفظ فاتورة الشراء - الإجمالي: {invoiceTotal} ريال يمني</span>
                     </button>
                     <button
                         type="button"
@@ -795,7 +883,7 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                                     <div className="bg-emerald-600 text-white p-2 rounded-xl flex flex-col justify-center shadow-sm">
                                         <span className="text-[10px] font-bold text-emerald-100 mb-0.5">الإجمالي الصافي للمبلغ</span>
                                         <span className="text-xs font-black truncate" dir="ltr">
-                                            {invoiceTotal} ريال
+                                            {invoiceTotal} ريال يمني
                                         </span>
                                     </div>
                                 </div>

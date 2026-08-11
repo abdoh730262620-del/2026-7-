@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Printer, Share2, X, CheckCircle2, Loader2, FileText, ShoppingBag, TrendingUp } from 'lucide-react';
+import { Printer, Share2, X, CheckCircle2, Loader2, FileText, ShoppingBag, TrendingUp, Eye } from 'lucide-react';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { Share as CapacitorShare } from '@capacitor/share';
 import { generateInvoicePdf, InvoicePdfInput } from '../lib/pdfHelper';
+import { InvoicePreviewModal } from './InvoicePreviewModal';
 
 interface CardInvoiceActionModalProps {
     isOpen: boolean;
@@ -17,6 +18,7 @@ export const CardInvoiceActionModal: React.FC<CardInvoiceActionModalProps> = ({
     onClose,
 }) => {
     const [isLoading, setIsLoading] = useState(false);
+    const [showHtmlPreview, setShowHtmlPreview] = useState(false);
 
     if (!isOpen || !invoice) return null;
 
@@ -206,8 +208,8 @@ export const CardInvoiceActionModal: React.FC<CardInvoiceActionModalProps> = ({
                                                 <tr key={idx} className="font-bold text-slate-800 dark:text-slate-200">
                                                     <td className="p-3 font-black text-slate-900 dark:text-white">{item.categoryName}</td>
                                                     <td className="p-3 text-center font-mono font-black text-emerald-600">{Math.abs(item.quantity)} كارت</td>
-                                                    <td className="p-3 text-center font-mono text-slate-500">{item.unitPrice.toFixed(2)} ر.س</td>
-                                                    <td className="p-3 text-left font-mono font-black text-slate-950 dark:text-white">{Math.abs(item.totalAmount).toFixed(2)} ر.س</td>
+                                                    <td className="p-3 text-center font-mono text-slate-500">{item.unitPrice.toFixed(2)} ريال يمني</td>
+                                                    <td className="p-3 text-left font-mono font-black text-slate-950 dark:text-white">{Math.abs(item.totalAmount).toFixed(2)} ريال يمني</td>
                                                 </tr>
                                             ))
                                         ) : (
@@ -215,7 +217,7 @@ export const CardInvoiceActionModal: React.FC<CardInvoiceActionModalProps> = ({
                                                 <td className="p-3 font-black text-slate-900 dark:text-white">{invoice.categoryName || 'كروت فئة'}</td>
                                                 <td className="p-3 text-center font-mono font-black text-emerald-600">{Math.abs(invoice.quantity || 0)} كارت</td>
                                                 <td className="p-3 text-center font-mono text-slate-500">-</td>
-                                                <td className="p-3 text-left font-mono font-black text-slate-950 dark:text-white">{Math.abs(invoice.totalAmount).toFixed(2)} ر.س</td>
+                                                <td className="p-3 text-left font-mono font-black text-slate-950 dark:text-white">{Math.abs(invoice.totalAmount).toFixed(2)} ريال يمني</td>
                                             </tr>
                                         )}
                                     </tbody>
@@ -227,7 +229,7 @@ export const CardInvoiceActionModal: React.FC<CardInvoiceActionModalProps> = ({
                         <div className="bg-slate-900 text-white p-4 rounded-2xl flex items-center justify-between">
                             <span className="text-xs font-black text-slate-300">الإجمالي الصافي للفاتورة:</span>
                             <span className="text-base font-black font-mono text-emerald-400" dir="ltr">
-                                {Math.abs(invoice.totalAmount).toFixed(2)} ر.س
+                                {Math.abs(invoice.totalAmount).toFixed(2)} ريال يمني
                             </span>
                         </div>
                     </div>

@@ -206,12 +206,6 @@ export default function SearchableSelect({ options, value, onChange, placeholder
                                     setIsOpen(false);
                                     setIsFocused(false);
                                 }}
-                                onTouchStart={(e) => {
-                                    e.preventDefault();
-                                    onChange(typedText.trim());
-                                    setIsOpen(false);
-                                    setIsFocused(false);
-                                }}
                                 className="p-2.5 rounded-xl border border-dashed border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/40 dark:bg-indigo-950/20 cursor-pointer flex items-center justify-between group hover:bg-indigo-100/50 dark:hover:bg-indigo-900/30 transition-all"
                             >
                                 <div className="flex items-center gap-2">
@@ -250,10 +244,7 @@ export default function SearchableSelect({ options, value, onChange, placeholder
                                             e.preventDefault(); // Prevent input blur before click registers
                                             handleOptionSelect(opt);
                                         }}
-                                        onTouchStart={(e) => {
-                                            e.preventDefault(); // Prevent input blur and trigger selection immediately
-                                            handleOptionSelect(opt);
-                                        }}
+                                        
                                         className={`p-2.5 rounded-xl border cursor-pointer flex items-center justify-between transition-all duration-150 ${
                                             isSelected
                                                 ? 'bg-indigo-50/70 dark:bg-indigo-950/30 border-indigo-400 dark:border-indigo-500'

@@ -5,7 +5,7 @@ import { useAuthStore } from '../store/authStore';
 import { useInvoiceStore, CartItem } from '../store/invoiceStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { logUserAction } from '../lib/logger';
-import { ShoppingCart, Plus, Minus, Trash2, Search, FileText, Printer, MessageCircle, Globe, Coins, MoreVertical, ArrowLeft, X, Camera, Maximize2, Minimize2, GripVertical } from 'lucide-react';
+import { ShoppingCart, Plus, Minus, Trash2, Search, FileText, Printer, MessageCircle, Globe, Coins, MoreVertical, ArrowLeft, X, Camera, Maximize2, Minimize2, GripVertical, CheckCircle2, RotateCcw } from 'lucide-react';
 import { printInvoice } from '../lib/printHelper';
 import { InvoicePreviewModal } from '../components/InvoicePreviewModal';
 import SearchableSelect from '../components/SearchableSelect';
@@ -33,6 +33,7 @@ interface SaleInvoice {
     invoiceNumber: string;
     date: number;
     customerId: string;
+    customerName?: string;
     items: any[];
     total: number;
     paymentType: string;
@@ -88,6 +89,13 @@ export default function Sales() {
     const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
     const [previewInvoiceId, setPreviewInvoiceId] = useState<string | null>(null);
     const [notes, setNotes] = useState('');
+    const [sellerName, setSellerName] = useState('');
+
+    useEffect(() => {
+        if (appUser && !sellerName) {
+            setSellerName(appUser.name || appUser.email || '');
+        }
+    }, [appUser]);
 
     const [isNewPartyModalOpen, setIsNewPartyModalOpen] = useState(false);
     const [newPartyPhone, setNewPartyPhone] = useState('');
@@ -341,6 +349,47 @@ export default function Sales() {
         });
     };
 
+    const handleCancelEdit = () => {
+        let hasChanges = false;
+        if (editingInvoice) {
+            const originalCart = editingInvoice.items || [];
+            if (originalCart.length !== cart.length) {
+                hasChanges = true;
+            } else {
+                for (let i = 0; i < cart.length; i++) {
+                    const originalItem = originalCart.find((it: any) => it.productId === cart[i].id);
+                    if (!originalItem || originalItem.quantity !== cart[i].cartQuantity || originalItem.price !== cart[i].price) {
+                        hasChanges = true;
+                        break;
+                    }
+                }
+            }
+            if (editingInvoice.discountPercent !== discountPercent) hasChanges = true;
+            if (editingInvoice.paymentType !== paymentMethod) hasChanges = true;
+        }
+
+        if (hasChanges) {
+            setConfirmDialog({
+                isOpen: true,
+                message: 'لقد قمت بإجراء تغييرات. هل أنت متأكد من إلغاء التعديل والخروج دون حفظ؟',
+                onConfirm: () => {
+                    setConfirmDialog(p => ({ ...p, isOpen: false }));
+                    clearSales();
+                    setDiscountPercent(0);
+                    setNotes('');
+                    setEditingInvoice(null);
+                    setActiveTab('list');
+                }
+            });
+        } else {
+            clearSales();
+            setDiscountPercent(0);
+            setNotes('');
+            setEditingInvoice(null);
+            setActiveTab('list');
+        }
+    };
+
     const handleEditInvoice = async (invoice: any) => {
         if (!canEdit) {
             setAlertDialog({ isOpen: true, message: 'ليس لديك صلاحية تعديل فواتير المبيعات.' });
@@ -380,6 +429,7 @@ export default function Sales() {
     const [invoices, setInvoices] = useState<SaleInvoice[]>([]);
     const [searchInvoice, setSearchInvoice] = useState('');
     const [showUnpaidOnly, setShowUnpaidOnly] = useState(false);
+    const [showCancelledOnly, setShowCancelledOnly] = useState(false);
 
     useEffect(() => {
         let unsubProducts = () => {};
@@ -476,21 +526,30 @@ export default function Sales() {
         });
 
         return invoices.filter(inv => {
-            const custName = customerMap.get(inv.customerId) || '';
+            const custName = customerMap.get(inv.customerId) || (inv.customerName || '').toLowerCase();
             const matchSearch = custName.includes(lowerSearchInvoice) || 
                                 (inv.invoiceNumber || '').toLowerCase().includes(lowerSearchInvoice);
+            if (!matchSearch) return false;
             
+            if (showCancelledOnly) {
+                // Show ONLY cancelled invoices when this filter is active
+                return inv.status === 'cancelled';
+            } else {
+                // By default, exclude cancelled invoices from main list
+                if (inv.status === 'cancelled') return false;
+            }
+
             if (showUnpaidOnly) {
                 if (inv.paymentType !== 'credit') return false;
-                if (inv.status === 'paid' || inv.status === 'cancelled' || inv.status === 'returned') return false;
+                if (inv.status === 'paid' || inv.status === 'returned') return false;
                 const total = parseFloat(inv.total as any) || 0;
                 const paid = parseFloat((inv as any).paidAmount) || 0;
                 if (paid >= total) return false;
             }
 
-            return matchSearch;
+            return true;
         });
-    }, [invoices, customers, searchInvoice, showUnpaidOnly]);
+    }, [invoices, customers, searchInvoice, showUnpaidOnly, showCancelledOnly]);
 
 
     const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -581,11 +640,19 @@ export default function Sales() {
     const total = afterDiscount + vatAmount;
 
     const handleCheckout = async () => {
-        if (!canAdd) {
+        if (isCheckingOut) return;
+        if (!canAdd && !editingInvoice) {
             alert('ليس لديك صلاحية لإضافة مبيعات.');
             return;
         }
-        if (cart.length === 0 || !appUser) return;
+        if (editingInvoice && !canEdit && !canAdd) {
+            alert('ليس لديك صلاحية لتعديل أو استعادة المبيعات.');
+            return;
+        }
+        if (cart.length === 0 || !appUser) {
+            alert('سلة المبيعات فارغة');
+            return;
+        }
         if (paymentMethod === 'credit' && !customerSearchName.trim()) {
             alert("يرجى إدخال اسم العميل لإتمام البيع الآجل.");
             return;
@@ -593,11 +660,13 @@ export default function Sales() {
 
         let finalCustomerId: string | null = null;
         if (customerSearchName.trim() !== '') {
-            const existingCust = customers.find(c => c.name.toLowerCase() === customerSearchName.trim().toLowerCase());
+            const existingCust = customers.find(c => c.name.trim().toLowerCase() === customerSearchName.trim().toLowerCase());
             if (existingCust) {
                 finalCustomerId = existingCust.id;
-            } else {
-                // Customer not found and they entered a name. Open detailed modal.
+            } else if (editingInvoice && editingInvoice.customerId) {
+                finalCustomerId = editingInvoice.customerId;
+            } else if (paymentMethod === 'credit') {
+                // Customer not found and they entered a name for credit sale. Open detailed modal.
                 setIsNewPartyModalOpen(true);
                 return;
             }
@@ -607,7 +676,12 @@ export default function Sales() {
     };
 
     const processCheckout = async (customerId: string | null) => {
+        if (isCheckingOut) return;
         setIsCheckingOut(true);
+        // Close payment modals immediately to prevent repeated clicks and remove the window right away
+        setIsCheckoutModalOpen(false);
+        setIsNewPartyModalOpen(false);
+
         let finalInvoiceNum = '';
         if (!editingInvoice) {
             const existingNums = invoices
@@ -622,7 +696,7 @@ export default function Sales() {
             const batch = writeBatch(db);
             const now = Date.now();
             
-            if (editingInvoice) {
+            if (editingInvoice && editingInvoice.status !== 'cancelled' && editingInvoice.status !== 'returned') {
                 await _reverseInvoice(editingInvoice, 'cancelled', batch);
             }
 
@@ -632,7 +706,7 @@ export default function Sales() {
 
             // If we are in the flow where isNewPartyModalOpen is true, then customerId is null 
             // but we need to create the customer using the modal details.
-            if (!finalCustomerId && customerSearchName.trim() !== '') {
+            if (!finalCustomerId && customerSearchName.trim() !== '' && paymentMethod === 'credit') {
                 const searchTrimmed = customerSearchName.trim().toLowerCase();
                 const existingCustomer = customers.find(c => c.name.trim().toLowerCase() === searchTrimmed);
                 if (existingCustomer) {
@@ -674,10 +748,11 @@ export default function Sales() {
                 invoiceNumber: finalInvoiceNum,
                 date: now,
                 customerId: finalCustomerId,
+                customerName: customerSearchName.trim() || 'نقدي',
                 month: saleMonth,
                 year: saleYear,
                 items: cart.map(item => ({
-                    productId: item.id,
+                    productId: item.id || '',
                     name: item.name,
                     price: item.price,
                     quantity: item.cartQuantity
@@ -692,6 +767,9 @@ export default function Sales() {
                 paidAmount: paymentMethod === 'cash' ? total : invoicePaidAmount,
                 status: (paymentMethod === 'cash' || (paymentMethod === 'credit' && invoicePaidAmount >= total)) ? 'paid' : 'active',
                 createdBy: appUser?.uid,
+                sellerName: sellerName.trim() || appUser?.name || appUser?.email || 'المستخدم',
+                createdByName: sellerName.trim() || appUser?.name || appUser?.email || 'المستخدم',
+                userName: sellerName.trim() || appUser?.name || appUser?.email || 'المستخدم',
                 tenantId,
                 createdAt: now,
                 commissionPercent,
@@ -835,20 +913,17 @@ export default function Sales() {
                 body: `قام المستخدم (${appUser?.name || appUser?.email || 'المستخدم'}) بإنشاء فاتورة مبيعات بمبلغ ${total.toLocaleString('ar-SA')} ر.س`
             });
             
-            batch.commit().catch(e => console.error("Sync error in background: ", e));
+            await batch.commit();
             logUserAction('عملية بيع', `إتمام عملية بيع برقم ${finalInvoiceNum} بقيمة ${total} ر.س. طريقة الدفع: ${paymentMethod}`).catch(() => {});
             
-            const clearAndClose = () => {
-                clearSales();
-                setDiscountPercent(0);
-                setNotes('');
-                setIsCheckoutModalOpen(false);
-                setIsNewPartyModalOpen(false);
-                setNewPartyPhone('');
-                setNewPartyAddress('');
-                setNewPartyBalance('0');
-                setActiveTab('list');
-            };
+            clearSales();
+            setDiscountPercent(0);
+            setNotes('');
+            setNewPartyPhone('');
+            setNewPartyAddress('');
+            setNewPartyBalance('0');
+            setEditingInvoice(null);
+            setActiveTab('list');
 
             setConfirmDialog({
                 isOpen: true,
@@ -856,11 +931,9 @@ export default function Sales() {
                 onConfirm: () => {
                     setConfirmDialog(p => ({ ...p, isOpen: false }));
                     setPreviewInvoiceId(saleRef.id);
-                    clearAndClose();
                 },
                 onCancel: () => {
                     setConfirmDialog(p => ({ ...p, isOpen: false }));
-                    clearAndClose();
                 }
             });
         } catch (error: any) {
@@ -928,15 +1001,36 @@ export default function Sales() {
                                     onChange={(e) => setSearchInvoice(e.target.value)}
                                 />
                             </div>
-                            <label className="flex items-center gap-2 cursor-pointer bg-white px-3 py-2 rounded-xl text-[11px] font-bold text-black dark:text-gray-200 hover:bg-white transition border border-border-main self-start md:self-auto">
-                                <input 
-                                    type="checkbox" 
-                                    className="rounded text-blue-600"
-                                    checked={showUnpaidOnly}
-                                    onChange={e => setShowUnpaidOnly(e.target.checked)}
-                                />
-                                عرض الآجلة غير المسددة فقط
-                            </label>
+                            <div className="flex items-center gap-2 flex-nowrap shrink-0 overflow-x-auto">
+                                <label className={`flex items-center gap-2 cursor-pointer px-3 py-2 rounded-xl text-[11px] font-bold transition border shrink-0 ${!showCancelledOnly ? 'bg-white text-black dark:text-gray-200 border-border-main' : 'bg-gray-100 text-gray-500 border-gray-200'}`}>
+                                    <input 
+                                        type="checkbox" 
+                                        className="rounded text-blue-600"
+                                        checked={showUnpaidOnly}
+                                        onChange={e => {
+                                            setShowUnpaidOnly(e.target.checked);
+                                            if (e.target.checked) setShowCancelledOnly(false);
+                                        }}
+                                    />
+                                    <span>عرض الآجلة غير المسددة فقط</span>
+                                </label>
+
+                                <label className={`flex items-center gap-2 cursor-pointer px-3 py-2 rounded-xl text-[11px] font-bold transition border shrink-0 ${showCancelledOnly ? 'bg-red-50 text-red-700 border-red-300 dark:bg-red-950/40 dark:border-red-800 dark:text-red-300' : 'bg-white text-black dark:text-gray-200 border-border-main hover:bg-white'}`}>
+                                    <input 
+                                        type="checkbox" 
+                                        className="rounded text-red-600"
+                                        checked={showCancelledOnly}
+                                        onChange={e => {
+                                            setShowCancelledOnly(e.target.checked);
+                                            if (e.target.checked) setShowUnpaidOnly(false);
+                                        }}
+                                    />
+                                    <span>عرض الفواتير الملغاة</span>
+                                    <span className={`px-2 py-0.5 text-[10px] rounded-full font-black ${showCancelledOnly ? 'bg-red-200 text-red-800 dark:bg-red-900 dark:text-red-100' : 'bg-gray-100 dark:bg-slate-800 text-gray-600 dark:text-gray-300'}`}>
+                                        {invoices.filter(i => i.status === 'cancelled').length}
+                                    </span>
+                                </label>
+                            </div>
                         </div>
                     </div>
                     
@@ -1006,10 +1100,7 @@ export default function Sales() {
                                 وضع التعديل الفاتورة رقم: {editingInvoice.invoiceNumber}
                             </span>
                             <button 
-                                onClick={() => {
-                                    clearSales();
-                                    setActiveTab('list');
-                                }}
+                                onClick={handleCancelEdit}
                                 className="text-yellow-700 hover:text-yellow-900 bg-white hover:bg-white px-3 py-1.5 rounded-lg text-xs font-bold transition"
                             >
                                 إلغاء التعديل
@@ -1275,6 +1366,20 @@ export default function Sales() {
                                     </div>
                                 </div>
 
+                                {/* حقل الموظف المسؤول */}
+                                <div>
+                                    <label className="block text-xs font-black mb-1.5 text-slate-700 dark:text-slate-300">
+                                        الموظف المسؤول
+                                    </label>
+                                    <input
+                                        type="text"
+                                        placeholder="اسم الموظف الذي قام بإنشاء الفاتورة..."
+                                        value={sellerName}
+                                        onChange={e => setSellerName(e.target.value)}
+                                        className="w-full bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 rounded-xl p-2.5 text-xs font-bold text-slate-900 dark:text-white outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition"
+                                    />
+                                </div>
+
                                 {/* حقل الملاحظات تحت اسم العميل */}
                                 <div>
                                     <label className="block text-xs font-black mb-1.5 text-slate-700 dark:text-slate-300">
@@ -1458,6 +1563,11 @@ export default function Sales() {
                                     <FileText size={18} /> معاينة الفاتورة ومشاركتها
                                 </button>
                                 
+                                {invoice.status === 'cancelled' && (
+                                    <button onClick={() => { setActiveDropdownId(null); handleEditInvoice(invoice); }} className="col-span-2 py-3 bg-white text-blue-700 hover:bg-white rounded-xl font-bold flex justify-center items-center gap-2 border border-blue-100 transition">
+                                        <RotateCcw size={18} /> استعادة الفاتورة (تعديل)
+                                    </button>
+                                )}
                                 {invoice.status !== 'cancelled' && invoice.status !== 'returned' && (
                                     <>
                                         {invoice.paymentType === 'credit' && invoice.status !== 'paid' && (parseFloat((invoice as any).paidAmount || 0) < parseFloat(invoice.total as any)) && (
@@ -1535,8 +1645,8 @@ export default function Sales() {
             })()}
 
             {editingItem && (
-                <div className="fixed inset-0 bg-black/60 z-[110] flex items-center justify-center p-4 backdrop-blur-xs">
-                    <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-sm shadow-2xl flex flex-col overflow-hidden border border-gray-100 dark:border-slate-800 text-right" dir="rtl">
+                <div className="fixed inset-0 z-[110] flex items-center justify-center p-4" onClick={() => setEditingItem(null)}>
+                    <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-sm shadow-2xl flex flex-col overflow-hidden border border-gray-100 dark:border-slate-800 text-right" dir="rtl" onClick={(e) => e.stopPropagation()}>
                         {/* Header */}
                         <div className="p-4 md:p-5 border-b border-gray-100 dark:border-slate-800 bg-white dark:bg-slate-900 flex justify-between items-center">
                             <div className="flex flex-col">

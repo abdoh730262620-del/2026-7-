@@ -1,5 +1,7 @@
 import { collection, doc, writeBatch, addDoc } from 'firebase/firestore';
 import { db } from './firebase';
+import { Capacitor } from '@capacitor/core';
+import { LocalNotifications } from '@capacitor/local-notifications';
 
 export interface InvoiceNotificationData {
     tenantId: string;
@@ -97,6 +99,16 @@ export function playNotificationAudio() {
  * Request notification permission for Android / Browser
  */
 export async function requestAndroidNotificationPermission(): Promise<NotificationPermission> {
+    if (Capacitor.isNativePlatform()) {
+        try {
+            const permStatus = await LocalNotifications.requestPermissions();
+            return permStatus.display === 'granted' ? 'granted' : 'denied';
+        } catch (e) {
+            console.error('Error requesting capacitor notification permission:', e);
+            return 'denied';
+        }
+    }
+
     if (!('Notification' in window)) {
         console.warn('This browser does not support desktop/Android notifications.');
         return 'denied';
@@ -123,6 +135,26 @@ export function triggerAndroidSystemNotification(title: string, options: {
     url?: string;
     invoiceId?: string;
 }) {
+    if (Capacitor.isNativePlatform()) {
+        LocalNotifications.checkPermissions().then(permStatus => {
+            if (permStatus.display === 'granted') {
+                LocalNotifications.schedule({
+                    notifications: [{
+                        title: title,
+                        body: options.body || '',
+                        id: new Date().getTime(),
+                        schedule: { at: new Date(Date.now() + 100) },
+                        extra: {
+                            url: options.url || '/sales',
+                            invoiceId: options.invoiceId
+                        }
+                    }]
+                });
+            }
+        }).catch(e => console.error('Error triggering capacitor notification:', e));
+        return;
+    }
+
     if (!('Notification' in window) || Notification.permission !== 'granted') {
         return;
     }

@@ -7,6 +7,8 @@ import { printReport } from '../lib/printHelper';
 interface CardSalesSectionProps {
     sales: CardSale[];
     onViewInvoice: (invoice: InvoicePdfInput) => void;
+    onEditInvoice?: (invoice: GroupedSaleInvoice) => void;
+    onCancelInvoice?: (invoice: GroupedSaleInvoice) => void;
     appUser: any;
 }
 
@@ -32,6 +34,8 @@ interface GroupedSaleInvoice {
 export const CardSalesSection: React.FC<CardSalesSectionProps> = ({
     sales,
     onViewInvoice,
+    onEditInvoice,
+    onCancelInvoice,
     appUser
 }) => {
     const [searchText, setSearchText] = useState('');
@@ -61,6 +65,7 @@ export const CardSalesSection: React.FC<CardSalesSectionProps> = ({
         const groupedMap: { [key: string]: GroupedSaleInvoice } = {};
 
         sales.forEach(sale => {
+            if (sale.status === 'cancelled') return;
             const dateOnly = sale.date || (sale.dateTime && sale.dateTime.split(' ')[0]) || '';
             const invNumber = getNumericInvoiceNumber(sale.invoiceNumber, sale.id);
             
@@ -140,7 +145,7 @@ export const CardSalesSection: React.FC<CardSalesSectionProps> = ({
             inv.distributorName,
             `${inv.totalQuantity} كارت`,
             inv.paymentType === 'cash' ? 'نقدي' : 'آجل',
-            `${inv.totalAmount.toFixed(2)} ر.س`,
+            `${inv.totalAmount.toFixed(2)} ريال يمني`,
             inv.dateTime
         ]);
         
@@ -149,7 +154,7 @@ export const CardSalesSection: React.FC<CardSalesSectionProps> = ({
             `إجمالي فواتير: ${totalInvoicesCount}`,
             `${totalQtySold} كارت مبيعات`,
             `نقدي: ${cashTotal.toFixed(2)} | آجل: ${creditTotal.toFixed(2)}`,
-            `${overallTotal.toFixed(2)} ر.س`,
+            `${overallTotal.toFixed(2)} ريال يمني`,
             '-'
         ]);
 
@@ -279,11 +284,11 @@ export const CardSalesSection: React.FC<CardSalesSectionProps> = ({
                 </div>
                 <div className="bg-white dark:bg-slate-900 p-4 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm">
                     <span className="text-[10px] font-black text-slate-400">مبيعات نقدية</span>
-                    <div className="text-lg font-black text-indigo-600 dark:text-indigo-400 mt-1">{cashTotal.toFixed(2)} ر.س</div>
+                    <div className="text-lg font-black text-indigo-600 dark:text-indigo-400 mt-1">{cashTotal.toFixed(2)} ريال يمني</div>
                 </div>
                 <div className="bg-white dark:bg-slate-900 p-4 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm">
                     <span className="text-[10px] font-black text-slate-400">مبيعات آجلة</span>
-                    <div className="text-lg font-black text-amber-600 dark:text-amber-400 mt-1">{creditTotal.toFixed(2)} ر.س</div>
+                    <div className="text-lg font-black text-amber-600 dark:text-amber-400 mt-1">{creditTotal.toFixed(2)} ريال يمني</div>
                 </div>
             </div>
 
@@ -325,7 +330,7 @@ export const CardSalesSection: React.FC<CardSalesSectionProps> = ({
 
                                     <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
                                         <span className="font-mono font-black text-emerald-600 dark:text-emerald-400 text-xs">
-                                            {inv.totalAmount.toFixed(2)} ر.س
+                                            {inv.totalAmount.toFixed(2)} ريال يمني
                                         </span>
 
                                         <span className={`px-2.5 py-1 rounded-full text-[10px] font-black ${
@@ -341,8 +346,25 @@ export const CardSalesSection: React.FC<CardSalesSectionProps> = ({
                                             className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-[10px] font-black inline-flex items-center gap-1.5 shadow-md shadow-emerald-600/20 active:scale-95 transition"
                                         >
                                             <Eye size={13} />
-                                            <span>عرض PDF</span>
+                                            <span>عرض</span>
                                         </button>
+                                        {onEditInvoice && inv.invoiceNumber && (
+                                            <button
+                                                onClick={() => onEditInvoice(inv)}
+                                                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-[10px] font-black inline-flex items-center gap-1.5 shadow-md shadow-blue-600/20 active:scale-95 transition"
+                                            >
+                                                <span>تعديل</span>
+                                            </button>
+                                        )}
+                                        {onCancelInvoice && inv.invoiceNumber && (
+                                            <button
+                                                onClick={() => onCancelInvoice(inv)}
+                                                className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-[10px] font-black inline-flex items-center gap-1.5 shadow-md shadow-rose-600/20 active:scale-95 transition"
+                                            >
+                                                <X size={13} />
+                                                <span>إلغاء</span>
+                                            </button>
+                                        )}
                                     </div>
                                 </div>
 
@@ -363,8 +385,8 @@ export const CardSalesSection: React.FC<CardSalesSectionProps> = ({
                                                     <tr key={idx} className="font-bold text-slate-800 dark:text-slate-200">
                                                         <td className="py-2.5 font-black text-slate-900 dark:text-white">{item.categoryName}</td>
                                                         <td className="py-2.5 text-center font-mono font-black text-emerald-600">{item.quantity} كارت</td>
-                                                        <td className="py-2.5 text-center font-mono text-slate-500">{item.unitPrice.toFixed(2)} ر.س</td>
-                                                        <td className="py-2.5 text-left font-mono font-black text-slate-950 dark:text-white">{item.totalAmount.toFixed(2)} ر.س</td>
+                                                        <td className="py-2.5 text-center font-mono text-slate-500">{item.unitPrice.toFixed(2)} ريال يمني</td>
+                                                        <td className="py-2.5 text-left font-mono font-black text-slate-950 dark:text-white">{item.totalAmount.toFixed(2)} ريال يمني</td>
                                                     </tr>
                                                 ))}
                                             </tbody>
@@ -376,7 +398,7 @@ export const CardSalesSection: React.FC<CardSalesSectionProps> = ({
                                             <div className="flex items-center gap-2">
                                                 <span className="font-bold text-slate-500">إجمالي الفاتورة:</span>
                                                 <span className="font-black text-sm text-emerald-600 dark:text-emerald-400 font-mono" dir="ltr">
-                                                    {inv.totalAmount.toFixed(2)} ر.س
+                                                    {inv.totalAmount.toFixed(2)} ريال يمني
                                                 </span>
                                             </div>
                                         </div>

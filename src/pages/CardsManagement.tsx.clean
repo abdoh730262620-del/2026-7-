@@ -3,7 +3,7 @@ import {
     Layers, Plus, Users, ArrowRight, Trash2, Edit, CreditCard, 
     FileText, Calendar, DollarSign, Receipt, Printer, CheckCircle2, 
     X, Sparkles, TrendingUp, Wallet, ArrowUpRight, ArrowDownLeft, Search, UserCheck,
-    Share2, MessageSquare, Send, Truck, ChevronDown, ChevronUp, ShoppingBag, RefreshCw
+    Share2, MessageSquare, Send, Truck, ChevronDown, ChevronUp, ShoppingBag
 } from 'lucide-react';
 import { collection, query, where, onSnapshot, doc, addDoc as firestoreAddDoc, updateDoc as firestoreUpdateDoc, deleteDoc as firestoreDeleteDoc, runTransaction , getDocs, writeBatch, increment } from 'firebase/firestore';
 
@@ -30,7 +30,6 @@ import { CardCategory, CardDistributor, CardStockLog, CardSale, CardVoucher, Car
 import { printReport, printInvoice } from '../lib/printHelper';
 import CardSaleModal from '../components/CardSaleModal';
 import CardPurchaseModal from '../components/CardPurchaseModal';
-import CardExchangeModal from '../components/CardExchangeModal';
 import SearchableSelect from '../components/SearchableSelect';
 import { CardInvoiceActionModal } from '../components/CardInvoiceActionModal';
 import { InvoicePdfInput } from '../lib/pdfHelper';
@@ -182,7 +181,6 @@ export default function CardsManagement() {
 
     const [isVoucherModalOpen, setIsVoucherModalOpen] = useState(false);
     const [isCardPurchaseModalOpen, setIsCardPurchaseModalOpen] = useState(false);
-    const [isCardExchangeModalOpen, setIsCardExchangeModalOpen] = useState(false);
     const [voucherType, setVoucherType] = useState<'receipt' | 'payment'>('receipt');
     const [voucherDistributorId, setVoucherDistributorId] = useState('');
     const [voucherAmountInput, setVoucherAmountInput] = useState('');
@@ -212,7 +210,6 @@ export default function CardsManagement() {
             isDistributorModalOpen,
             isVoucherModalOpen,
             isCardPurchaseModalOpen,
-            isCardExchangeModalOpen,
             isCashboxModalOpen,
             actionModalOpen,
             isShareModalOpen,
@@ -227,26 +224,26 @@ export default function CardsManagement() {
         return () => unregisterModal('cards-mgmt-active');
     }, [
         isCategoryModalOpen, isStockModalOpen, isSupplierModalOpen, isPurchaseVoucherModalOpen,
-        isDistributorModalOpen, isVoucherModalOpen, isCardPurchaseModalOpen, isCardExchangeModalOpen, isCashboxModalOpen,
+        isDistributorModalOpen, isVoucherModalOpen, isCardPurchaseModalOpen, isCashboxModalOpen,
         actionModalOpen, isShareModalOpen, saleModalCategory, registerModal, unregisterModal
     ]);
 
     
-    const reverseCardInvoice = async (invoiceNumber: string, type: 'sale' | 'purchase', silent: boolean = false) => {
+    const reverseCardInvoice = async (invoiceNumber: string, type: 'sale' | 'purchase') => {
         try {
             const collectionName = type === 'sale' ? 'card_sales' : 'card_purchases';
             const q = query(collection(db, collectionName), where('tenantId', '==', tenantId), where('invoiceNumber', '==', invoiceNumber));
             const snap = await getDocs(q);
             if (snap.empty) {
-                if (!silent) alert('لم يتم العثور على الفاتورة.');
+                alert('لم يتم العثور على الفاتورة.');
                 return false;
             }
 
             const batch = writeBatch(db);
             const categoryUpdates: Record<string, number> = {};
             let partyId = '';
-            let creditTotal = 0;
-            let cashTotal = 0;
+            let paymentType = '';
+            let netTotal = 0;
 
             snap.docs.forEach(d => {
                 const docData = d.data();
@@ -262,17 +259,12 @@ export default function CardsManagement() {
                 }
                 
                 if (type === 'sale') {
-                    if (docData.distributorId) partyId = docData.distributorId;
+                    partyId = docData.distributorId;
                 } else {
-                    if (docData.supplierId) partyId = docData.supplierId;
+                    partyId = docData.supplierId;
                 }
-                
-                const itemTotal = docData.netTotal || docData.totalAmount || 0;
-                if (docData.paymentType === 'credit') {
-                    creditTotal += itemTotal;
-                } else if (docData.paymentType === 'cash') {
-                    cashTotal += itemTotal;
-                }
+                paymentType = docData.paymentType;
+                netTotal += (docData.netTotal || docData.totalAmount || 0);
             });
 
             for (const catId of Object.keys(categoryUpdates)) {
@@ -283,20 +275,20 @@ export default function CardsManagement() {
                 }
             }
 
-            if (creditTotal > 0 && partyId) {
+            if (paymentType === 'credit' && partyId) {
                 const partyCollection = type === 'sale' ? 'card_distributors' : 'card_suppliers';
                 batch.update(doc(db, partyCollection, partyId), {
-                    balance: increment(-creditTotal)
+                    balance: increment(-netTotal)
                 });
             }
 
-            if (cashTotal > 0) {
+            if (paymentType === 'cash' && netTotal > 0) {
                 const cashboxRef = doc(collection(db, 'card_cashbox'));
                 batch.set(cashboxRef, {
                     tenantId,
                     type: type === 'sale' ? 'manual_out' : 'manual_in',
                     title: `إلغاء فاتورة ${type === 'sale' ? 'مبيعات' : 'مشتريات'} #${invoiceNumber}`,
-                    amount: cashTotal,
+                    amount: netTotal,
                     isIncome: type === 'purchase',
                     date: new Date().toISOString().split('T')[0],
                     dateTime: new Date().toISOString().replace('T', ' ').slice(0, 19),
@@ -307,7 +299,7 @@ export default function CardsManagement() {
                 const mainCashRef = doc(collection(db, 'cash'));
                 batch.set(mainCashRef, {
                     date: Date.now(),
-                    amount: cashTotal,
+                    amount: netTotal,
                     type: type === 'sale' ? 'out' : 'in',
                     category: 'refund',
                     description: `إلغاء فاتورة كروت ${type === 'sale' ? 'مبيعات' : 'مشتريات'} #${invoiceNumber}`,
@@ -318,49 +310,41 @@ export default function CardsManagement() {
             }
 
             await batch.commit();
-            if (!silent) alert('تم إلغاء الفاتورة وعكس القيود والمخزون بنجاح.');
+            alert('تم إلغاء الفاتورة وعكس القيود والمخزون بنجاح.');
             return true;
         } catch (error) {
             console.error('Error reversing card invoice:', error);
-            if (!silent) alert('حدث خطأ أثناء إلغاء الفاتورة.');
+            alert('حدث خطأ أثناء إلغاء الفاتورة.');
             return false;
         }
     };
 
     const handleCancelSaleInvoice = async (invoice: any) => {
-        if (!getSecPermission('cards_sales_report', 'delete')) {
-            alert('عذراً، ليس لديك صلاحية إلغاء فواتير مبيعات الكروت.');
-            return;
-        }
         if (!window.confirm('هل أنت متأكد من إلغاء فاتورة المبيعات هذه؟ سيتم استرجاع الكروت للمخزون وخصم المبلغ من الموزع/الصندوق.')) return;
         await reverseCardInvoice(invoice.invoiceNumber, 'sale');
     };
 
     const handleCancelPurchaseInvoice = async (invoice: any) => {
-        if (!getSecPermission('cards_stock', 'delete')) {
-            alert('عذراً، ليس لديك صلاحية إلغاء فواتير مشتريات الكروت.');
-            return;
-        }
         if (!window.confirm('هل أنت متأكد من إلغاء فاتورة المشتريات هذه؟ سيتم خصم الكروت من المخزون وخصم المبلغ من المورد/الصندوق.')) return;
         await reverseCardInvoice(invoice.invoiceNumber, 'purchase');
     };
 
     const handleEditSaleInvoice = async (invoice: any) => {
-        if (!getSecPermission('cards_sales_report', 'edit')) {
-            alert('عذراً، ليس لديك صلاحية تعديل فواتير مبيعات الكروت.');
-            return;
+        if (!window.confirm('لتعديل الفاتورة يجب إلغاء الفاتورة الحالية وفتحها كمبيعة جديدة. هل توافق؟')) return;
+        const success = await reverseCardInvoice(invoice.invoiceNumber, 'sale');
+        if (success) {
+            setEditingCardSale(invoice);
+            setIsCardSaleModalOpen(true);
         }
-        setEditingCardSale(invoice);
-        setIsCardSaleModalOpen(true);
     };
 
     const handleEditPurchaseInvoice = async (invoice: any) => {
-        if (!getSecPermission('cards_stock', 'edit')) {
-            alert('عذراً، ليس لديك صلاحية تعديل فواتير مشتريات الكروت.');
-            return;
+        if (!window.confirm('لتعديل الفاتورة يجب إلغاء الفاتورة الحالية وفتحها كمشتريات جديدة. هل توافق؟')) return;
+        const success = await reverseCardInvoice(invoice.invoiceNumber, 'purchase');
+        if (success) {
+            setEditingCardPurchase(invoice);
+            setIsCardPurchaseModalOpen(true);
         }
-        setEditingCardPurchase(invoice);
-        setIsCardPurchaseModalOpen(true);
     };
 
     // Function to handle sharing distributor details and account ledger
@@ -1505,58 +1489,19 @@ export default function CardsManagement() {
             {/* SECTION 1: إضافة كروت (Add Stock) */}
             {activeSection === 'add_stock' && (
                 <div className="space-y-6 animate-in fade-in duration-200">
-                    {/* Square Navigation Cards for Adding / Exchanging Card Stock */}
-                    {canAdd && (
-                        <div className="space-y-3">
-                            <h3 className="text-sm font-black text-slate-400 dark:text-slate-500 mr-1">العمليات السريعة للمخزون</h3>
-                            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                                {/* Card 1: إضافة رصيد كروت جديد */}
-                                <div
-                                    onClick={() => setIsCardPurchaseModalOpen(true)}
-                                    className="group flex flex-col items-center justify-center text-center p-5 md:p-6 rounded-3xl border-2 border-slate-200 dark:border-slate-800 hover:border-indigo-500 dark:hover:border-indigo-500 bg-white dark:bg-slate-900 transition-all duration-300 shadow-sm hover:shadow-xl hover:-translate-y-1 cursor-pointer aspect-square"
-                                >
-                                    <div className="flex flex-col items-center">
-                                        <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center mb-3 transition-transform group-hover:scale-110 border border-indigo-100 dark:border-indigo-900/50">
-                                            <Plus className="w-7 h-7 sm:w-8 sm:h-8" />
-                                        </div>
-                                        <h3 className="text-xs sm:text-sm font-black text-slate-900 dark:text-white leading-tight mb-1">
-                                            إضافة رصيد كروت جديد
-                                        </h3>
-                                        <p className="text-[10px] font-bold text-slate-400 max-w-[150px] leading-relaxed hidden sm:block">
-                                            تزويد المخزن عبر تسجيل فواتير شراء من الموردين
-                                        </p>
-                                    </div>
-                                </div>
-
-                                {/* Card 2: استبدال كروت */}
-                                <div
-                                    onClick={() => {
-                                        if (!getSecPermission('cards_exchanges', 'view') && !getSecPermission('cards_exchanges', 'add')) {
-                                            alert('عذراً، ليس لديك صلاحية استبدال الكروت.');
-                                            return;
-                                        }
-                                        setIsCardExchangeModalOpen(true);
-                                    }}
-                                    className="group flex flex-col items-center justify-center text-center p-5 md:p-6 rounded-3xl border-2 border-slate-200 dark:border-slate-800 hover:border-purple-500 dark:hover:border-purple-500 bg-white dark:bg-slate-900 transition-all duration-300 shadow-sm hover:shadow-xl hover:-translate-y-1 cursor-pointer aspect-square"
-                                >
-                                    <div className="flex flex-col items-center">
-                                        <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-purple-50 dark:bg-purple-950/60 text-purple-600 dark:text-purple-400 flex items-center justify-center mb-3 transition-transform group-hover:scale-110 border border-purple-100 dark:border-purple-900/50">
-                                            <RefreshCw className="w-7 h-7 sm:w-8 sm:h-8" />
-                                        </div>
-                                        <h3 className="text-xs sm:text-sm font-black text-slate-900 dark:text-white leading-tight mb-1">
-                                            استبدال كروت المخزون
-                                        </h3>
-                                        <p className="text-[10px] font-bold text-slate-400 max-w-[150px] leading-relaxed hidden sm:block">
-                                            تبديل فئات كروت المخزون وحساب الفارق المالي تلقائياً
-                                        </p>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
                     <div className="bg-white dark:bg-slate-900 p-4 sm:p-5 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between gap-3">
                         <h2 className="text-lg font-black text-slate-900 dark:text-white">سجل إضافة رصيد الكروت</h2>
+                        <div className="flex items-center gap-2">
+                            {canAdd && (
+                                <button
+                                    onClick={() => setIsCardPurchaseModalOpen(true)}
+                                    className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white font-black text-xs rounded-2xl shadow-lg shadow-indigo-600/20 flex items-center gap-2 transition"
+                                >
+                                    <Plus size={18} />
+                                    <span>إضافة رصيد كروت جديد</span>
+                                </button>
+                            )}
+                        </div>
                     </div>
                     
                     <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
@@ -1565,7 +1510,7 @@ export default function CardsManagement() {
                                 <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-400 font-black border-b border-slate-200 dark:border-slate-800">
                                     <tr>
                                         <th className="p-4">الفئة</th>
-                                        <th className="p-4">الكمية المضافة / المسحوبة</th>
+                                        <th className="p-4">الكمية المضافة</th>
                                         <th className="p-4">الرصيد الكلي بعد الإضافة</th>
                                         <th className="p-4">التاريخ والوقت</th>
                                         <th className="p-4">المستخدم</th>
@@ -1579,20 +1524,15 @@ export default function CardsManagement() {
                                             </td>
                                         </tr>
                                     ) : (
-                                        stockLogs.map((log) => {
-                                            const isNegative = log.quantityAdded < 0;
-                                            return (
-                                                <tr key={log.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                                                    <td className="p-4 font-black">{log.categoryName}</td>
-                                                    <td className={`p-4 font-black ${isNegative ? 'text-rose-600' : 'text-emerald-600'}`}>
-                                                        {isNegative ? '' : '+'}{log.quantityAdded} كارت
-                                                    </td>
-                                                    <td className="p-4 text-indigo-600 font-black">{log.availableCountAfter} كارت</td>
-                                                    <td className="p-4 text-slate-500">{log.additionDate}</td>
-                                                    <td className="p-4 text-slate-500">{log.userName}</td>
-                                                </tr>
-                                            );
-                                        })
+                                        stockLogs.map((log) => (
+                                            <tr key={log.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                                                <td className="p-4 font-black">{log.categoryName}</td>
+                                                <td className="p-4 text-emerald-600 font-black">+{log.quantityAdded} كارت</td>
+                                                <td className="p-4 text-indigo-600 font-black">{log.availableCountAfter} كارت</td>
+                                                <td className="p-4 text-slate-500">{log.additionDate}</td>
+                                                <td className="p-4 text-slate-500">{log.userName}</td>
+                                            </tr>
+                                        ))
                                     )}
                                 </tbody>
                             </table>
@@ -3078,8 +3018,8 @@ export default function CardsManagement() {
                                                                     </div>
                                                                     <div className="text-left">
                                                                         <span className="text-[10px] font-bold text-slate-400 block">صافي مبيعاته</span>
-                                                                        <span className="text-xs font-black text-emerald-600 dark:text-emerald-400 block">{sellerData.totalSales.toFixed(2)} ريال يمني</span>
-                                                                        <span className="text-[10px] font-black text-purple-600 dark:text-purple-400 mt-1 block">عمولته: {sellerData.commission.toFixed(2)} ريال يمني</span>
+                                                                        <span className="text-xs font-black text-emerald-600 dark:text-emerald-400 block">{sellerData.totalSales.toFixed(2)} ريال</span>
+                                                                        <span className="text-[10px] font-black text-purple-600 dark:text-purple-400 mt-1 block">عمولته: {sellerData.commission.toFixed(2)} ريال</span>
                                                                     </div>
                                                                 </div>
                                                             ))}
@@ -3135,7 +3075,7 @@ export default function CardsManagement() {
                                 >
                                     <div className="w-full flex items-center justify-between" onClick={(e) => e.stopPropagation()}>
                                         <span className="text-[10px] font-black text-purple-600 dark:text-purple-400 bg-purple-50 dark:bg-purple-950 px-2 py-0.5 rounded-full">
-                                            {cat.retailPrice || 0} ريال يمني
+                                            {cat.retailPrice || 0} ريال
                                         </span>
                                         <div className="flex items-center gap-0.5">
                                             {canEdit && (
@@ -3180,7 +3120,7 @@ export default function CardsManagement() {
                                         )}
                                         {cat.wholesalePrice > 0 && (
                                             <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 mt-0.5">
-                                                جملة: {cat.wholesalePrice} ريال يمني
+                                                جملة: {cat.wholesalePrice} ريال
                                             </span>
                                         )}
                                     </div>
@@ -3304,19 +3244,7 @@ export default function CardsManagement() {
                                     const dist = selectedDistributorForDetails;
                                     
                                     // 1. Filter Sales
-                                    const activeCashInvoices = new Set(
-                                        sales
-                                            .filter(s => s.distributorId === dist.id && (s.status === 'completed' || !s.status) && s.paymentType === 'cash' && s.invoiceNumber)
-                                            .map(s => s.invoiceNumber)
-                                    );
-                                    const distSales = sales.filter(s => {
-                                        if (s.distributorId !== dist.id) return false;
-                                        if (s.status === 'cancelled') return false;
-                                        if (s.paymentType === 'credit' && s.invoiceNumber && activeCashInvoices.has(s.invoiceNumber)) {
-                                            return false;
-                                        }
-                                        return true;
-                                    });
+                                    const distSales = sales.filter(s => s.distributorId === dist.id && (s.status === 'completed' || !s.status));
                                     const totalSalesCount = distSales.reduce((acc, s) => acc + (s.quantity || 0), 0);
                                     const totalSalesCash = distSales.filter(s => s.paymentType === 'cash').reduce((acc, s) => acc + (s.netTotal || 0), 0);
                                     const totalSalesCredit = distSales.filter(s => s.paymentType === 'credit').reduce((acc, s) => acc + (s.netTotal || 0), 0);
@@ -3392,16 +3320,16 @@ export default function CardsManagement() {
                                                             const titleReport = `كشف حساب الموزع: ${dist.name}`;
                                                             const headersReport = ['التاريخ', 'المرجع', 'البيان', 'مدين (+)', 'دائن (-)', 'الرصيد المستحق'];
                                                             const dataReport = [
-                                                                [dist.date, '--', 'رصيد أول المدة', '--', '--', `${initialDebt.toFixed(2)} ريال يمني`]
+                                                                [dist.date, '--', 'رصيد أول المدة', '--', '--', `${initialDebt.toFixed(2)} ريال`]
                                                             ];
                                                             ledgerWithRunningBalance.forEach(e => {
                                                                 dataReport.push([
                                                                     e.date,
                                                                     e.ref,
                                                                     e.title,
-                                                                    e.debit > 0 ? `${e.debit.toFixed(2)} ريال يمني` : '--',
-                                                                    e.credit > 0 ? `${e.credit.toFixed(2)} ريال يمني` : '--',
-                                                                    `${e.runningBalance.toFixed(2)} ريال يمني`
+                                                                    e.debit > 0 ? `${e.debit.toFixed(2)} ريال` : '--',
+                                                                    e.credit > 0 ? `${e.credit.toFixed(2)} ريال` : '--',
+                                                                    `${e.runningBalance.toFixed(2)} ريال`
                                                                 ]);
                                                             });
                                                             printReport(titleReport, headersReport, dataReport);
@@ -3638,11 +3566,11 @@ export default function CardsManagement() {
                                                             ? 'bg-rose-50 text-rose-700 dark:bg-rose-950 dark:text-rose-300' 
                                                             : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
                                                     }`}>
-                                                        الدين الحالي: {(dist.balance || 0).toFixed(2)} ريال يمني
+                                                        الدين الحالي: {(dist.balance || 0).toFixed(2)} ريال
                                                     </span>
                                                     {dist.previousDebt !== undefined && dist.previousDebt > 0 && (
                                                         <span className="text-[9px] font-bold text-slate-400">
-                                                            الدين السابق: {dist.previousDebt.toFixed(2)} ريال يمني
+                                                            الدين السابق: {dist.previousDebt.toFixed(2)} ريال
                                                         </span>
                                                     )}
                                                 </div>
@@ -3914,11 +3842,11 @@ export default function CardsManagement() {
                         </div>
                         <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800">
                             <span className="text-[10px] font-black text-slate-400">مقبوضات نقدي</span>
-                            <div className="text-lg font-black text-emerald-600 dark:text-emerald-400">{totalMonthCashNet.toFixed(2)} ريال يمني</div>
+                            <div className="text-lg font-black text-emerald-600 dark:text-emerald-400">{totalMonthCashNet.toFixed(2)} ريال</div>
                         </div>
                         <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800">
                             <span className="text-[10px] font-black text-slate-400">ديون أجل مستحقة</span>
-                            <div className="text-lg font-black text-amber-600 dark:text-amber-400">{totalMonthCreditNet.toFixed(2)} ريال يمني</div>
+                            <div className="text-lg font-black text-amber-600 dark:text-amber-400">{totalMonthCreditNet.toFixed(2)} ريال</div>
                         </div>
                     </div>
 
@@ -3962,7 +3890,7 @@ export default function CardsManagement() {
                                     {/* Footer / Total Net */}
                                     <div className="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-slate-800">
                                         <span className="text-xs font-black text-slate-500">إجمالي صافي المبيعات</span>
-                                        <span className="text-base font-black text-indigo-600 dark:text-indigo-400">{r.totalAmount.toFixed(2)} ريال يمني</span>
+                                        <span className="text-base font-black text-indigo-600 dark:text-indigo-400">{r.totalAmount.toFixed(2)} ريال</span>
                                     </div>
                                 </div>
                             ))}
@@ -4006,7 +3934,7 @@ export default function CardsManagement() {
                                             </div>
                                             <div className="text-left">
                                                 <span className="block text-sm font-black text-slate-900 dark:text-white">{d.qty} كارت</span>
-                                                <span className="block text-xs font-bold text-slate-500 dark:text-slate-400">{d.net.toLocaleString()} ريال يمني</span>
+                                                <span className="block text-xs font-bold text-slate-500 dark:text-slate-400">{d.net.toLocaleString()} ريال</span>
                                             </div>
                                         </div>
                                     ))}
@@ -4053,9 +3981,9 @@ export default function CardsManagement() {
                         `${r.cashQty}`,
                         `${r.creditQty}`,
                         `${r.totalQty}`,
-                        `${r.cashAmountTotal.toFixed(2)} ريال يمني`,
-                        `${r.creditAmountTotal.toFixed(2)} ريال يمني`,
-                        `${r.totalAmount.toFixed(2)} ريال يمني`
+                        `${r.cashAmountTotal.toFixed(2)} ريال`,
+                        `${r.creditAmountTotal.toFixed(2)} ريال`,
+                        `${r.totalAmount.toFixed(2)} ريال`
                     ]);
                     printReport(title, headers, data);
                 };
@@ -4097,11 +4025,11 @@ export default function CardsManagement() {
                             </div>
                             <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800">
                                 <span className="text-[10px] font-black text-slate-400">مشتريات نقدية مسددة</span>
-                                <div className="text-lg font-black text-emerald-600 dark:text-emerald-400">{totalMonthPurchasesCashNet.toFixed(2)} ريال يمني</div>
+                                <div className="text-lg font-black text-emerald-600 dark:text-emerald-400">{totalMonthPurchasesCashNet.toFixed(2)} ريال</div>
                             </div>
                             <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800">
                                 <span className="text-[10px] font-black text-slate-400">مشتريات أجل مستحقة للموردين</span>
-                                <div className="text-lg font-black text-amber-600 dark:text-amber-400">{totalMonthPurchasesCreditNet.toFixed(2)} ريال يمني</div>
+                                <div className="text-lg font-black text-amber-600 dark:text-amber-400">{totalMonthPurchasesCreditNet.toFixed(2)} ريال</div>
                             </div>
                         </div>
 
@@ -4145,7 +4073,7 @@ export default function CardsManagement() {
                                         {/* Footer / Total Net */}
                                         <div className="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-slate-800">
                                             <span className="text-xs font-black text-slate-500">إجمالي صافي المشتريات</span>
-                                            <span className="text-base font-black text-indigo-600 dark:text-indigo-400">{r.totalAmount.toFixed(2)} ريال يمني</span>
+                                            <span className="text-base font-black text-indigo-600 dark:text-indigo-400">{r.totalAmount.toFixed(2)} ريال</span>
                                         </div>
                                     </div>
                                 ))}
@@ -4187,7 +4115,7 @@ export default function CardsManagement() {
                                                 </div>
                                                 <div className="text-left">
                                                     <span className="block text-sm font-black text-slate-900 dark:text-white">{d.qty} كارت</span>
-                                                    <span className="block text-xs font-bold text-slate-500 dark:text-slate-400">{d.net.toLocaleString()} ريال يمني</span>
+                                                    <span className="block text-xs font-bold text-slate-500 dark:text-slate-400">{d.net.toLocaleString()} ريال</span>
                                                 </div>
                                             </div>
                                         ))}
@@ -4209,7 +4137,7 @@ export default function CardsManagement() {
                             <div className="px-3 py-2 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 rounded-2xl flex items-center gap-2">
                                 <Wallet className="text-emerald-600 dark:text-emerald-400" size={16} />
                                 <span className="text-xs font-bold text-slate-600 dark:text-slate-400">الرصيد:</span>
-                                <span className="text-xs font-black text-emerald-700 dark:text-emerald-300">{cashboxBalance.toFixed(2)} ريال يمني</span>
+                                <span className="text-xs font-black text-emerald-700 dark:text-emerald-300">{cashboxBalance.toFixed(2)} ريال</span>
                             </div>
                             {canAdd && (
                                 <button
@@ -4256,7 +4184,7 @@ export default function CardsManagement() {
                                                     </span>
                                                 </td>
                                                 <td className={`p-4 text-left font-black ${entry.isIncome ? 'text-emerald-600' : 'text-rose-600'}`}>
-                                                    {entry.isIncome ? '+' : '-'}{entry.amount.toFixed(2)} ريال يمني
+                                                    {entry.isIncome ? '+' : '-'}{entry.amount.toFixed(2)} ريال
                                                 </td>
                                                 <td className="p-4 text-slate-500">{entry.dateTime}</td>
                                                 <td className="p-4 text-slate-500">{entry.userName}</td>
@@ -4440,8 +4368,6 @@ export default function CardsManagement() {
                         setActionModalInvoice(invoice);
                         setActionModalOpen(true);
                     }}
-                    onEditInvoice={hasPermission('sales', 'edit') ? handleEditSaleInvoice : undefined}
-                    onCancelInvoice={hasPermission('sales', 'delete') ? handleCancelSaleInvoice : undefined}
                     appUser={appUser}
                 />
             )}
@@ -4454,8 +4380,6 @@ export default function CardsManagement() {
                         setActionModalInvoice(invoice);
                         setActionModalOpen(true);
                     }}
-                    onEditInvoice={hasPermission('purchases', 'edit') ? handleEditPurchaseInvoice : undefined}
-                    onCancelInvoice={hasPermission('purchases', 'delete') ? handleCancelPurchaseInvoice : undefined}
                     appUser={appUser}
                 />
             )}
@@ -4966,12 +4890,8 @@ export default function CardsManagement() {
 
             {/* SALE MODAL */}
             {(saleModalCategory || isCardSaleModalOpen) && (
-                <CardSaleModal
-                    prefetchedCategories={categories}
-                    prefetchedDistributors={distributors}
-                    isOpen={!!saleModalCategory || isCardSaleModalOpen}
+                || isCardSaleModalOpen}
                     editingInvoice={editingCardSale}
-                    onReverseInvoice={editingCardSale ? () => reverseCardInvoice(editingCardSale.invoiceNumber, 'sale', true) : undefined}
                     onClose={() => { setSaleModalCategory(null); setIsCardSaleModalOpen(false); setEditingCardSale(null); }}
                     categoryName={saleModalCategory || undefined}
                     onInvoiceCreated={(invoice) => {
@@ -5043,7 +4963,6 @@ export default function CardsManagement() {
                 prefetchedSuppliers={suppliers}
                 isOpen={isCardPurchaseModalOpen}
                 editingInvoice={editingCardPurchase}
-                onReverseInvoice={editingCardPurchase ? () => reverseCardInvoice(editingCardPurchase.invoiceNumber, 'purchase', true) : undefined}
                 onClose={() => { setIsCardPurchaseModalOpen(false); setEditingCardPurchase(null); }}
                 onInvoiceCreated={(invoice) => {
                     setActionModalInvoice(invoice);
@@ -5058,12 +4977,6 @@ export default function CardsManagement() {
                     setActionModalOpen(false);
                     setActionModalInvoice(null);
                 }}
-            />
-
-            <CardExchangeModal
-                isOpen={isCardExchangeModalOpen}
-                categories={categories}
-                onClose={() => setIsCardExchangeModalOpen(false)}
             />
         </div>
     );

@@ -22,7 +22,7 @@ const defaultSettings = {
   expiryAlertMonths: 3,
   isMultiCurrencyEnabled: false,
   exchangeRate: 1,
-  currencySymbol: '$',
+  currencySymbol: 'ر.س',
   baseCurrency: 'SAR',
   isCommissionEnabled: false,
   defaultCommissionPercent: 5,

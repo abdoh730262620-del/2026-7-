@@ -15,6 +15,10 @@ interface CardSaleModalProps {
     categoryName?: string;
     onSuccess?: () => void;
     onInvoiceCreated?: (invoice: InvoicePdfInput) => void;
+    editingInvoice?: any;
+    onReverseInvoice?: () => Promise<boolean>;
+    prefetchedCategories?: CardCategory[];
+    prefetchedDistributors?: CardDistributor[];
 }
 
 interface CartItem {
@@ -39,7 +43,7 @@ const DEFAULT_DENOMINATIONS = [
     { name: 'فئة 5000 ريال', retailPrice: 5000, wholesalePrice: 4750 },
 ];
 
-export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess, onInvoiceCreated }: CardSaleModalProps) {
+export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess, onInvoiceCreated, editingInvoice, onReverseInvoice, prefetchedCategories, prefetchedDistributors }: CardSaleModalProps) {
     const { appUser } = useAuthStore();
     const { registerModal, unregisterModal } = useUIStore();
 
@@ -78,6 +82,41 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
     const [notes, setNotes] = useState<string>('');
     const [saving, setSaving] = useState<boolean>(false);
 
+    // Pre-fill if editingInvoice is provided
+    useEffect(() => {
+        if (isOpen && editingInvoice) {
+            setPaymentType(editingInvoice.paymentType || 'cash');
+            if (editingInvoice.distributorId) {
+                setSelectedDistributorId(editingInvoice.distributorId);
+            }
+            if (editingInvoice.distributorName) {
+                setDistributorSearch(editingInvoice.distributorName);
+            }
+            if (editingInvoice.notes) {
+                setNotes(editingInvoice.notes);
+            }
+            
+            if (editingInvoice.items && Array.isArray(editingInvoice.items)) {
+                const initialCart = editingInvoice.items.map((it: any) => ({
+                    id: Math.random().toString(36).substr(2, 9),
+                    categoryName: it.categoryName || '',
+                    saleType: it.saleType || 'retail',
+                    unitPrice: it.unitPrice || 0,
+                    quantity: it.quantity || 1,
+                    totalAmount: it.totalAmount || ((it.unitPrice || 0) * (it.quantity || 1)),
+                    availableStock: 99999
+                }));
+                setCartItems(initialCart);
+            }
+        } else if (isOpen && !editingInvoice) {
+            setCartItems([]);
+            setPaymentType('cash');
+            setSelectedDistributorId('');
+            setDistributorSearch('');
+            setNotes('');
+        }
+    }, [isOpen, editingInvoice]);
+
     // Negative Stock Warning Modal State
     const [negativeStockWarning, setNegativeStockWarning] = useState<{
         isOpen: boolean;
@@ -91,23 +130,38 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
     useEffect(() => {
         if (!isOpen) return;
 
-        const qCat = query(collection(db, 'card_categories'), where('tenantId', '==', tenantId));
-        const unsubCat = onSnapshot(qCat, (snap) => {
-            const list: CardCategory[] = snap.docs.map(d => ({ id: d.id, ...d.data() } as CardCategory));
-            setCategories(list);
-        });
+        let unsubCat = () => {};
+        let unsubDist = () => {};
 
-        const qDist = query(collection(db, 'card_distributors'), where('tenantId', '==', tenantId));
-        const unsubDist = onSnapshot(qDist, (snap) => {
-            const list: CardDistributor[] = snap.docs.map(d => ({ id: d.id, ...d.data() } as CardDistributor));
-            setDistributors(list);
-        });
+        if (!prefetchedCategories) {
+            const qCat = query(collection(db, 'card_categories'), where('tenantId', '==', tenantId));
+            unsubCat = onSnapshot(qCat, (snap) => {
+                const list: CardCategory[] = snap.docs.map(d => ({ id: d.id, ...d.data() } as CardCategory));
+                setCategories(list);
+            });
+        }
+
+        if (!prefetchedDistributors) {
+            const qDist = query(collection(db, 'card_distributors'), where('tenantId', '==', tenantId));
+            unsubDist = onSnapshot(qDist, (snap) => {
+                const list: CardDistributor[] = snap.docs.map(d => ({ id: d.id, ...d.data() } as CardDistributor));
+                setDistributors(list);
+            });
+        }
 
         return () => {
             unsubCat();
             unsubDist();
         };
     }, [isOpen]);
+
+    useEffect(() => {
+        if (prefetchedCategories) setCategories(prefetchedCategories);
+    }, [prefetchedCategories]);
+
+    useEffect(() => {
+        if (prefetchedDistributors) setDistributors(prefetchedDistributors);
+    }, [prefetchedDistributors]);
 
     // Available categories display list (from default 8 network card sections + any custom created categories)
     const processedNames = new Set<string>();
@@ -287,6 +341,7 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
 
     // Execute Sales Transaction
     const handleConfirmCheckout = async () => {
+        if (saving) return;
         if (cartItems.length === 0) {
             alert('السلة فارغة، يرجى إضافة كروت للجدول أولاً.');
             return;
@@ -328,22 +383,33 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
         }
 
         try {
+            if (editingInvoice && onReverseInvoice) {
+                const reversed = await onReverseInvoice();
+                if (!reversed) {
+                    throw new Error('فشل إلغاء الفاتورة السابقة أثناء التعديل.');
+                }
+            }
+
             // Generate purely numeric invoice number
             let nextInvoiceNumber = '';
-            try {
-                const q = query(collection(db, 'card_sales'), where('tenantId', '==', tenantId));
-                const snap = await getDocs(q);
-                const existingNums = snap.docs
-                    .map(d => {
-                        const numStr = d.data().invoiceNumber;
-                        return numStr ? parseInt(numStr.replace(/\D/g, '')) : NaN;
-                    })
-                    .filter(n => !isNaN(n));
-                const maxNum = existingNums.length > 0 ? Math.max(...existingNums) : 1000;
-                nextInvoiceNumber = String(maxNum + 1).padStart(5, '0');
-            } catch (e) {
-                console.error('Error generating sale invoice number:', e);
-                nextInvoiceNumber = String(Date.now()).slice(-8);
+            if (editingInvoice && editingInvoice.invoiceNumber) {
+                nextInvoiceNumber = String(editingInvoice.invoiceNumber);
+            } else {
+                try {
+                    const q = query(collection(db, 'card_sales'), where('tenantId', '==', tenantId));
+                    const snap = await getDocs(q);
+                    const existingNums = snap.docs
+                        .map(d => {
+                            const numStr = d.data().invoiceNumber;
+                            return numStr ? parseInt(numStr.replace(/\D/g, '')) : NaN;
+                        })
+                        .filter(n => !isNaN(n));
+                    const maxNum = existingNums.length > 0 ? Math.max(...existingNums) : 1000;
+                    nextInvoiceNumber = String(maxNum + 1).padStart(5, '0');
+                } catch (e) {
+                    console.error('Error generating sale invoice number:', e);
+                    nextInvoiceNumber = String(Date.now()).slice(-8);
+                }
             }
 
             await runTransaction(db, async (transaction) => {
@@ -504,7 +570,7 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                         createdAt: Date.now(),
                         read: false,
                         title: `🧾 فاتورة كروت شبكة جديدة #${nextInvoiceNumber}`,
-                        body: `قام المستخدم (${staffName}) ببيع كروت شبكة بمبلغ ${netTotal.toLocaleString('ar-SA')} ر.س`
+                        body: `قام المستخدم (${staffName}) ببيع كروت شبكة بمبلغ ${netTotal.toLocaleString('ar-SA')} ريال يمني`
                     });
                 } else {
                     // For draft or cancelled, we only save the sale records themselves and do not update categories or balances or cashbox!
@@ -531,6 +597,8 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                             date: dateStr,
                             dateTime: `${dateStr} ${timeStr}`,
                             userName: staffName,
+                            sellerName: staffName,
+                            createdByName: staffName,
                             invoiceNumber: nextInvoiceNumber,
                             status: invoiceStatus,
                             notes: notes.trim(),
@@ -670,7 +738,7 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                                             : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700'
                                     }`}
                                 >
-                                    تجزئة ({activeCatObj?.retailPrice || 0} ريال)
+                                    تجزئة ({activeCatObj?.retailPrice || 0} ريال يمني)
                                 </button>
                                 <button
                                     type="button"
@@ -681,7 +749,7 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                                             : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700'
                                     }`}
                                 >
-                                    جملة ({activeCatObj?.wholesalePrice || 0} ريال)
+                                    جملة ({activeCatObj?.wholesalePrice || 0} ريال يمني)
                                 </button>
                                 <button
                                     type="button"
@@ -827,9 +895,9 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                                                             {item.saleType === 'wholesale' ? 'جملة' : item.saleType === 'distributor' ? 'موزع' : 'تجزئة'}
                                                         </span>
                                                     </td>
-                                                    <td className="p-3">{item.unitPrice} ريال</td>
+                                                    <td className="p-3">{item.unitPrice} ريال يمني</td>
                                                     <td className="p-3 font-black text-indigo-600 dark:text-indigo-400">{item.quantity} كارت</td>
-                                                    <td className="p-3 font-black text-emerald-600 dark:text-emerald-400">{item.totalAmount} ريال</td>
+                                                    <td className="p-3 font-black text-emerald-600 dark:text-emerald-400">{item.totalAmount} ريال يمني</td>
                                                     <td className="p-3 text-center">
                                                         <button
                                                             onClick={() => handleRemoveFromCart(item.id)}
@@ -854,7 +922,7 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                                     </span>
                                     <div className="flex items-center gap-2">
                                         <span className="text-slate-600 dark:text-slate-400">إجمالي الأصناف:</span>
-                                        <span className="text-sm font-black text-emerald-600 dark:text-emerald-400">{invoiceTotal} ريال</span>
+                                        <span className="text-sm font-black text-emerald-600 dark:text-emerald-400">{invoiceTotal} ريال يمني</span>
                                     </div>
                                 </div>
                             )}
@@ -883,7 +951,7 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                         className="flex-1 py-3.5 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-black text-sm rounded-2xl shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2 transition disabled:opacity-40 disabled:pointer-events-none"
                     >
                         <ShoppingBag size={20} />
-                        <span>بيع (إتمام وتسديد الفاتورة) - الإجمالي: {invoiceTotal} ريال</span>
+                        <span>بيع (إتمام وتسديد الفاتورة) - الإجمالي: {invoiceTotal} ريال يمني</span>
                     </button>
                     <button
                         type="button"
@@ -1065,7 +1133,7 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                                     <div className="bg-white dark:bg-slate-900 p-2 rounded-xl border border-slate-200 dark:border-slate-700 flex flex-col justify-center">
                                         <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-0.5">الإجمالي ({totalCardsQty} كارت)</span>
                                         <span className="text-xs font-black text-slate-900 dark:text-white truncate" dir="ltr">
-                                            {invoiceTotal} ريال
+                                            {invoiceTotal} ريال يمني
                                         </span>
                                     </div>
 
@@ -1091,7 +1159,7 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                                     <div className="bg-emerald-600 text-white p-2 rounded-xl flex flex-col justify-center shadow-sm">
                                         <span className="text-[10px] font-bold text-emerald-100 mb-0.5">الصافي المطلوب</span>
                                         <span className="text-xs font-black truncate" dir="ltr">
-                                            {netTotal.toFixed(2)} ريال
+                                            {netTotal.toFixed(2)} ريال يمني
                                         </span>
                                     </div>
                                 </div>

@@ -39,6 +39,7 @@ export const getInitPerms = (): AppPermissions => ({
     cards_sales_report: { ...defaultModulePerms },
     cards_cashbox: { ...defaultModulePerms },
     cards_vouchers: { ...defaultModulePerms },
+    cards_exchanges: { ...defaultModulePerms },
     backup: false
 });
 
@@ -65,6 +66,7 @@ export const getAdminPerms = (): AppPermissions => {
         cards_sales_report: { ...adminP },
         cards_cashbox: { ...adminP },
         cards_vouchers: { ...adminP },
+        cards_exchanges: { ...adminP },
         backup: true
     };
 };
@@ -89,7 +91,8 @@ export const modulesMap: Record<keyof Omit<AppPermissions, 'edit' | 'add' | 'del
     cards_sellers: 'بائعي الكروت وعمولات التجزئة',
     cards_sales_report: 'تقرير مبيعات الكروت الشهرية',
     cards_cashbox: 'صندوق مبيعات الكروت',
-    cards_vouchers: 'سندات قبض وصرف الموزعين'
+    cards_vouchers: 'سندات قبض وصرف الموزعين',
+    cards_exchanges: 'استبدال الكروت'
 };
 
 const PermissionsEditor = ({ permissions, onChange }: { permissions: AppPermissions, onChange: (newPerms: AppPermissions) => void }) => {

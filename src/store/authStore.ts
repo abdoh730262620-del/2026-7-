@@ -33,6 +33,7 @@ export interface AppPermissions {
     cards_sales_report?: ModulePermissions;
     cards_cashbox?: ModulePermissions;
     cards_vouchers?: ModulePermissions;
+    cards_exchanges?: ModulePermissions;
     
     // Legacy mapping support for existing users
     edit?: boolean;

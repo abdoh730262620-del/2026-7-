@@ -191,6 +191,9 @@ export default function Quotations() {
                 paymentType: paymentMethod,
                 notes: notes.trim(),
                 createdBy: appUser.uid,
+                createdByName: appUser.name || appUser.email || 'المستخدم',
+                sellerName: appUser.name || appUser.email || 'المستخدم',
+                userName: appUser.name || appUser.email || 'المستخدم',
                 createdAt: Date.now(),
                 status: 'draft',
                 tenantId
@@ -720,8 +723,8 @@ export default function Quotations() {
             })()}
 
             {editingItem && (
-                <div className="fixed inset-0 bg-black/60 z-[110] flex items-center justify-center p-4 backdrop-blur-xs">
-                    <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-sm shadow-2xl flex flex-col overflow-hidden border border-gray-100 dark:border-slate-800 text-right" dir="rtl">
+                <div className="fixed inset-0 z-[110] flex items-center justify-center p-4" onClick={() => setEditingItem(null)}>
+                    <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-sm shadow-2xl flex flex-col overflow-hidden border border-gray-100 dark:border-slate-800 text-right" dir="rtl" onClick={(e) => e.stopPropagation()}>
                         {/* Header */}
                         <div className="p-4 md:p-5 border-b border-gray-100 dark:border-slate-800 bg-white dark:bg-slate-900 flex justify-between items-center">
                             <div className="flex flex-col">
