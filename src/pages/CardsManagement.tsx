@@ -1,11 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
     Layers, Plus, Users, ArrowRight, Trash2, Edit, CreditCard, 
     FileText, Calendar, DollarSign, Receipt, Printer, CheckCircle2, 
     X, Sparkles, TrendingUp, Wallet, ArrowUpRight, ArrowDownLeft, Search, UserCheck,
-    Share2, MessageSquare, Send, Truck, ChevronDown, ChevronUp, ShoppingBag, RefreshCw
+    Share2, MessageSquare, Send, Truck, ChevronDown, ChevronUp, ShoppingBag, RefreshCw,
+    Scale, Eye, Filter, BarChart3
 } from 'lucide-react';
-import { collection, query, where, onSnapshot, doc, addDoc as firestoreAddDoc, updateDoc as firestoreUpdateDoc, deleteDoc as firestoreDeleteDoc, runTransaction , getDocs, writeBatch, increment } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, doc, getDoc, addDoc as firestoreAddDoc, updateDoc as firestoreUpdateDoc, deleteDoc as firestoreDeleteDoc, runTransaction , getDocs, writeBatch, increment } from 'firebase/firestore';
 
 // Helper functions for offline-safe writes
 const safeWrite = async (promise: Promise<any>) => {
@@ -36,6 +37,9 @@ import { CardInvoiceActionModal } from '../components/CardInvoiceActionModal';
 import { InvoicePdfInput } from '../lib/pdfHelper';
 import { CardSalesSection } from '../components/CardSalesSection';
 import { CardPurchasesSection } from '../components/CardPurchasesSection';
+import { CardCashboxSection } from '../components/CardCashboxSection';
+import { CardReconciliationSection } from '../components/CardReconciliationSection';
+import { CardStockLogsSection } from '../components/CardStockLogsSection';
 
 
 
@@ -78,6 +82,7 @@ export default function CardsManagement() {
         if (secId === 'card_purchases_section') return 'cards_stock';
         if (secId === 'sales_cashbox') return 'cards_cashbox';
         if (secId === 'vouchers') return 'cards_vouchers';
+        if (secId === 'reconciliation') return 'cards_sales_report';
         return 'cards';
     };
 
@@ -100,6 +105,13 @@ export default function CardsManagement() {
 
     // Data State
     const [categories, setCategories] = useState<CardCategory[]>([]);
+    const [confirmDialog, setConfirmDialog] = useState<{
+        isOpen: boolean;
+        title?: string;
+        message: string;
+        onConfirm: () => void;
+        onCancel: () => void;
+    } | null>(null);
     const [suppliers, setSuppliers] = useState<CardSupplier[]>([]);
     const [purchases, setPurchases] = useState<CardPurchase[]>([]);
     const [purchaseVouchers, setPurchaseVouchers] = useState<CardPurchaseVoucher[]>([]);
@@ -232,70 +244,258 @@ export default function CardsManagement() {
     ]);
 
     
-    const reverseCardInvoice = async (invoiceNumber: string, type: 'sale' | 'purchase', silent: boolean = false) => {
+    const getNumericInvoiceNumber = (invStr: string | undefined, id: string): string => {
+        if (!invStr) {
+            const digits = id.replace(/\D/g, '');
+            return digits ? digits.slice(-5) : '1001';
+        }
+        const digits = invStr.replace(/\D/g, '');
+        return digits || '1001';
+    };
+
+    const reverseCardInvoice = async (
+        target: any,
+        type: 'sale' | 'purchase',
+        silent: boolean = false
+    ) => {
         try {
             const collectionName = type === 'sale' ? 'card_sales' : 'card_purchases';
-            const q = query(collection(db, collectionName), where('tenantId', '==', tenantId), where('invoiceNumber', '==', invoiceNumber));
-            const snap = await getDocs(q);
-            if (snap.empty) {
-                if (!silent) alert('لم يتم العثور على الفاتورة.');
+            
+            // Extract possible identifiers from target
+            let targetInvNum = '';
+            let targetRawInvNum = '';
+            let targetDocIds: string[] = [];
+            
+            if (typeof target === 'string') {
+                targetInvNum = target.trim();
+            } else if (target && typeof target === 'object') {
+                targetInvNum = target.invoiceNumber ? String(target.invoiceNumber).trim() : '';
+                targetRawInvNum = target.rawInvoiceNumber ? String(target.rawInvoiceNumber).trim() : '';
+                if (Array.isArray(target.docIds) && target.docIds.length > 0) {
+                    targetDocIds = target.docIds.filter(Boolean);
+                } else if (target.id) {
+                    targetDocIds = [target.id];
+                }
+            }
+
+            // Step 1: Collect candidate documents from Firestore and in-memory state
+            const docsToCancel: Array<{ id: string; ref: any; data: () => any }> = [];
+            const processedDocIds = new Set<string>();
+
+            // 1a. If specific docIds are known, fetch directly
+            for (const docId of targetDocIds) {
+                if (processedDocIds.has(docId)) continue;
+                try {
+                    const docSnap = await getDoc(doc(db, collectionName, docId));
+                    if (docSnap.exists() && docSnap.data().status !== 'cancelled') {
+                        docsToCancel.push(docSnap);
+                        processedDocIds.add(docId);
+                    }
+                } catch (e) {
+                    console.warn(`Could not fetch doc by ID ${docId}:`, e);
+                }
+            }
+
+            // 1b. If we have an invoice number, query Firestore
+            if (targetInvNum || targetRawInvNum) {
+                const searchNums = Array.from(new Set([targetInvNum, targetRawInvNum].filter(Boolean)));
+                for (const num of searchNums) {
+                    try {
+                        const q1 = query(
+                            collection(db, collectionName),
+                            where('tenantId', '==', tenantId),
+                            where('invoiceNumber', '==', num)
+                        );
+                        const snap1 = await getDocs(q1);
+                        snap1.docs.forEach(d => {
+                            if (d.data().status !== 'cancelled' && !processedDocIds.has(d.id)) {
+                                docsToCancel.push(d);
+                                processedDocIds.add(d.id);
+                            }
+                        });
+                    } catch (e) {
+                        console.warn('Error querying by invoiceNumber:', e);
+                    }
+                }
+
+                // 1c. Search in-memory state
+                if (docsToCancel.length === 0) {
+                    const candidatePool = type === 'sale' ? sales : purchases;
+                    const cleanSearchNum = targetInvNum.replace(/\D/g, '');
+                    
+                    const matchingCandidates = candidatePool.filter(item => {
+                        if (item.status === 'cancelled') return false;
+                        const itemInv = item.invoiceNumber || '';
+                        const itemClean = itemInv.replace(/\D/g, '');
+                        const shortId = item.id.slice(-6).toUpperCase();
+                        const numericFromId = getNumericInvoiceNumber(itemInv, item.id);
+                        
+                        return (
+                            item.id === targetInvNum ||
+                            itemInv === targetInvNum ||
+                            itemInv === targetRawInvNum ||
+                            (cleanSearchNum && itemClean === cleanSearchNum) ||
+                            (cleanSearchNum && numericFromId === cleanSearchNum) ||
+                            shortId === targetInvNum.toUpperCase()
+                        );
+                    });
+
+                    for (const cand of matchingCandidates) {
+                        if (!processedDocIds.has(cand.id)) {
+                            const dRef = doc(db, collectionName, cand.id);
+                            docsToCancel.push({
+                                id: cand.id,
+                                ref: dRef,
+                                data: () => cand
+                            });
+                            processedDocIds.add(cand.id);
+                        }
+                    }
+                }
+
+                // 1d. Fallback: query all active tenant documents from Firestore
+                if (docsToCancel.length === 0) {
+                    try {
+                        const fallbackQ = query(collection(db, collectionName), where('tenantId', '==', tenantId));
+                        const allSnap = await getDocs(fallbackQ);
+                        const cleanSearchNum = targetInvNum.replace(/\D/g, '');
+                        
+                        allSnap.docs.forEach(d => {
+                            const data = d.data();
+                            if (data.status === 'cancelled' || processedDocIds.has(d.id)) return;
+                            const itemInv = data.invoiceNumber || '';
+                            const itemClean = itemInv.replace(/\D/g, '');
+                            const shortId = d.id.slice(-6).toUpperCase();
+                            const numericFromId = getNumericInvoiceNumber(itemInv, d.id);
+                            
+                            if (
+                                d.id === targetInvNum ||
+                                itemInv === targetInvNum ||
+                                itemInv === targetRawInvNum ||
+                                (cleanSearchNum && itemClean === cleanSearchNum) ||
+                                (cleanSearchNum && numericFromId === cleanSearchNum) ||
+                                shortId === targetInvNum.toUpperCase()
+                            ) {
+                                docsToCancel.push(d);
+                                processedDocIds.add(d.id);
+                            }
+                        });
+                    } catch (e) {
+                        console.warn('Error in fallback query:', e);
+                    }
+                }
+            }
+
+            if (docsToCancel.length === 0) {
+                if (!silent) alert('لم يتم العثور على الفاتورة (ID: ' + targetDocIds.join(', ') + ') أو أنها ملغاة بالفعل.');
                 return false;
+            }
+
+            const foundIds = docsToCancel.map(d => typeof d.data === 'function' ? d.id : d.id);
+            console.log(`[reverseCardInvoice] Found ${docsToCancel.length} docs to cancel:`, foundIds);
+
+            // Alert for debugging
+            if (!silent && appUser?.role === 'admin') {
+                alert(`جار الإلغاء... تم العثور على ${docsToCancel.length} مستندات: \n${foundIds.join('\n')}`);
             }
 
             const batch = writeBatch(db);
             const categoryUpdates: Record<string, number> = {};
-            let partyId = '';
-            let creditTotal = 0;
+            const partyUpdates: Record<string, number> = {};
             let cashTotal = 0;
+            let displayInvNum = targetInvNum || targetRawInvNum || '';
 
-            snap.docs.forEach(d => {
-                const docData = d.data();
-                if (docData.status === 'cancelled') return;
-                
-                batch.update(d.ref, { status: 'cancelled' });
-                
-                const catId = docData.categoryId;
-                if (catId) {
-                    const qty = docData.quantity || 0;
-                    const qtyChange = type === 'sale' ? qty : -qty;
-                    categoryUpdates[catId] = (categoryUpdates[catId] || 0) + qtyChange;
+            // Process every item in the invoice
+            for (const d of docsToCancel) {
+                const docData = typeof d.data === 'function' ? d.data() : d.data;
+                if (!displayInvNum && docData.invoiceNumber) {
+                    displayInvNum = docData.invoiceNumber;
                 }
                 
-                if (type === 'sale') {
-                    if (docData.distributorId) partyId = docData.distributorId;
-                } else {
-                    if (docData.supplierId) partyId = docData.supplierId;
+                // Mark document as cancelled
+                batch.set(d.ref, {
+                    status: 'cancelled',
+                    cancelledAt: Date.now(),
+                    cancelledBy: appUser?.name || 'النظام'
+                }, { merge: true });
+
+                // Calculate stock restoration
+                const qty = Math.abs(docData.quantity || 0);
+                if (qty > 0) {
+                    let catId = docData.categoryId;
+                    if (!catId && docData.categoryName) {
+                        const matchedCat = categories.find(c =>
+                            c.name.trim().toLowerCase() === docData.categoryName.trim().toLowerCase() ||
+                            (c.linkedSection && c.linkedSection.trim().toLowerCase() === docData.categoryName.trim().toLowerCase())
+                        );
+                        if (matchedCat) catId = matchedCat.id;
+                    }
+                    
+                    if (catId) {
+                        const qtyChange = type === 'sale' ? qty : -qty;
+                        categoryUpdates[catId] = (categoryUpdates[catId] || 0) + qtyChange;
+                    }
                 }
-                
-                const itemTotal = docData.netTotal || docData.totalAmount || 0;
+
+                // Calculate party debt/balance adjustment
+                const itemTotal = Math.abs(docData.netTotal || docData.totalAmount || 0);
                 if (docData.paymentType === 'credit') {
-                    creditTotal += itemTotal;
+                    const partyId = type === 'sale' ? docData.distributorId : docData.supplierId;
+                    if (partyId && partyId !== 'walkin' && partyId !== 'cash') {
+                        partyUpdates[partyId] = (partyUpdates[partyId] || 0) + itemTotal;
+                    }
                 } else if (docData.paymentType === 'cash') {
                     cashTotal += itemTotal;
                 }
-            });
+            }
 
+            // Restore category stock in batch and record stock log
             for (const catId of Object.keys(categoryUpdates)) {
                 if (categoryUpdates[catId] !== 0) {
-                    batch.update(doc(db, 'card_categories', catId), {
+                    console.log(`[reverseCardInvoice] Updating stock for cat ${catId} by ${categoryUpdates[catId]}`);
+                    batch.set(doc(db, 'card_categories', catId), {
                         availableCount: increment(categoryUpdates[catId])
+                    }, { merge: true });
+
+                    const matchedCat = categories.find(c => c.id === catId);
+                    const catName = matchedCat ? matchedCat.name : 'فئة كروت';
+                    const currentCount = matchedCat ? (matchedCat.availableCount || 0) : 0;
+                    const newCount = currentCount + categoryUpdates[catId];
+
+                    const stockLogRef = doc(collection(db, 'card_stock_logs'));
+                    batch.set(stockLogRef, {
+                        tenantId,
+                        categoryId: catId,
+                        categoryName: catName,
+                        quantityAdded: categoryUpdates[catId],
+                        userName: appUser?.name || 'النظام',
+                        additionDate: new Date().toISOString().replace('T', ' ').slice(0, 19),
+                        availableCountAfter: newCount,
+                        notes: `إلغاء فاتورة ${type === 'sale' ? 'مبيعات' : 'مشتريات'} رقم #${displayInvNum || '---'}`,
+                        createdAt: Date.now()
                     });
                 }
             }
 
-            if (creditTotal > 0 && partyId) {
-                const partyCollection = type === 'sale' ? 'card_distributors' : 'card_suppliers';
-                batch.update(doc(db, partyCollection, partyId), {
-                    balance: increment(-creditTotal)
-                });
+            // Adjust distributor / supplier balances in batch
+            const partyCollection = type === 'sale' ? 'card_distributors' : 'card_suppliers';
+            for (const partyId of Object.keys(partyUpdates)) {
+                if (partyUpdates[partyId] > 0) {
+                    console.log(`[reverseCardInvoice] Updating party ${partyId} balance by -${partyUpdates[partyId]}`);
+                    batch.set(doc(db, partyCollection, partyId), {
+                        balance: increment(-partyUpdates[partyId])
+                    }, { merge: true });
+                }
             }
 
+            // If cash transactions were cancelled, adjust Card Sales Cashbox
             if (cashTotal > 0) {
+                console.log(`[reverseCardInvoice] Reversing cash of ${cashTotal}`);
                 const cashboxRef = doc(collection(db, 'card_cashbox'));
                 batch.set(cashboxRef, {
                     tenantId,
                     type: type === 'sale' ? 'manual_out' : 'manual_in',
-                    title: `إلغاء فاتورة ${type === 'sale' ? 'مبيعات' : 'مشتريات'} #${invoiceNumber}`,
+                    title: `إلغاء فاتورة ${type === 'sale' ? 'مبيعات' : 'مشتريات'} كروت #${displayInvNum || '---'}`,
                     amount: cashTotal,
                     isIncome: type === 'purchase',
                     date: new Date().toISOString().split('T')[0],
@@ -303,50 +503,90 @@ export default function CardsManagement() {
                     userName: appUser?.name || 'النظام',
                     createdAt: Date.now()
                 });
-                
-                const mainCashRef = doc(collection(db, 'cash'));
-                batch.set(mainCashRef, {
-                    date: Date.now(),
-                    amount: cashTotal,
-                    type: type === 'sale' ? 'out' : 'in',
-                    category: 'refund',
-                    description: `إلغاء فاتورة كروت ${type === 'sale' ? 'مبيعات' : 'مشتريات'} #${invoiceNumber}`,
-                    tenantId,
-                    createdAt: Date.now(),
-                    userName: appUser?.name || 'النظام'
-                });
             }
 
+            console.log(`[reverseCardInvoice] Committing batch...`);
             await batch.commit();
-            if (!silent) alert('تم إلغاء الفاتورة وعكس القيود والمخزون بنجاح.');
+            console.log(`[reverseCardInvoice] Batch committed successfully!`);
+            
+            if (!silent) alert('تم إلغاء الفاتورة واسترجاع المخزون وتسوية الحسابات بنجاح.');
             return true;
         } catch (error) {
             console.error('Error reversing card invoice:', error);
-            if (!silent) alert('حدث خطأ أثناء إلغاء الفاتورة.');
+            if (!silent) alert('حدث خطأ أثناء إلغاء الفاتورة: ' + (error instanceof Error ? error.message : String(error)));
             return false;
         }
     };
 
     const handleCancelSaleInvoice = async (invoice: any) => {
-        if (!getSecPermission('cards_sales_report', 'delete')) {
-            alert('عذراً، ليس لديك صلاحية إلغاء فواتير مبيعات الكروت.');
-            return;
+        try {
+            const canDeleteSale = appUser?.role === 'admin' || getSecPermission('cards_sales_report', 'delete') || getSecPermission('cards', 'delete');
+            if (!canDeleteSale) {
+                alert('عذراً، ليس لديك صلاحية إلغاء فواتير مبيعات الكروت.');
+                return;
+            }
+            const invDisplay = invoice.invoiceNumber || invoice.rawInvoiceNumber || invoice.id;
+            
+            setConfirmDialog({
+                isOpen: true,
+                title: 'تأكيد إلغاء الفاتورة',
+                message: `هل أنت متأكد من إلغاء فاتورة المبيعات رقم #${invDisplay}؟\nسيتم استرجاع الكروت للمخزون وخصم المبلغ من الموزع/الصندوق.`,
+                onCancel: () => setConfirmDialog(null),
+                onConfirm: async () => {
+                    setConfirmDialog(null);
+                    try {
+                        const success = await reverseCardInvoice(invoice, 'sale', true);
+                        if (!success) {
+                            console.warn('reverseCardInvoice returned false for sale');
+                        } else {
+                            if (appUser?.role === 'admin') alert('تم الإلغاء بنجاح.');
+                        }
+                    } catch (err: any) {
+                        alert('حدث خطأ غير متوقع أثناء الإلغاء: ' + err.message);
+                    }
+                }
+            });
+        } catch (err: any) {
+            alert('حدث خطأ غير متوقع: ' + err.message);
         }
-        if (!window.confirm('هل أنت متأكد من إلغاء فاتورة المبيعات هذه؟ سيتم استرجاع الكروت للمخزون وخصم المبلغ من الموزع/الصندوق.')) return;
-        await reverseCardInvoice(invoice.invoiceNumber, 'sale');
     };
 
     const handleCancelPurchaseInvoice = async (invoice: any) => {
-        if (!getSecPermission('cards_stock', 'delete')) {
-            alert('عذراً، ليس لديك صلاحية إلغاء فواتير مشتريات الكروت.');
-            return;
+        try {
+            const canDeletePurchase = appUser?.role === 'admin' || getSecPermission('cards_stock', 'delete') || getSecPermission('cards', 'delete');
+            if (!canDeletePurchase) {
+                alert('عذراً، ليس لديك صلاحية إلغاء فواتير مشتريات الكروت.');
+                return;
+            }
+            const invDisplay = invoice.invoiceNumber || invoice.rawInvoiceNumber || invoice.id;
+            
+            setConfirmDialog({
+                isOpen: true,
+                title: 'تأكيد إلغاء فاتورة المشتريات',
+                message: `هل أنت متأكد من إلغاء فاتورة المشتريات رقم #${invDisplay}؟\nسيتم خصم الكروت من المخزون وخصم المبلغ من المورد/الصندوق.`,
+                onCancel: () => setConfirmDialog(null),
+                onConfirm: async () => {
+                    setConfirmDialog(null);
+                    try {
+                        const success = await reverseCardInvoice(invoice, 'purchase', true);
+                        if (!success) {
+                            console.warn('reverseCardInvoice returned false for purchase');
+                        } else {
+                            if (appUser?.role === 'admin') alert('تم الإلغاء بنجاح.');
+                        }
+                    } catch (err: any) {
+                        alert('حدث خطأ غير متوقع أثناء الإلغاء: ' + err.message);
+                    }
+                }
+            });
+        } catch (err: any) {
+            alert('حدث خطأ غير متوقع: ' + err.message);
         }
-        if (!window.confirm('هل أنت متأكد من إلغاء فاتورة المشتريات هذه؟ سيتم خصم الكروت من المخزون وخصم المبلغ من المورد/الصندوق.')) return;
-        await reverseCardInvoice(invoice.invoiceNumber, 'purchase');
     };
 
     const handleEditSaleInvoice = async (invoice: any) => {
-        if (!getSecPermission('cards_sales_report', 'edit')) {
+        const canEditSale = appUser?.role === 'admin' || getSecPermission('cards_sales_report', 'edit') || getSecPermission('cards', 'edit');
+        if (!canEditSale) {
             alert('عذراً، ليس لديك صلاحية تعديل فواتير مبيعات الكروت.');
             return;
         }
@@ -355,7 +595,8 @@ export default function CardsManagement() {
     };
 
     const handleEditPurchaseInvoice = async (invoice: any) => {
-        if (!getSecPermission('cards_stock', 'edit')) {
+        const canEditPurchase = appUser?.role === 'admin' || getSecPermission('cards_stock', 'edit') || getSecPermission('cards', 'edit');
+        if (!canEditPurchase) {
             alert('عذراً، ليس لديك صلاحية تعديل فواتير مشتريات الكروت.');
             return;
         }
@@ -416,6 +657,14 @@ export default function CardsManagement() {
     const currentMonthDefault = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
     const [selectedMonth, setSelectedMonth] = useState(currentMonthDefault);
     const [selectedPurchaseMonth, setSelectedPurchaseMonth] = useState(currentMonthDefault);
+
+    // Monthly Report View & Navigation States
+    const [monthlySalesTab, setMonthlySalesTab] = useState<'categories' | 'invoices' | 'distributors'>('categories');
+    const [monthlyPurchasesTab, setMonthlyPurchasesTab] = useState<'categories' | 'invoices' | 'suppliers'>('categories');
+    const [monthlySalesSearch, setMonthlySalesSearch] = useState('');
+    const [monthlyPurchasesSearch, setMonthlyPurchasesSearch] = useState('');
+    const [expandedMonthlySalesInvoices, setExpandedMonthlySalesInvoices] = useState<Record<string, boolean>>({});
+    const [expandedMonthlyPurchaseInvoices, setExpandedMonthlyPurchaseInvoices] = useState<Record<string, boolean>>({});
 
     // Firebase Subscriptions
     useEffect(() => {
@@ -845,6 +1094,7 @@ export default function CardsManagement() {
                 // Writes
                 transaction.set(saleRef, {
                     tenantId,
+                    invoiceNumber: saleRef.id.slice(-6).toUpperCase(),
                     categoryName: catSnap.data().name,
                     quantity: saleIsReturn ? -qty : qty,
                     saleType: 'distributor',
@@ -885,21 +1135,6 @@ export default function CardsManagement() {
                         dateTime: `${dateStr} ${timeStr}`,
                         userName: appUser?.name || appUser?.email || 'المدير',
                         createdAt: Date.now()
-                    });
-
-                    const mainCashRef = doc(collection(db, 'cash'));
-                    transaction.set(mainCashRef, {
-                        date: Date.now(),
-                        amount: netTotal,
-                        type: saleIsReturn ? 'out' : 'in',
-                        category: 'card_sale',
-                        description: saleIsReturn 
-                            ? `مرتجع مبيعات نقدي من الموزع: ${distSnap.data().name}`
-                            : `مبيعات كروت نقدية للموزع: ${distSnap.data().name}`,
-                        referenceId: cashboxRef.id,
-                        createdBy: appUser?.uid || 'unknown',
-                        createdAt: Date.now(),
-                        tenantId
                     });
                 } else {
                     const newBalance = saleIsReturn ? currentBalance - netTotal : currentBalance + netTotal;
@@ -1105,21 +1340,6 @@ export default function CardsManagement() {
                         userName: appUser?.name || appUser?.email || 'المدير',
                         createdAt: Date.now()
                     });
-
-                    const mainCashRef = doc(collection(db, 'cash'));
-                    transaction.set(mainCashRef, {
-                        date: Date.now(),
-                        amount: totalAmount,
-                        type: purchaseIsReturn ? 'in' : 'out',
-                        category: 'card_purchase',
-                        description: purchaseIsReturn 
-                            ? `مسترد نقدي من المورد: ${suppSnap.data().name} (مرتجع كروت)`
-                            : `مدفوع نقدي للمورد: ${suppSnap.data().name} (مشتريات كروت)`,
-                        referenceId: cashboxRef.id,
-                        createdBy: appUser?.uid || 'unknown',
-                        createdAt: Date.now(),
-                        tenantId
-                    });
                 } else {
                     const newBalance = purchaseIsReturn ? currentBalance - totalAmount : currentBalance + totalAmount;
                     transaction.update(suppRef, {
@@ -1281,35 +1501,217 @@ export default function CardsManagement() {
         return entry.isIncome ? acc + entry.amount : acc - entry.amount;
     }, 0);
 
-    // Filter Sales by selected month
-    const filteredMonthSales = sales.filter(s => s.month === selectedMonth && (s.status === 'completed' || !s.status));
+    // Filter Sales by selected month (excluding cancelled sales and converted credit sales)
+    const activeMonthCashInvoices = new Set(
+        sales
+            .filter(s => {
+                const matchM = s.month === selectedMonth || (s.date && s.date.startsWith(selectedMonth)) || (s.dateTime && s.dateTime.startsWith(selectedMonth));
+                const st = (s.status as string) || 'completed';
+                return matchM && st === 'completed' && s.paymentType === 'cash' && s.invoiceNumber;
+            })
+            .map(s => s.invoiceNumber)
+    );
 
-    // Monthly Report Calculations per category
-    const monthlyCategoryReport = categories.map(cat => {
-        const catSales = filteredMonthSales.filter(s => s.categoryName.trim() === cat.name.trim());
-        const cashSales = catSales.filter(s => s.paymentType === 'cash');
-        const creditSales = catSales.filter(s => s.paymentType === 'credit');
+    const filteredMonthSales = useMemo(() => {
+        return sales.filter(s => {
+            const matchM = s.month === selectedMonth || (s.date && s.date.startsWith(selectedMonth)) || (s.dateTime && s.dateTime.startsWith(selectedMonth));
+            if (!matchM) return false;
+            const st = (s.status as string) || 'completed';
+            if (st === 'cancelled' || st === 'canceled' || st === 'returned') return false;
+            if (s.paymentType === 'credit' && s.invoiceNumber && activeMonthCashInvoices.has(s.invoiceNumber)) {
+                return false;
+            }
+            return st === 'completed';
+        });
+    }, [sales, selectedMonth, activeMonthCashInvoices]);
 
-        const cashQty = cashSales.reduce((sum, s) => sum + s.quantity, 0);
-        const creditQty = creditSales.reduce((sum, s) => sum + s.quantity, 0);
-        const cashAmountTotal = cashSales.reduce((sum, s) => sum + s.netTotal, 0);
-        const creditAmountTotal = creditSales.reduce((sum, s) => sum + s.netTotal, 0);
+    // Monthly Grouped Sales Invoices for detailed list
+    const monthlyGroupedSalesInvoices = useMemo(() => {
+        const invoiceMap = new Map<string, {
+            id: string;
+            invoiceNumber: string;
+            distributorName: string;
+            distributorId?: string;
+            paymentType: 'cash' | 'credit';
+            totalAmount: number;
+            totalQuantity: number;
+            dateTime: string;
+            date: string;
+            userName: string;
+            status?: string;
+            cancelledBy?: string;
+            cancelledAt?: number;
+            items: Array<{
+                categoryName: string;
+                quantity: number;
+                unitPrice: number;
+                totalAmount: number;
+            }>;
+        }>();
 
-        return {
-            categoryName: cat.name,
-            cashQty,
-            creditQty,
-            totalQty: cashQty + creditQty,
-            cashAmountTotal,
-            creditAmountTotal,
-            totalAmount: cashAmountTotal + creditAmountTotal
+        filteredMonthSales.forEach(s => {
+            const invNum = s.invoiceNumber ? `${s.invoiceNumber}` : `INV-${s.id.slice(-5)}`;
+            if (!invoiceMap.has(invNum)) {
+                invoiceMap.set(invNum, {
+                    id: s.id,
+                    invoiceNumber: invNum,
+                    distributorName: s.distributorName || 'مبيعات مباشرة',
+                    distributorId: s.distributorId,
+                    paymentType: s.paymentType || 'cash',
+                    totalAmount: 0,
+                    totalQuantity: 0,
+                    dateTime: s.dateTime || s.date || '',
+                    date: s.date || '',
+                    userName: s.userName || 'المدير',
+                    status: s.status,
+                    cancelledBy: s.cancelledBy,
+                    cancelledAt: s.cancelledAt,
+                    items: []
+                });
+            }
+
+            const inv = invoiceMap.get(invNum)!;
+            const itemQty = Number(s.quantity) || 0;
+            const itemNet = Number(s.netTotal) || 0;
+            const itemPrice = Number(s.unitPrice) || (itemQty > 0 ? itemNet / itemQty : 0);
+
+            inv.totalQuantity += itemQty;
+            inv.totalAmount += itemNet;
+            inv.items.push({
+                categoryName: s.categoryName || 'غير محدد',
+                quantity: itemQty,
+                unitPrice: itemPrice,
+                totalAmount: itemNet
+            });
+        });
+
+        return Array.from(invoiceMap.values()).sort((a, b) => (b.dateTime || '').localeCompare(a.dateTime || ''));
+    }, [filteredMonthSales]);
+
+    // Monthly Report Calculations per category (Network Cards only)
+    const monthlyCategoryReport = useMemo(() => {
+        const isNetworkCategory = (c: CardCategory) => {
+            if (c.linkedSection && c.linkedSection.trim().length > 0) return true;
+            const norm = (c.name || '').trim().toLowerCase();
+            if (!norm) return false;
+
+            const defaultDenoms = [
+                'فئة 100 ريال', 'فئة 200 ريال', 'فئة 250 ريال', 'فئة 500 ريال',
+                'فئة 1000 ريال', 'فئة 1500 ريال', 'فئة 3000 ريال', 'فئة 5000 ريال'
+            ];
+
+            if (defaultDenoms.some(d => d.toLowerCase() === norm)) return true;
+            if (norm.startsWith('فئة ') || norm.includes('شبك')) return true;
+
+            const cleanStr = norm.replace(/فئة|كروت|كرت|ريال|\s+/g, '');
+            if (['100', '200', '250', '500', '1000', '1500', '3000', '5000'].includes(cleanStr)) return true;
+
+            return false;
         };
-    });
+
+        const uniqueCategories: CardCategory[] = [];
+        const seenCatKeys = new Set<string>();
+
+        // 1. Include only network card categories from categories state
+        categories.forEach(c => {
+            if (!c.name || !c.name.trim()) return;
+            if (!isNetworkCategory(c)) return;
+
+            const normName = c.name.trim().toLowerCase();
+            const key = c.id ? `id_${c.id}` : `name_${normName}`;
+            if (!seenCatKeys.has(key) && !seenCatKeys.has(`name_${normName}`)) {
+                seenCatKeys.add(key);
+                seenCatKeys.add(`name_${normName}`);
+                uniqueCategories.push(c);
+            }
+        });
+
+        const defaultDenoms = [
+            'فئة 100 ريال', 'فئة 200 ريال', 'فئة 250 ريال', 'فئة 500 ريال',
+            'فئة 1000 ريال', 'فئة 1500 ريال', 'فئة 3000 ريال', 'فئة 5000 ريال'
+        ];
+
+        // 2. Also ensure default network denominations with sales are included if not present
+        defaultDenoms.forEach(denom => {
+            const denomNorm = denom.toLowerCase();
+            const cleanDenom = denom.replace(/فئة|كروت|كرت|ريال|\s+/g, '').toLowerCase();
+
+            const isCovered = uniqueCategories.some(c => {
+                const cNorm = (c.name || '').trim().toLowerCase();
+                const lNorm = (c.linkedSection || '').trim().toLowerCase();
+                return cNorm === denomNorm || lNorm === denomNorm ||
+                    cNorm.replace(/فئة|كروت|كرت|ريال|\s+/g, '') === cleanDenom ||
+                    lNorm.replace(/فئة|كروت|كرت|ريال|\s+/g, '') === cleanDenom;
+            });
+
+            if (!isCovered) {
+                const hasSales = filteredMonthSales.some(s => {
+                    const sNorm = (s.categoryName || '').trim().toLowerCase();
+                    const cleanSale = sNorm.replace(/فئة|كروت|كرت|ريال|\s+/g, '');
+                    return sNorm === denomNorm || (cleanSale && cleanSale === cleanDenom);
+                });
+
+                if (hasSales) {
+                    uniqueCategories.push({
+                        id: `denom_${denom}`,
+                        tenantId: tenantId,
+                        name: denom,
+                        wholesalePrice: 0,
+                        retailPrice: 0,
+                        availableCount: 0
+                    });
+                    seenCatKeys.add(`name_${denomNorm}`);
+                }
+            }
+        });
+
+        return uniqueCategories.map(cat => {
+            const catNameTrim = (cat.name || '').trim().toLowerCase();
+            const linkedTrim = (cat.linkedSection || '').trim().toLowerCase();
+            const cleanCat = catNameTrim.replace(/فئة|كروت|كرت|ريال|\s+/g, '');
+            const cleanLinked = linkedTrim.replace(/فئة|كروت|كرت|ريال|\s+/g, '');
+
+            const catSales = filteredMonthSales.filter(s => {
+                if (s.categoryId && cat.id && s.categoryId === cat.id) return true;
+                const sNameTrim = (s.categoryName || '').trim().toLowerCase();
+                if (!sNameTrim) return false;
+
+                if (sNameTrim === catNameTrim) return true;
+                if (linkedTrim && sNameTrim === linkedTrim) return true;
+
+                const cleanSale = sNameTrim.replace(/فئة|كروت|كرت|ريال|\s+/g, '');
+                if (cleanSale && cleanCat && cleanSale === cleanCat) return true;
+                if (cleanSale && cleanLinked && cleanSale === cleanLinked) return true;
+
+                return false;
+            });
+
+            const cashSales = catSales.filter(s => s.paymentType === 'cash');
+            const creditSales = catSales.filter(s => s.paymentType === 'credit');
+
+            const cashQty = cashSales.reduce((sum, s) => sum + (Number(s.quantity) || 0), 0);
+            const creditQty = creditSales.reduce((sum, s) => sum + (Number(s.quantity) || 0), 0);
+            const cashAmountTotal = cashSales.reduce((sum, s) => sum + (Number(s.netTotal) || 0), 0);
+            const creditAmountTotal = creditSales.reduce((sum, s) => sum + (Number(s.netTotal) || 0), 0);
+
+            return {
+                categoryName: cat.name.trim(),
+                cashQty,
+                creditQty,
+                totalQty: cashQty + creditQty,
+                cashAmountTotal,
+                creditAmountTotal,
+                totalAmount: cashAmountTotal + creditAmountTotal
+            };
+        });
+    }, [categories, filteredMonthSales]);
 
     const totalMonthCashQty = monthlyCategoryReport.reduce((acc, r) => acc + r.cashQty, 0);
     const totalMonthCreditQty = monthlyCategoryReport.reduce((acc, r) => acc + r.creditQty, 0);
     const totalMonthCashNet = monthlyCategoryReport.reduce((acc, r) => acc + r.cashAmountTotal, 0);
     const totalMonthCreditNet = monthlyCategoryReport.reduce((acc, r) => acc + r.creditAmountTotal, 0);
+    const totalMonthOverallQty = totalMonthCashQty + totalMonthCreditQty;
+    const totalMonthOverallNet = totalMonthCashNet + totalMonthCreditNet;
 
     // Export Monthly Report PDF
     const handleExportMonthlyPDF = () => {
@@ -1329,7 +1731,7 @@ export default function CardsManagement() {
             `${totalMonthCreditQty} كارت`,
             `${totalMonthCashNet.toFixed(2)} ريال`,
             `${totalMonthCreditNet.toFixed(2)} ريال`,
-            `${(totalMonthCashNet + totalMonthCreditNet).toFixed(2)} ريال`
+            `${totalMonthOverallNet.toFixed(2)} ريال`
         ]);
         printReport(title, headers, data);
     };
@@ -1447,6 +1849,17 @@ export default function CardsManagement() {
             visible: getSecPermission('cards_cashbox', 'view')
         },
         {
+            id: 'reconciliation',
+            title: 'مطابقة الأرصدة والمبيعات',
+            subtitle: 'مطابقة المخزون والتدقيق المالي (نقدي/آجل)',
+            icon: Scale,
+            color: 'bg-violet-600',
+            lightBg: 'bg-violet-50 dark:bg-violet-950/60',
+            textColor: 'text-violet-600 dark:text-violet-400',
+            borderColor: 'border-violet-100 dark:border-violet-900/50',
+            visible: getSecPermission('cards_sales_report', 'view') || getSecPermission('cards_stock', 'view')
+        },
+        {
             id: 'vouchers',
             title: 'سندات القبض والصرف',
             subtitle: 'قبض وصرف الموزعين',
@@ -1502,103 +1915,21 @@ export default function CardsManagement() {
             )}
 
             
-            {/* SECTION 1: إضافة كروت (Add Stock) */}
+            {/* SECTION 1: إضافة كروت (Add Stock Logs & Quick Actions) */}
             {activeSection === 'add_stock' && (
-                <div className="space-y-6 animate-in fade-in duration-200">
-                    {/* Square Navigation Cards for Adding / Exchanging Card Stock */}
-                    {canAdd && (
-                        <div className="space-y-3">
-                            <h3 className="text-sm font-black text-slate-400 dark:text-slate-500 mr-1">العمليات السريعة للمخزون</h3>
-                            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                                {/* Card 1: إضافة رصيد كروت جديد */}
-                                <div
-                                    onClick={() => setIsCardPurchaseModalOpen(true)}
-                                    className="group flex flex-col items-center justify-center text-center p-5 md:p-6 rounded-3xl border-2 border-slate-200 dark:border-slate-800 hover:border-indigo-500 dark:hover:border-indigo-500 bg-white dark:bg-slate-900 transition-all duration-300 shadow-sm hover:shadow-xl hover:-translate-y-1 cursor-pointer aspect-square"
-                                >
-                                    <div className="flex flex-col items-center">
-                                        <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center mb-3 transition-transform group-hover:scale-110 border border-indigo-100 dark:border-indigo-900/50">
-                                            <Plus className="w-7 h-7 sm:w-8 sm:h-8" />
-                                        </div>
-                                        <h3 className="text-xs sm:text-sm font-black text-slate-900 dark:text-white leading-tight mb-1">
-                                            إضافة رصيد كروت جديد
-                                        </h3>
-                                        <p className="text-[10px] font-bold text-slate-400 max-w-[150px] leading-relaxed hidden sm:block">
-                                            تزويد المخزن عبر تسجيل فواتير شراء من الموردين
-                                        </p>
-                                    </div>
-                                </div>
-
-                                {/* Card 2: استبدال كروت */}
-                                <div
-                                    onClick={() => {
-                                        if (!getSecPermission('cards_exchanges', 'view') && !getSecPermission('cards_exchanges', 'add')) {
-                                            alert('عذراً، ليس لديك صلاحية استبدال الكروت.');
-                                            return;
-                                        }
-                                        setIsCardExchangeModalOpen(true);
-                                    }}
-                                    className="group flex flex-col items-center justify-center text-center p-5 md:p-6 rounded-3xl border-2 border-slate-200 dark:border-slate-800 hover:border-purple-500 dark:hover:border-purple-500 bg-white dark:bg-slate-900 transition-all duration-300 shadow-sm hover:shadow-xl hover:-translate-y-1 cursor-pointer aspect-square"
-                                >
-                                    <div className="flex flex-col items-center">
-                                        <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-purple-50 dark:bg-purple-950/60 text-purple-600 dark:text-purple-400 flex items-center justify-center mb-3 transition-transform group-hover:scale-110 border border-purple-100 dark:border-purple-900/50">
-                                            <RefreshCw className="w-7 h-7 sm:w-8 sm:h-8" />
-                                        </div>
-                                        <h3 className="text-xs sm:text-sm font-black text-slate-900 dark:text-white leading-tight mb-1">
-                                            استبدال كروت المخزون
-                                        </h3>
-                                        <p className="text-[10px] font-bold text-slate-400 max-w-[150px] leading-relaxed hidden sm:block">
-                                            تبديل فئات كروت المخزون وحساب الفارق المالي تلقائياً
-                                        </p>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    <div className="bg-white dark:bg-slate-900 p-4 sm:p-5 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between gap-3">
-                        <h2 className="text-lg font-black text-slate-900 dark:text-white">سجل إضافة رصيد الكروت</h2>
-                    </div>
-                    
-                    <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-right text-xs">
-                                <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-400 font-black border-b border-slate-200 dark:border-slate-800">
-                                    <tr>
-                                        <th className="p-4">الفئة</th>
-                                        <th className="p-4">الكمية المضافة / المسحوبة</th>
-                                        <th className="p-4">الرصيد الكلي بعد الإضافة</th>
-                                        <th className="p-4">التاريخ والوقت</th>
-                                        <th className="p-4">المستخدم</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-bold text-slate-800 dark:text-slate-200">
-                                    {stockLogs.length === 0 ? (
-                                        <tr>
-                                            <td colSpan={5} className="p-8 text-center text-slate-400 font-bold">
-                                                لا توجد عمليات إضافة رصيد سابقة.
-                                            </td>
-                                        </tr>
-                                    ) : (
-                                        stockLogs.map((log) => {
-                                            const isNegative = log.quantityAdded < 0;
-                                            return (
-                                                <tr key={log.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                                                    <td className="p-4 font-black">{log.categoryName}</td>
-                                                    <td className={`p-4 font-black ${isNegative ? 'text-rose-600' : 'text-emerald-600'}`}>
-                                                        {isNegative ? '' : '+'}{log.quantityAdded} كارت
-                                                    </td>
-                                                    <td className="p-4 text-indigo-600 font-black">{log.availableCountAfter} كارت</td>
-                                                    <td className="p-4 text-slate-500">{log.additionDate}</td>
-                                                    <td className="p-4 text-slate-500">{log.userName}</td>
-                                                </tr>
-                                            );
-                                        })
-                                    )}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
+                <CardStockLogsSection
+                    stockLogs={stockLogs}
+                    categories={categories}
+                    canAdd={canAdd}
+                    onOpenAddModal={() => setIsCardPurchaseModalOpen(true)}
+                    onOpenExchangeModal={() => {
+                        if (!getSecPermission('cards_exchanges', 'view') && !getSecPermission('cards_exchanges', 'add')) {
+                            alert('عذراً، ليس لديك صلاحية استبدال الكروت.');
+                            return;
+                        }
+                        setIsCardExchangeModalOpen(true);
+                    }}
+                />
             )}
 
             {/* SECTION 1.5: الموردين والمشتريات (Purchases) */}
@@ -2034,7 +2365,7 @@ export default function CardsManagement() {
                                             </div>
                                         ) : (
                                             suppliers.map((supp) => {
-                                                const suppPurchases = purchases.filter(s => s.supplierId === supp.id);
+                                                const suppPurchases = purchases.filter(s => s.supplierId === supp.id && (s.status === 'completed' || !s.status));
                                                 const suppVouchers = purchaseVouchers.filter(v => v.supplierId === supp.id);
                                                 const totalPaid = suppVouchers.filter(v => v.type === 'receipt').reduce((sum, v) => sum + v.amount, 0);
                                                 const balance = supp.balance || 0;
@@ -2077,232 +2408,17 @@ export default function CardsManagement() {
 
                     {/* Sub-Section 1.5: Supplier Invoices & PDF Printing */}
                     {purchaseSubSection === 'invoices' && (
-                        <div className="space-y-4 animate-in fade-in duration-200">
-                            <div className="bg-white dark:bg-slate-900 p-4 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
-                                <div className="flex items-center gap-2 flex-1 max-w-md">
-                                    <div className="relative w-full">
-                                        <Search className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                                        <input
-                                            type="text"
-                                            placeholder="ابحث باسم المورد، الفئة، أو رقم الفاتورة..."
-                                            value={purchaseInvoiceSearch}
-                                            onChange={(e) => setPurchaseInvoiceSearch(e.target.value)}
-                                            className="w-full pr-10 pl-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl text-xs font-bold outline-none focus:border-emerald-600 text-slate-900 dark:text-white"
-                                        />
-                                    </div>
-                                </div>
-                                
-                                <div className="flex items-center gap-3">
-                                    <div className="flex items-center gap-2">
-                                        <Calendar size={16} className="text-slate-400" />
-                                        <input
-                                            type="date"
-                                            value={purchaseInvoiceDateFilter}
-                                            onChange={(e) => setPurchaseInvoiceDateFilter(e.target.value)}
-                                            className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-2.5 text-xs font-bold outline-none focus:border-emerald-600 text-slate-900 dark:text-white"
-                                        />
-                                        {purchaseInvoiceDateFilter && (
-                                            <button
-                                                onClick={() => setPurchaseInvoiceDateFilter('')}
-                                                className="p-2 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950 rounded-xl font-bold text-xs"
-                                                title="إلغاء فلتر التاريخ"
-                                            >
-                                                تفريغ
-                                            </button>
-                                        )}
-                                    </div>
-                                </div>
-                            </div>
-
-                            {/* Table of Invoices */}
-                            <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
-                                <div className="overflow-x-auto">
-                                    <table className="w-full text-right text-xs">
-                                        <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-400 font-black border-b border-slate-200 dark:border-slate-800">
-                                            <tr>
-                                                <th className="p-4">رقم الفاتورة</th>
-                                                <th className="p-4">اسم المورد</th>
-                                                <th className="p-4">فئة الكروت</th>
-                                                <th className="p-4 text-center">الكمية المضافة</th>
-                                                <th className="p-4 text-left">سعر التكلفة / الوحدة</th>
-                                                <th className="p-4 text-left">الإجمالي الصافي</th>
-                                                <th className="p-4 text-center">طريقة الدفع</th>
-                                                <th className="p-4">التاريخ والوقت</th>
-                                                <th className="p-4 text-center">إجراءات الطباعة</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-bold text-slate-800 dark:text-slate-200">
-                                            {(() => {
-                                                let filtered = purchases;
-                                                if (purchaseInvoiceSearch.trim()) {
-                                                    const q = purchaseInvoiceSearch.toLowerCase();
-                                                    filtered = filtered.filter(p => 
-                                                        (p.supplierName && p.supplierName.toLowerCase().includes(q)) ||
-                                                        (p.categoryName && p.categoryName.toLowerCase().includes(q)) ||
-                                                        (p.invoiceNumber && p.invoiceNumber.toLowerCase().includes(q)) ||
-                                                        p.id.toLowerCase().includes(q)
-                                                    );
-                                                }
-                                                if (purchaseInvoiceDateFilter) {
-                                                    filtered = filtered.filter(p => {
-                                                        const pDate = p.date || (p.dateTime && p.dateTime.split(' ')[0]);
-                                                        return pDate === purchaseInvoiceDateFilter;
-                                                    });
-                                                }
-
-                                                if (filtered.length === 0) {
-                                                    return (
-                                                        <tr>
-                                                            <td colSpan={9} className="p-8 text-center text-slate-400 font-bold">
-                                                                لا توجد فواتير مشتريات تطابق البحث أو فلتر التاريخ.
-                                                            </td>
-                                                        </tr>
-                                                    );
-                                                }
-
-                                                // Group items by transaction (using invoiceNumber if exists, or dateTime + supplierId + paymentType)
-                                                interface GroupedPurchase {
-                                                    id: string;
-                                                    invoiceNumber: string;
-                                                    supplierId: string;
-                                                    supplierName: string;
-                                                    paymentType: string;
-                                                    dateTime: string;
-                                                    userName: string;
-                                                    status?: string;
-                                                    items: {
-                                                        categoryName: string;
-                                                        quantity: number;
-                                                        unitPrice: number;
-                                                        totalAmount: number;
-                                                    }[];
-                                                    totalAmount: number;
-                                                    totalQuantity: number;
-                                                }
-
-                                                const groupedPurchasesMap: { [key: string]: GroupedPurchase } = {};
-
-                                                filtered.forEach(p => {
-                                                    const key = p.invoiceNumber 
-                                                        ? `inv_${p.invoiceNumber}` 
-                                                        : `${p.dateTime || p.date}_${p.supplierId || 'cash'}_${p.paymentType}`;
-
-                                                    if (!groupedPurchasesMap[key]) {
-                                                        groupedPurchasesMap[key] = {
-                                                            id: p.id,
-                                                            invoiceNumber: p.invoiceNumber || p.id.slice(-6).toUpperCase(),
-                                                            supplierId: p.supplierId || '',
-                                                            supplierName: p.supplierName || 'مورد نقدي',
-                                                            paymentType: p.paymentType || 'cash',
-                                                            dateTime: p.dateTime || p.date || '',
-                                                            userName: p.userName || '',
-                                                            status: p.status || 'completed',
-                                                            items: [],
-                                                            totalAmount: 0,
-                                                            totalQuantity: 0
-                                                        };
-                                                    }
-
-                                                    const unitPrice = p.unitPrice || (p.quantity ? (p.totalAmount / p.quantity) : 0);
-                                                    groupedPurchasesMap[key].items.push({
-                                                        categoryName: p.categoryName || 'فئة كروت',
-                                                        quantity: p.quantity || 0,
-                                                        unitPrice: unitPrice,
-                                                        totalAmount: p.totalAmount || 0
-                                                    });
-
-                                                    groupedPurchasesMap[key].totalAmount += (p.totalAmount || 0);
-                                                    groupedPurchasesMap[key].totalQuantity += (p.quantity || 0);
-                                                });
-
-                                                const groupedList = Object.values(groupedPurchasesMap).sort((a, b) => {
-                                                    // Sort newest first
-                                                    return b.dateTime.localeCompare(a.dateTime);
-                                                });
-
-                                                return groupedList.map((purchase) => {
-                                                    return (
-                                                        <tr key={purchase.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition">
-                                                            <td className="p-4 font-mono font-black text-indigo-600 dark:text-indigo-400">#{purchase.invoiceNumber}</td>
-                                                            <td className="p-4 font-black">{purchase.supplierName}</td>
-                                                            <td className="p-4 font-black text-slate-700 dark:text-slate-300">
-                                                                <div className="flex flex-wrap gap-1 max-w-[220px]">
-                                                                    {purchase.items.map((it, idx) => (
-                                                                        <span key={idx} className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 px-2 py-1 rounded-lg text-[10px] inline-block font-black border border-slate-200/50 dark:border-slate-700/50">
-                                                                            فئة: {it.categoryName} ({it.quantity})
-                                                                        </span>
-                                                                    ))}
-                                                                </div>
-                                                            </td>
-                                                            <td className="p-4 text-center font-black text-emerald-600">+{purchase.totalQuantity} كارت</td>
-                                                            <td className="p-4 text-left font-black">
-                                                                <div className="space-y-0.5 text-slate-500 dark:text-slate-400">
-                                                                    {purchase.items.map((it, idx) => (
-                                                                        <div key={idx} className="text-[11px] font-bold">
-                                                                            {it.unitPrice.toFixed(2)} ريال يمني
-                                                                        </div>
-                                                                    ))}
-                                                                </div>
-                                                            </td>
-                                                            <td className="p-4 text-left font-black text-blue-600 dark:text-blue-400">{purchase.totalAmount.toFixed(2)} ريال يمني</td>
-                                                            <td className="p-4 text-center">
-                                                                <div className="flex flex-col items-center gap-1">
-                                                                    <span className={`px-2.5 py-1 rounded-xl text-[10px] font-black ${
-                                                                        purchase.paymentType === 'cash' 
-                                                                            ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300' 
-                                                                            : 'bg-amber-50 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300'
-                                                                    }`}>
-                                                                        {purchase.paymentType === 'cash' ? 'نقدي' : 'آجل'}
-                                                                    </span>
-                                                                    {purchase.status && (
-                                                                        <span className={`px-2.5 py-0.5 rounded-lg text-[9px] font-black border ${
-                                                                            purchase.status === 'completed' 
-                                                                                ? 'bg-emerald-500/10 text-emerald-600 border-emerald-200' 
-                                                                                : purchase.status === 'cancelled'
-                                                                                ? 'bg-rose-500/10 text-rose-600 border-rose-200'
-                                                                                : 'bg-blue-500/10 text-blue-600 border-blue-200'
-                                                                        }`}>
-                                                                            {purchase.status === 'completed' ? 'معتمدة' : purchase.status === 'cancelled' ? 'ملغاة' : 'مسودة'}
-                                                                        </span>
-                                                                    )}
-                                                                </div>
-                                                            </td>
-                                                            <td className="p-4 text-slate-500 text-[11px]">{purchase.dateTime}</td>
-                                                            <td className="p-4 text-center">
-                                                                <button
-                                                                    onClick={async () => {
-                                                                        const invObj = {
-                                                                            invoiceNumber: purchase.invoiceNumber,
-                                                                            supplierName: purchase.supplierName,
-                                                                            supplierId: purchase.supplierId,
-                                                                            total: purchase.totalAmount,
-                                                                            paidAmount: purchase.paymentType === 'cash' ? purchase.totalAmount : 0,
-                                                                            paymentType: purchase.paymentType,
-                                                                            date: purchase.dateTime,
-                                                                            sellerName: purchase.userName || appUser?.name || 'النظام'
-                                                                        };
-                                                                        const itemObj = purchase.items.map(it => ({
-                                                                            name: `كروت فئة: ${it.categoryName}`,
-                                                                            quantity: it.quantity,
-                                                                            price: it.unitPrice
-                                                                        }));
-                                                                        await printInvoice(invObj, 'purchase', itemObj, 'ريال يمني');
-                                                                    }}
-                                                                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-black text-xs rounded-xl shadow-md shadow-emerald-600/20 inline-flex items-center gap-1.5 transition"
-                                                                >
-                                                                    <Printer size={14} />
-                                                                    <span>طباعة الفاتورة PDF</span>
-                                                                </button>
-                                                            </td>
-                                                        </tr>
-                                                    );
-                                                });
-                                            })()}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            </div>
-                        </div>
+                        <CardPurchasesSection 
+                            purchases={purchases}
+                            onViewInvoice={(invoice) => {
+                                setActionModalInvoice(invoice);
+                                setActionModalOpen(true);
+                            }}
+                            onEditInvoice={getSecPermission('cards_stock', 'edit') ? handleEditPurchaseInvoice : undefined}
+                            onCancelInvoice={getSecPermission('cards_stock', 'delete') ? handleCancelPurchaseInvoice : undefined}
+                            onBack={() => setPurchaseSubSection(null)}
+                            appUser={appUser}
+                        />
                     )}
 
                     {/* Sub-Section 1.8: Daily Debt Alerts */}
@@ -3535,7 +3651,7 @@ export default function CardsManagement() {
                                             </div>
                                         ) : (
                                             distributors.map((dist) => {
-                                                const distSales = sales.filter(s => s.distributorId === dist.id);
+                                                const distSales = sales.filter(s => s.distributorId === dist.id && (s.status === 'completed' || !s.status));
                                                 const totalSales = distSales.reduce((sum, s) => sum + (s.netTotal || 0), 0);
                                                 const distVouchers = vouchers.filter(v => v.distributorId === dist.id);
                                                 const totalPaid = distVouchers.filter(v => v.type === 'receipt').reduce((sum, v) => sum + v.amount, 0);
@@ -3878,172 +3994,592 @@ export default function CardsManagement() {
 
             {/* SECTION 4: المبيعات الشهرية (Monthly Sales Report) */}
             {activeSection === 'monthly_sales' && (
-                <div className="space-y-6 animate-in fade-in duration-200">
-                    <div className="bg-white dark:bg-slate-900 p-4 sm:p-5 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-3">
-                        <h2 className="text-lg font-black text-slate-900 dark:text-white">تقرير المبيعات الشهرية لكروت الشبكة</h2>
+                <div className="space-y-4 sm:space-y-5 animate-in fade-in duration-200" dir="rtl">
+                    {/* Header Bar */}
+                    <div className="bg-white dark:bg-slate-900 p-3.5 sm:p-4 rounded-2xl sm:rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+                        <div className="flex items-center gap-2.5">
+                            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center font-black">
+                                <TrendingUp size={20} />
+                            </div>
+                            <div>
+                                <h2 className="text-sm sm:text-base font-black text-slate-900 dark:text-white">تقرير المبيعات الشهرية لكروت الشبكة</h2>
+                                <p className="text-[10px] sm:text-[11px] font-bold text-slate-400">إحصائيات المبيعات النقدية والآجلة وتوزيع الفئات وسجل الفواتير</p>
+                            </div>
+                        </div>
+
                         <div className="flex items-center gap-2">
-                            <div className="flex items-center gap-2 bg-slate-100 dark:bg-slate-800 px-3 py-2 rounded-2xl border border-slate-200 dark:border-slate-700">
-                                <Calendar size={16} className="text-slate-400" />
-                                <span className="text-xs font-bold text-slate-600 dark:text-slate-400">الشهر:</span>
+                            <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800 px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 flex-1 sm:flex-none">
+                                <Calendar size={14} className="text-slate-400" />
+                                <span className="text-[11px] font-bold text-slate-600 dark:text-slate-400">الشهر:</span>
                                 <input
                                     type="month"
                                     value={selectedMonth}
                                     onChange={(e) => setSelectedMonth(e.target.value)}
-                                    className="bg-transparent text-xs font-black text-slate-900 dark:text-white outline-none"
+                                    className="bg-transparent text-xs font-black text-slate-900 dark:text-white outline-none cursor-pointer"
                                 />
                             </div>
                             <button
                                 onClick={handleExportMonthlyPDF}
-                                className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-2xl shadow-lg shadow-emerald-600/20 flex items-center gap-2 transition"
+                                className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-xl shadow-md shadow-emerald-600/20 flex items-center justify-center gap-1.5 transition shrink-0 active:scale-95"
+                                title="تصدير PDF"
                             >
-                                <Printer size={16} />
-                                <span>تصدير PDF</span>
+                                <Printer size={15} />
+                                <span className="inline">تصدير PDF</span>
                             </button>
                         </div>
                     </div>
 
-                    {/* Summary cards */}
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                        <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800">
-                            <span className="text-[10px] font-black text-slate-400">عدد الكروت النقدية</span>
-                            <div className="text-lg font-black text-emerald-600 dark:text-emerald-400">{totalMonthCashQty} كارت</div>
+                    {/* Summary Cards */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3">
+                        <div className="bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col justify-between">
+                            <span className="text-[10px] sm:text-[11px] font-black text-slate-400">كروت مبيعات نقدية</span>
+                            <div className="text-base sm:text-lg font-black text-emerald-600 dark:text-emerald-400 mt-1">{totalMonthCashQty.toLocaleString()} <span className="text-[10px] font-normal text-slate-400">كارت</span></div>
+                            <div className="text-[11px] font-bold text-slate-500 font-mono mt-0.5">{totalMonthCashNet.toLocaleString()} ر.ي</div>
                         </div>
-                        <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800">
-                            <span className="text-[10px] font-black text-slate-400">عدد الكروت الآجلة</span>
-                            <div className="text-lg font-black text-amber-600 dark:text-amber-400">{totalMonthCreditQty} كارت</div>
+                        <div className="bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col justify-between">
+                            <span className="text-[10px] sm:text-[11px] font-black text-slate-400">كروت مبيعات آجلة</span>
+                            <div className="text-base sm:text-lg font-black text-amber-600 dark:text-amber-400 mt-1">{totalMonthCreditQty.toLocaleString()} <span className="text-[10px] font-normal text-slate-400">كارت</span></div>
+                            <div className="text-[11px] font-bold text-slate-500 font-mono mt-0.5">{totalMonthCreditNet.toLocaleString()} ر.ي</div>
                         </div>
-                        <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800">
-                            <span className="text-[10px] font-black text-slate-400">مقبوضات نقدي</span>
-                            <div className="text-lg font-black text-emerald-600 dark:text-emerald-400">{totalMonthCashNet.toFixed(2)} ريال يمني</div>
+                        <div className="bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col justify-between">
+                            <span className="text-[10px] sm:text-[11px] font-black text-slate-400">إجمالي الكروت المباعة</span>
+                            <div className="text-base sm:text-lg font-black text-indigo-600 dark:text-indigo-400 mt-1">{totalMonthOverallQty.toLocaleString()} <span className="text-[10px] font-normal text-slate-400">كارت</span></div>
+                            <div className="text-[11px] font-bold text-slate-500 font-mono mt-0.5">{monthlyGroupedSalesInvoices.length} فاتورة مسجلة</div>
                         </div>
-                        <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800">
-                            <span className="text-[10px] font-black text-slate-400">ديون أجل مستحقة</span>
-                            <div className="text-lg font-black text-amber-600 dark:text-amber-400">{totalMonthCreditNet.toFixed(2)} ريال يمني</div>
+                        <div className="bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col justify-between">
+                            <span className="text-[10px] sm:text-[11px] font-black text-slate-400">إجمالي صافي المبيعات</span>
+                            <div className="text-base sm:text-lg font-black text-slate-900 dark:text-white mt-1 font-mono">{totalMonthOverallNet.toLocaleString()} <span className="text-[10px] font-normal text-slate-400">ر.ي</span></div>
+                            <div className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 font-mono mt-0.5">شهر {selectedMonth}</div>
                         </div>
                     </div>
 
-                    {/* Report Cards (squares 2 per row) */}
-                    {monthlyCategoryReport.length === 0 ? (
-                        <div className="bg-white dark:bg-slate-900 p-8 text-center text-slate-400 font-bold rounded-3xl border border-slate-200 dark:border-slate-800">
-                            لا توجد مبيعات مسجلة في هذا الشهر حتى الآن.
-                        </div>
-                    ) : (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
-                            {monthlyCategoryReport.map((r) => (
-                                <div key={r.categoryName} className="bg-white dark:bg-slate-900 p-5 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col justify-between space-y-4 animate-in fade-in duration-200">
-                                    {/* Header / Title */}
-                                    <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
-                                        <div className="flex items-center gap-2.5">
-                                            <div className="w-2.5 h-6 bg-emerald-500 rounded-full" />
-                                            <span className="font-black text-slate-900 dark:text-white text-base">{r.categoryName}</span>
-                                        </div>
-                                        <span className="text-[11px] font-black bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 px-3 py-1 rounded-full border border-indigo-100/50 dark:border-indigo-900/30">
-                                            العدد الكلي: {r.totalQty} كارت
-                                        </span>
-                                    </div>
+                    {/* View Switcher Tabs */}
+                    <div className="flex flex-wrap sm:flex-nowrap items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800/80 rounded-2xl border border-slate-200 dark:border-slate-700/60 text-[11px] sm:text-xs font-black">
+                        <button
+                            onClick={() => setMonthlySalesTab('categories')}
+                            className={`flex-1 py-1.5 sm:py-2 px-2 sm:px-3 rounded-xl flex items-center justify-center gap-1.5 transition ${
+                                monthlySalesTab === 'categories'
+                                    ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-sm'
+                                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                            }`}
+                        >
+                            <BarChart3 size={14} className="shrink-0" />
+                            <span className="truncate">جدول فئات الكروت</span>
+                        </button>
+                        <button
+                            onClick={() => setMonthlySalesTab('invoices')}
+                            className={`flex-1 py-1.5 sm:py-2 px-2 sm:px-3 rounded-xl flex items-center justify-center gap-1.5 transition ${
+                                monthlySalesTab === 'invoices'
+                                    ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-sm'
+                                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                            }`}
+                        >
+                            <Receipt size={14} className="shrink-0" />
+                            <span className="truncate">سجل الفواتير ({monthlyGroupedSalesInvoices.length})</span>
+                        </button>
+                        <button
+                            onClick={() => setMonthlySalesTab('distributors')}
+                            className={`flex-1 py-1.5 sm:py-2 px-2 sm:px-3 rounded-xl flex items-center justify-center gap-1.5 transition ${
+                                monthlySalesTab === 'distributors'
+                                    ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-sm'
+                                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                            }`}
+                        >
+                            <Users size={14} className="shrink-0" />
+                            <span className="truncate">سحب الموزعين</span>
+                        </button>
+                    </div>
 
-                                    {/* Metrics Grid */}
-                                    <div className="grid grid-cols-2 gap-3">
-                                        {/* Cash column */}
-                                        <div className="bg-slate-50 dark:bg-slate-950/50 p-3 rounded-2xl border border-slate-100 dark:border-slate-900 flex flex-col justify-between min-h-[75px]">
-                                            <span className="text-[10px] font-black text-slate-400">كروت نقدية</span>
-                                            <span className="text-sm font-black text-emerald-600 dark:text-emerald-400">+{r.cashQty} كارت</span>
-                                            <span className="text-[11px] font-bold text-slate-500 mt-1">{r.cashAmountTotal.toFixed(2)} ريال يمني</span>
-                                        </div>
-                                        
-                                        {/* Credit column */}
-                                        <div className="bg-slate-50 dark:bg-slate-950/50 p-3 rounded-2xl border border-slate-100 dark:border-slate-900 flex flex-col justify-between min-h-[75px]">
-                                            <span className="text-[10px] font-black text-slate-400">كروت آجلة</span>
-                                            <span className="text-sm font-black text-amber-600 dark:text-amber-500">+{r.creditQty} كارت</span>
-                                            <span className="text-[11px] font-bold text-slate-500 mt-1">{r.creditAmountTotal.toFixed(2)} ريال يمني</span>
-                                        </div>
-                                    </div>
-
-                                    {/* Footer / Total Net */}
-                                    <div className="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-slate-800">
-                                        <span className="text-xs font-black text-slate-500">إجمالي صافي المبيعات</span>
-                                        <span className="text-base font-black text-indigo-600 dark:text-indigo-400">{r.totalAmount.toFixed(2)} ريال يمني</span>
-                                    </div>
+                    {/* TAB 1: Categories Full Width Structured Table matching CardCashboxSection */}
+                    {monthlySalesTab === 'categories' && (
+                        <div className="-mx-4 sm:-mx-6 bg-white dark:bg-slate-900 border-y border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden animate-in fade-in duration-150">
+                            {monthlyCategoryReport.length === 0 ? (
+                                <div className="p-8 text-center text-slate-400 font-bold text-xs">
+                                    لا توجد مبيعات مسجلة في هذا الشهر حتى الآن.
                                 </div>
-                            ))}
+                            ) : (
+                                <div className="w-full">
+                                    <table className="w-full text-right text-[11px] sm:text-xs">
+                                        <thead className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400">
+                                            <tr>
+                                                <th className="py-2.5 sm:py-3.5 px-1 sm:px-3 font-black text-center w-6 sm:w-10">#</th>
+                                                <th className="py-2.5 sm:py-3.5 px-1.5 sm:px-3 font-black">فئة الكرت</th>
+                                                <th className="py-2.5 sm:py-3.5 px-1 sm:px-2 font-black text-center">
+                                                    <span className="hidden sm:inline">مبيعات نقدية</span>
+                                                    <span className="sm:hidden">نقدي</span>
+                                                </th>
+                                                <th className="py-2.5 sm:py-3.5 px-1 sm:px-2 font-black text-center">
+                                                    <span className="hidden sm:inline">مبيعات آجلة</span>
+                                                    <span className="sm:hidden">آجل</span>
+                                                </th>
+                                                <th className="py-2.5 sm:py-3.5 px-1 sm:px-2 font-black text-center">
+                                                    <span className="hidden sm:inline">إجمالي الكروت</span>
+                                                    <span className="sm:hidden">العدد</span>
+                                                </th>
+                                                <th className="py-2.5 sm:py-3.5 px-1.5 sm:px-3 font-black text-left">
+                                                    <span className="hidden sm:inline">إجمالي الصافي</span>
+                                                    <span className="sm:hidden">الصافي</span>
+                                                </th>
+                                                <th className="py-2.5 sm:py-3.5 px-1 sm:px-2 font-black text-center w-10 sm:w-24">النسبة</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-slate-800 dark:text-slate-200">
+                                            {monthlyCategoryReport.map((r, idx) => {
+                                                const percent = totalMonthOverallNet > 0 ? (r.totalAmount / totalMonthOverallNet) * 100 : 0;
+                                                return (
+                                                    <tr key={r.categoryName} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition font-bold">
+                                                        <td className="py-2.5 px-1 text-center font-mono text-slate-400 text-[10px] sm:text-[11px]">{idx + 1}</td>
+                                                        <td className="py-2.5 px-1.5 sm:px-3">
+                                                            <div className="flex items-center gap-1.5">
+                                                                <div className="w-1.5 h-4 bg-emerald-500 rounded-full shrink-0" />
+                                                                <span className="font-black text-slate-900 dark:text-white text-[11px] sm:text-sm truncate">{r.categoryName}</span>
+                                                            </div>
+                                                        </td>
+                                                        <td className="py-2.5 px-1 sm:px-2 text-center">
+                                                            <div className="flex flex-col items-center leading-tight">
+                                                                <span className="font-mono font-black text-emerald-600 dark:text-emerald-400 text-[10px] sm:text-xs">{r.cashQty}</span>
+                                                                <span className="text-[9px] sm:text-[10px] text-slate-400 font-mono">{r.cashAmountTotal.toFixed(0)}</span>
+                                                            </div>
+                                                        </td>
+                                                        <td className="py-2.5 px-1 sm:px-2 text-center">
+                                                            <div className="flex flex-col items-center leading-tight">
+                                                                <span className="font-mono font-black text-amber-600 dark:text-amber-400 text-[10px] sm:text-xs">{r.creditQty}</span>
+                                                                <span className="text-[9px] sm:text-[10px] text-slate-400 font-mono">{r.creditAmountTotal.toFixed(0)}</span>
+                                                            </div>
+                                                        </td>
+                                                        <td className="py-2.5 px-1 sm:px-2 text-center">
+                                                            <span className="inline-block px-1.5 sm:px-2.5 py-0.5 sm:py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 font-mono font-black text-[10px] sm:text-xs border border-indigo-100 dark:border-indigo-900/30">
+                                                                {r.totalQty}
+                                                            </span>
+                                                        </td>
+                                                        <td className="py-2.5 px-1.5 sm:px-3 text-left">
+                                                            <span className="font-mono font-black text-slate-900 dark:text-white text-[10px] sm:text-xs whitespace-nowrap">
+                                                                {r.totalAmount.toFixed(2)}
+                                                            </span>
+                                                        </td>
+                                                        <td className="py-2.5 px-1 sm:px-2 text-center">
+                                                            <div className="flex flex-col items-center gap-0.5">
+                                                                <span className="font-mono font-bold text-[10px] text-slate-600 dark:text-slate-400">{percent.toFixed(1)}%</span>
+                                                                <div className="hidden sm:block w-16 h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                                                                    <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${Math.min(percent, 100)}%` }} />
+                                                                </div>
+                                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                        <tfoot className="bg-slate-100/80 dark:bg-slate-800/80 border-t-2 border-slate-200 dark:border-slate-700 font-black text-[11px] sm:text-xs">
+                                            <tr>
+                                                <td colSpan={2} className="py-2.5 sm:py-3.5 px-2 sm:px-4 text-slate-900 dark:text-white">
+                                                    <span className="hidden sm:inline">الإجمالي العام لشهر {selectedMonth}</span>
+                                                    <span className="sm:hidden">الإجمالي</span>
+                                                </td>
+                                                <td className="py-2.5 sm:py-3.5 px-1 sm:px-2 text-center text-emerald-600 dark:text-emerald-400 font-mono">
+                                                    <div>{totalMonthCashQty}</div>
+                                                    <div className="text-[9px] sm:text-[10px] font-mono">{totalMonthCashNet.toFixed(0)}</div>
+                                                </td>
+                                                <td className="py-2.5 sm:py-3.5 px-1 sm:px-2 text-center text-amber-600 dark:text-amber-400 font-mono">
+                                                    <div>{totalMonthCreditQty}</div>
+                                                    <div className="text-[9px] sm:text-[10px] font-mono">{totalMonthCreditNet.toFixed(0)}</div>
+                                                </td>
+                                                <td className="py-2.5 sm:py-3.5 px-1 sm:px-2 text-center text-indigo-600 dark:text-indigo-400 font-mono text-[11px] sm:text-sm">
+                                                    {totalMonthOverallQty}
+                                                </td>
+                                                <td className="py-2.5 sm:py-3.5 px-1.5 sm:px-3 text-left font-mono text-slate-950 dark:text-white text-[11px] sm:text-sm whitespace-nowrap">
+                                                    {totalMonthOverallNet.toFixed(2)}
+                                                </td>
+                                                <td className="py-2.5 sm:py-3.5 px-1 sm:px-2 text-center text-slate-400 font-mono text-[10px] sm:text-xs">100%</td>
+                                            </tr>
+                                        </tfoot>
+                                    </table>
+                                </div>
+                            )}
                         </div>
                     )}
 
-                    {/* Top Distributors Report */}
-                    {(() => {
-                        const monthDistSales = sales.filter(s => s.month === selectedMonth && s.saleType === 'distributor');
-                        if (monthDistSales.length === 0) return null;
+                    {/* TAB 2: Monthly Invoices Log matching CardSalesSection & CardCashboxSection */}
+                    {monthlySalesTab === 'invoices' && (
+                        <div className="space-y-3 animate-in fade-in duration-150">
+                            {/* Search bar */}
+                            <div className="relative">
+                                <Search className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                                <input
+                                    type="text"
+                                    placeholder="بحث برقم الفاتورة، اسم الموزع، الفئة..."
+                                    value={monthlySalesSearch}
+                                    onChange={(e) => setMonthlySalesSearch(e.target.value)}
+                                    className="w-full pr-10 pl-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-bold outline-none focus:border-emerald-600 text-slate-900 dark:text-white"
+                                />
+                            </div>
+
+                            {(() => {
+                                const q = monthlySalesSearch.toLowerCase().trim();
+                                const filtered = monthlyGroupedSalesInvoices.filter(inv => {
+                                    if (!q) return true;
+                                    return (
+                                        inv.invoiceNumber.toLowerCase().includes(q) ||
+                                        inv.distributorName.toLowerCase().includes(q) ||
+                                        inv.items.some(it => it.categoryName.toLowerCase().includes(q))
+                                    );
+                                });
+
+                                if (filtered.length === 0) {
+                                    return (
+                                        <div className="-mx-4 sm:-mx-6 bg-white dark:bg-slate-900 p-8 text-center text-slate-400 font-bold border-y border-slate-200 dark:border-slate-800 text-xs">
+                                            لا توجد فواتير مطابقة للبحث في هذا الشهر.
+                                        </div>
+                                    );
+                                }
+
+                                return (
+                                    <div className="-mx-4 sm:-mx-6 divide-y divide-slate-100 dark:divide-slate-800 bg-white dark:bg-slate-900 border-y border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
+                                        {filtered.map(inv => {
+                                            const isExp = !!expandedMonthlySalesInvoices[inv.invoiceNumber];
+                                            return (
+                                                <div key={inv.invoiceNumber} className="transition">
+                                                    <div className="p-3 sm:p-3.5 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 hover:bg-slate-50/80 dark:hover:bg-slate-800/40">
+                                                        <div className="flex items-center gap-3">
+                                                            <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-mono font-black text-xs ${
+                                                                inv.paymentType === 'cash'
+                                                                    ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 border border-emerald-200/60 dark:border-emerald-800/40'
+                                                                    : 'bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 border border-amber-200/60 dark:border-amber-800/40'
+                                                            }`}>
+                                                                {inv.paymentType === 'cash' ? 'نقد' : 'أجل'}
+                                                            </div>
+                                                            <div>
+                                                                <div className="flex items-center gap-2">
+                                                                    <span className="font-black text-slate-900 dark:text-white text-xs sm:text-sm">#{inv.invoiceNumber}</span>
+                                                                    <span className="font-bold text-slate-700 dark:text-slate-300 text-xs">- {inv.distributorName}</span>
+                                                                </div>
+                                                                <div className="flex items-center gap-2 text-[10px] text-slate-400 font-bold mt-0.5">
+                                                                    <span>{inv.dateTime}</span>
+                                                                    <span>•</span>
+                                                                    <span>بواسطة: {inv.userName}</span>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+
+                                                        <div className="flex items-center justify-between sm:justify-end gap-3 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100 dark:border-slate-800">
+                                                            <div className="text-right sm:text-left">
+                                                                <span className="block text-xs sm:text-sm font-black font-mono text-slate-900 dark:text-white">{inv.totalAmount.toFixed(2)} ر.ي</span>
+                                                                <span className="block text-[10px] font-bold text-indigo-600 dark:text-indigo-400">{inv.totalQuantity} كارت ({inv.items.length} صنف)</span>
+                                                            </div>
+
+                                                            <div className="flex items-center gap-1.5">
+                                                                <button
+                                                                    onClick={() => {
+                                                                        const invoiceObj: InvoicePdfInput = {
+                                                                            id: inv.id,
+                                                                            invoiceNumber: inv.invoiceNumber,
+                                                                            type: 'sale',
+                                                                            totalAmount: inv.totalAmount,
+                                                                            paymentType: inv.paymentType,
+                                                                            partyName: inv.distributorName,
+                                                                            dateTime: inv.dateTime,
+                                                                            userName: inv.userName,
+                                                                            status: inv.status,
+                                                                            items: inv.items.map(it => ({
+                                                                                categoryName: it.categoryName,
+                                                                                quantity: it.quantity,
+                                                                                unitPrice: it.unitPrice,
+                                                                                totalAmount: it.totalAmount
+                                                                            }))
+                                                                        };
+                                                                        setActionModalInvoice(invoiceObj);
+                                                                        setActionModalOpen(true);
+                                                                    }}
+                                                                    className="p-2 text-slate-500 hover:text-emerald-600 bg-slate-50 dark:bg-slate-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/60 rounded-xl transition"
+                                                                    title="عرض وطباعة الفاتورة"
+                                                                >
+                                                                    <Eye size={15} />
+                                                                </button>
+                                                                <button
+                                                                    onClick={() => setExpandedMonthlySalesInvoices(prev => ({ ...prev, [inv.invoiceNumber]: !isExp }))}
+                                                                    className="p-2 text-slate-500 hover:text-slate-900 dark:hover:text-white bg-slate-50 dark:bg-slate-800 rounded-xl transition"
+                                                                    title="تفاصيل الأصناف"
+                                                                >
+                                                                    {isExp ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Expanded Items Table */}
+                                                    {isExp && (
+                                                        <div className="bg-slate-50 dark:bg-slate-950/50 p-3 sm:p-4 border-t border-slate-100 dark:border-slate-800">
+                                                            <table className="w-full text-right text-[11px]">
+                                                                <thead>
+                                                                    <tr className="text-slate-500 dark:text-slate-400 font-black border-b border-slate-200 dark:border-slate-800">
+                                                                        <th className="pb-1.5 px-2">#</th>
+                                                                        <th className="pb-1.5 px-2">فئة الكرت</th>
+                                                                        <th className="pb-1.5 px-2 text-center">الكمية</th>
+                                                                        <th className="pb-1.5 px-2 text-center">سعر الوحدة</th>
+                                                                        <th className="pb-1.5 px-2 text-left">الإجمالي</th>
+                                                                    </tr>
+                                                                </thead>
+                                                                <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
+                                                                    {inv.items.map((it, iIdx) => (
+                                                                        <tr key={iIdx} className="font-bold text-slate-800 dark:text-slate-200">
+                                                                            <td className="py-1.5 px-2 text-slate-400 font-mono">{iIdx + 1}</td>
+                                                                            <td className="py-1.5 px-2">{it.categoryName}</td>
+                                                                            <td className="py-1.5 px-2 text-center font-mono text-indigo-600 dark:text-indigo-400">{it.quantity} كارت</td>
+                                                                            <td className="py-1.5 px-2 text-center font-mono">{it.unitPrice.toFixed(2)} ر.ي</td>
+                                                                            <td className="py-1.5 px-2 text-left font-mono font-black">{it.totalAmount.toFixed(2)} ر.ي</td>
+                                                                        </tr>
+                                                                    ))}
+                                                                </tbody>
+                                                            </table>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                );
+                            })()}
+                        </div>
+                    )}
+
+                    {/* TAB 3: Top Distributors Structured Table */}
+                    {monthlySalesTab === 'distributors' && (() => {
+                        const monthDistSales = filteredMonthSales.filter(s => s.saleType === 'distributor' || s.distributorName);
+                        if (monthDistSales.length === 0) {
+                            return (
+                                <div className="-mx-4 sm:-mx-6 bg-white dark:bg-slate-900 p-8 text-center text-slate-400 font-bold border-y border-slate-200 dark:border-slate-800 text-xs">
+                                    لا توجد مبيعات موزعين مسجلة في هذا الشهر حتى الآن.
+                                </div>
+                            );
+                        }
                         
-                        const distMap = new Map<string, { name: string, qty: number, net: number }>();
+                        const distMap = new Map<string, { name: string; cashQty: number; creditQty: number; totalQty: number; cashNet: number; creditNet: number; totalNet: number }>();
                         monthDistSales.forEach(s => {
-                            const name = s.distributorName || 'غير معروف';
+                            const name = s.distributorName || 'مبيعات مباشرة';
                             if (!distMap.has(name)) {
-                                distMap.set(name, { name, qty: 0, net: 0 });
+                                distMap.set(name, { name, cashQty: 0, creditQty: 0, totalQty: 0, cashNet: 0, creditNet: 0, totalNet: 0 });
                             }
-                            const entry = distMap.get(name);
-                            if (entry) {
-                                entry.qty += s.quantity;
-                                entry.net += s.netTotal;
+                            const entry = distMap.get(name)!;
+                            const qty = Number(s.quantity) || 0;
+                            const net = Number(s.netTotal) || 0;
+                            entry.totalQty += qty;
+                            entry.totalNet += net;
+                            if (s.paymentType === 'cash') {
+                                entry.cashQty += qty;
+                                entry.cashNet += net;
+                            } else {
+                                entry.creditQty += qty;
+                                entry.creditNet += net;
                             }
                         });
 
-                        const topDistributors = Array.from(distMap.values()).sort((a, b) => b.qty - a.qty).slice(0, 5);
+                        const sortedDistributors = Array.from(distMap.values()).sort((a, b) => b.totalNet - a.totalNet);
 
                         return (
-                            <div className="bg-white dark:bg-slate-900 p-5 sm:p-6 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm mt-6">
-                                <h3 className="text-sm sm:text-base font-black text-slate-900 dark:text-white mb-4 sm:mb-5 flex items-center gap-2">
-                                    <TrendingUp className="text-orange-500" size={20} />
-                                    <span>أكثر الموزعين سحباً هذا الشهر</span>
-                                </h3>
-                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                                    {topDistributors.map((d, idx) => (
-                                        <div key={idx} className="flex items-center justify-between p-4 rounded-2xl bg-slate-50 dark:bg-slate-800 border border-slate-100 dark:border-slate-700/50 hover:-translate-y-1 hover:shadow-md transition-all duration-300">
-                                            <div className="flex items-center gap-3">
-                                                <div className="w-10 h-10 rounded-2xl bg-orange-100 dark:bg-orange-900/60 text-orange-600 dark:text-orange-400 flex items-center justify-center font-black text-sm border border-orange-200 dark:border-orange-800/50 shadow-sm">
-                                                    #{idx + 1}
-                                                </div>
-                                                <span className="font-bold text-slate-800 dark:text-slate-200 text-sm">{d.name}</span>
-                                            </div>
-                                            <div className="text-left">
-                                                <span className="block text-sm font-black text-slate-900 dark:text-white">{d.qty} كارت</span>
-                                                <span className="block text-xs font-bold text-slate-500 dark:text-slate-400">{d.net.toLocaleString()} ريال يمني</span>
-                                            </div>
-                                        </div>
-                                    ))}
+                            <div className="-mx-4 sm:-mx-6 bg-white dark:bg-slate-900 border-y border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden animate-in fade-in duration-150">
+                                <div className="w-full">
+                                    <table className="w-full text-right text-[11px] sm:text-xs">
+                                        <thead className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 font-black">
+                                            <tr>
+                                                <th className="py-2.5 sm:py-3.5 px-1 sm:px-3 font-black w-6 sm:w-10 text-center">#</th>
+                                                <th className="py-2.5 sm:py-3.5 px-1.5 sm:px-3 font-black">الموزع</th>
+                                                <th className="py-2.5 sm:py-3.5 px-1 sm:px-2 font-black text-center">
+                                                    <span className="hidden sm:inline">سحب نقدي</span>
+                                                    <span className="sm:hidden">نقدي</span>
+                                                </th>
+                                                <th className="py-2.5 sm:py-3.5 px-1 sm:px-2 font-black text-center">
+                                                    <span className="hidden sm:inline">سحب آجل</span>
+                                                    <span className="sm:hidden">آجل</span>
+                                                </th>
+                                                <th className="py-2.5 sm:py-3.5 px-1 sm:px-2 font-black text-center">
+                                                    <span className="hidden sm:inline">إجمالي الكروت</span>
+                                                    <span className="sm:hidden">العدد</span>
+                                                </th>
+                                                <th className="py-2.5 sm:py-3.5 px-1.5 sm:px-3 font-black text-left">
+                                                    <span className="hidden sm:inline">إجمالي المبالغ</span>
+                                                    <span className="sm:hidden">المبلغ</span>
+                                                </th>
+                                                <th className="py-2.5 sm:py-3.5 px-1 sm:px-2 font-black text-center w-10 sm:w-24">النسبة</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-slate-800 dark:text-slate-200">
+                                            {sortedDistributors.map((d, idx) => {
+                                                const sharePercent = totalMonthOverallNet > 0 ? (d.totalNet / totalMonthOverallNet) * 100 : 0;
+                                                return (
+                                                    <tr key={d.name} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition font-bold">
+                                                        <td className="py-2.5 px-1 text-center">
+                                                            <span className={`inline-flex items-center justify-center w-5 h-5 sm:w-7 sm:h-7 rounded-lg sm:rounded-xl font-black text-[10px] sm:text-xs ${
+                                                                idx === 0
+                                                                    ? 'bg-amber-100 dark:bg-amber-950/80 text-amber-700 dark:text-amber-400 border border-amber-300 dark:border-amber-800'
+                                                                    : idx === 1
+                                                                    ? 'bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
+                                                                    : idx === 2
+                                                                    ? 'bg-orange-100 dark:bg-orange-950/80 text-orange-700 dark:text-orange-400'
+                                                                    : 'text-slate-400 font-mono'
+                                                            }`}>
+                                                                #{idx + 1}
+                                                            </span>
+                                                        </td>
+                                                        <td className="py-2.5 px-1.5 sm:px-3">
+                                                            <span className="font-black text-slate-900 dark:text-white text-[11px] sm:text-sm truncate block">{d.name}</span>
+                                                        </td>
+                                                        <td className="py-2.5 px-1 sm:px-2 text-center">
+                                                            <div className="flex flex-col items-center leading-tight">
+                                                                <span className="font-mono font-black text-emerald-600 dark:text-emerald-400 text-[10px] sm:text-xs">{d.cashQty}</span>
+                                                                <span className="text-[9px] sm:text-[10px] text-slate-400 font-mono">{d.cashNet.toFixed(0)}</span>
+                                                            </div>
+                                                        </td>
+                                                        <td className="py-2.5 px-1 sm:px-2 text-center">
+                                                            <div className="flex flex-col items-center leading-tight">
+                                                                <span className="font-mono font-black text-amber-600 dark:text-amber-400 text-[10px] sm:text-xs">{d.creditQty}</span>
+                                                                <span className="text-[9px] sm:text-[10px] text-slate-400 font-mono">{d.creditNet.toFixed(0)}</span>
+                                                            </div>
+                                                        </td>
+                                                        <td className="py-2.5 px-1 sm:px-2 text-center">
+                                                            <span className="inline-block px-1.5 sm:px-2.5 py-0.5 sm:py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 font-mono font-black text-[10px] sm:text-xs">
+                                                                {d.totalQty}
+                                                            </span>
+                                                        </td>
+                                                        <td className="py-2.5 px-1.5 sm:px-3 text-left">
+                                                            <span className="font-mono font-black text-slate-900 dark:text-white text-[10px] sm:text-xs whitespace-nowrap">
+                                                                {d.totalNet.toFixed(2)}
+                                                            </span>
+                                                        </td>
+                                                        <td className="py-2.5 px-1 sm:px-2 text-center">
+                                                            <div className="flex flex-col items-center gap-0.5">
+                                                                <span className="font-mono font-bold text-[10px] text-slate-600 dark:text-slate-400">{sharePercent.toFixed(1)}%</span>
+                                                                <div className="hidden sm:block w-16 h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                                                                    <div className="h-full bg-orange-500 rounded-full" style={{ width: `${Math.min(sharePercent, 100)}%` }} />
+                                                                </div>
+                                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
                                 </div>
                             </div>
                         );
                     })()}
-
                 </div>
             )}
 
             {/* SECTION 4.5: المشتريات الشهرية (Monthly Purchases Report) */}
             {activeSection === 'monthly_purchases' && (() => {
-                const filteredMonthPurchases = purchases.filter(p => p.month === selectedPurchaseMonth);
-                const totalMonthPurchasesCashQty = filteredMonthPurchases.filter(p => p.paymentType === 'cash').reduce((sum, p) => sum + p.quantity, 0);
-                const totalMonthPurchasesCreditQty = filteredMonthPurchases.filter(p => p.paymentType === 'credit').reduce((sum, p) => sum + p.quantity, 0);
-                const totalMonthPurchasesCashNet = filteredMonthPurchases.filter(p => p.paymentType === 'cash').reduce((sum, p) => sum + p.totalAmount, 0);
-                const totalMonthPurchasesCreditNet = filteredMonthPurchases.filter(p => p.paymentType === 'credit').reduce((sum, p) => sum + p.totalAmount, 0);
+                const filteredMonthPurchases = purchases.filter(p => {
+                    const matchM = p.month === selectedPurchaseMonth || (p.date && p.date.startsWith(selectedPurchaseMonth)) || (p.dateTime && p.dateTime.startsWith(selectedPurchaseMonth));
+                    if (!matchM) return false;
+                    return p.status === 'completed' || !p.status;
+                });
 
-                const purchaseCatMap = new Map<string, { categoryName: string; cashQty: number; creditQty: number; totalQty: number; cashAmountTotal: number; creditAmountTotal: number; totalAmount: number }>();
-                filteredMonthPurchases.forEach(p => {
-                    const catName = p.categoryName || 'غير معروف';
-                    if (!purchaseCatMap.has(catName)) {
-                        purchaseCatMap.set(catName, { categoryName: catName, cashQty: 0, creditQty: 0, totalQty: 0, cashAmountTotal: 0, creditAmountTotal: 0, totalAmount: 0 });
-                    }
-                    const item = purchaseCatMap.get(catName)!;
-                    item.totalQty += p.quantity;
-                    item.totalAmount += p.totalAmount;
-                    if (p.paymentType === 'cash') {
-                        item.cashQty += p.quantity;
-                        item.cashAmountTotal += p.totalAmount;
-                    } else {
-                        item.creditQty += p.quantity;
-                        item.creditAmountTotal += p.totalAmount;
+                const totalMonthPurchasesCashQty = filteredMonthPurchases.filter(p => p.paymentType === 'cash').reduce((sum, p) => sum + (Number(p.quantity) || 0), 0);
+                const totalMonthPurchasesCreditQty = filteredMonthPurchases.filter(p => p.paymentType === 'credit').reduce((sum, p) => sum + (Number(p.quantity) || 0), 0);
+                const totalMonthPurchasesCashNet = filteredMonthPurchases.filter(p => p.paymentType === 'cash').reduce((sum, p) => sum + (Number(p.totalAmount) || 0), 0);
+                const totalMonthPurchasesCreditNet = filteredMonthPurchases.filter(p => p.paymentType === 'credit').reduce((sum, p) => sum + (Number(p.totalAmount) || 0), 0);
+                const totalMonthPurchasesOverallQty = totalMonthPurchasesCashQty + totalMonthPurchasesCreditQty;
+                const totalMonthPurchasesOverallNet = totalMonthPurchasesCashNet + totalMonthPurchasesCreditNet;
+
+                // Monthly Grouped Purchase Invoices
+                const monthlyGroupedPurchaseInvoices = (() => {
+                    const invoiceMap = new Map<string, {
+                        id: string;
+                        invoiceNumber: string;
+                        supplierName: string;
+                        supplierId?: string;
+                        paymentType: 'cash' | 'credit';
+                        totalAmount: number;
+                        totalQuantity: number;
+                        dateTime: string;
+                        date: string;
+                        userName: string;
+                        status?: string;
+                        items: Array<{
+                            categoryName: string;
+                            quantity: number;
+                            unitCost: number;
+                            totalAmount: number;
+                        }>;
+                    }>();
+
+                    filteredMonthPurchases.forEach(p => {
+                        const invNum = p.invoiceNumber ? `${p.invoiceNumber}` : `PUR-${p.id.slice(-5)}`;
+                        if (!invoiceMap.has(invNum)) {
+                            invoiceMap.set(invNum, {
+                                id: p.id,
+                                invoiceNumber: invNum,
+                                supplierName: p.supplierName || 'مورد نقدي',
+                                supplierId: p.supplierId,
+                                paymentType: p.paymentType || 'cash',
+                                totalAmount: 0,
+                                totalQuantity: 0,
+                                dateTime: p.dateTime || p.date || '',
+                                date: p.date || '',
+                                userName: p.userName || 'المدير',
+                                status: p.status,
+                                items: []
+                            });
+                        }
+
+                        const inv = invoiceMap.get(invNum)!;
+                        const itemQty = Number(p.quantity) || 0;
+                        const itemNet = Number(p.totalAmount) || 0;
+                        const itemCost = Number(p.costPrice || (itemQty > 0 ? itemNet / itemQty : 0));
+
+                        inv.totalQuantity += itemQty;
+                        inv.totalAmount += itemNet;
+                        inv.items.push({
+                            categoryName: p.categoryName || 'غير محدد',
+                            quantity: itemQty,
+                            unitCost: itemCost,
+                            totalAmount: itemNet
+                        });
+                    });
+
+                    return Array.from(invoiceMap.values()).sort((a, b) => (b.dateTime || '').localeCompare(a.dateTime || ''));
+                })();
+
+                const uniqueCategoriesForPurchases: CardCategory[] = [];
+                const seenPurchaseCatKeys = new Set<string>();
+
+                categories.forEach(c => {
+                    if (!c.name || !c.name.trim()) return;
+                    const normName = c.name.trim().toLowerCase();
+                    const key = c.id ? `id_${c.id}` : `name_${normName}`;
+                    if (!seenPurchaseCatKeys.has(key) && !seenPurchaseCatKeys.has(`name_${normName}`)) {
+                        seenPurchaseCatKeys.add(key);
+                        seenPurchaseCatKeys.add(`name_${normName}`);
+                        uniqueCategoriesForPurchases.push(c);
                     }
                 });
-                const monthlyCategoryPurchaseReport = Array.from(purchaseCatMap.values());
+
+                const monthlyCategoryPurchaseReport = uniqueCategoriesForPurchases.map(cat => {
+                    const catNameTrim = (cat.name || '').trim().toLowerCase();
+                    const catPurchases = filteredMonthPurchases.filter(p => {
+                        if (p.categoryId && cat.id && p.categoryId === cat.id) return true;
+                        if (p.categoryName) {
+                            return p.categoryName.trim().toLowerCase() === catNameTrim;
+                        }
+                        return false;
+                    });
+
+                    const cashPurchases = catPurchases.filter(p => p.paymentType === 'cash');
+                    const creditPurchases = catPurchases.filter(p => p.paymentType === 'credit');
+
+                    const cashQty = cashPurchases.reduce((sum, p) => sum + (Number(p.quantity) || 0), 0);
+                    const creditQty = creditPurchases.reduce((sum, p) => sum + (Number(p.quantity) || 0), 0);
+                    const cashAmountTotal = cashPurchases.reduce((sum, p) => sum + (Number(p.totalAmount) || 0), 0);
+                    const creditAmountTotal = creditPurchases.reduce((sum, p) => sum + (Number(p.totalAmount) || 0), 0);
+
+                    return {
+                        categoryName: cat.name.trim(),
+                        cashQty,
+                        creditQty,
+                        totalQty: cashQty + creditQty,
+                        cashAmountTotal,
+                        creditAmountTotal,
+                        totalAmount: cashAmountTotal + creditAmountTotal
+                    };
+                });
 
                 const handleExportMonthlyPurchasesPDF = () => {
                     const title = `تقرير المشتريات الشهرية لكروت الشبكة - شهر ${selectedPurchaseMonth}`;
@@ -4057,217 +4593,502 @@ export default function CardsManagement() {
                         `${r.creditAmountTotal.toFixed(2)} ريال يمني`,
                         `${r.totalAmount.toFixed(2)} ريال يمني`
                     ]);
+                    data.push([
+                        'الإجمالي العام',
+                        `${totalMonthPurchasesCashQty}`,
+                        `${totalMonthPurchasesCreditQty}`,
+                        `${totalMonthPurchasesOverallQty}`,
+                        `${totalMonthPurchasesCashNet.toFixed(2)} ريال يمني`,
+                        `${totalMonthPurchasesCreditNet.toFixed(2)} ريال يمني`,
+                        `${totalMonthPurchasesOverallNet.toFixed(2)} ريال يمني`
+                    ]);
                     printReport(title, headers, data);
                 };
 
                 return (
-                    <div className="space-y-6 animate-in fade-in duration-200">
-                        <div className="bg-white dark:bg-slate-900 p-4 sm:p-5 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-3">
-                            <h2 className="text-lg font-black text-slate-900 dark:text-white">تقرير المشتريات الشهرية لكروت الشبكة</h2>
+                    <div className="space-y-4 sm:space-y-5 animate-in fade-in duration-200" dir="rtl">
+                        {/* Header Bar */}
+                        <div className="bg-white dark:bg-slate-900 p-3.5 sm:p-4 rounded-2xl sm:rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+                            <div className="flex items-center gap-2.5">
+                                <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center font-black">
+                                    <Truck size={20} />
+                                </div>
+                                <div>
+                                    <h2 className="text-sm sm:text-base font-black text-slate-900 dark:text-white">تقرير المشتريات الشهرية لكروت الشبكة</h2>
+                                    <p className="text-[10px] sm:text-[11px] font-bold text-slate-400">إحصائيات المشتريات وتوريدات الكروت والموردين وسجل الفواتير</p>
+                                </div>
+                            </div>
+
                             <div className="flex items-center gap-2">
-                                <div className="flex items-center gap-2 bg-slate-100 dark:bg-slate-800 px-3 py-2 rounded-2xl border border-slate-200 dark:border-slate-700">
-                                    <Calendar size={16} className="text-slate-400" />
-                                    <span className="text-xs font-bold text-slate-600 dark:text-slate-400">الشهر:</span>
+                                <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800 px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 flex-1 sm:flex-none">
+                                    <Calendar size={14} className="text-slate-400" />
+                                    <span className="text-[11px] font-bold text-slate-600 dark:text-slate-400">الشهر:</span>
                                     <input
                                         type="month"
                                         value={selectedPurchaseMonth}
                                         onChange={(e) => setSelectedPurchaseMonth(e.target.value)}
-                                        className="bg-transparent text-xs font-black text-slate-900 dark:text-white outline-none"
+                                        className="bg-transparent text-xs font-black text-slate-900 dark:text-white outline-none cursor-pointer"
                                     />
                                 </div>
                                 <button
                                     onClick={handleExportMonthlyPurchasesPDF}
-                                    className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs rounded-2xl shadow-lg shadow-indigo-600/20 flex items-center gap-2 transition"
+                                    className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs rounded-xl shadow-md shadow-indigo-600/20 flex items-center justify-center gap-1.5 transition shrink-0 active:scale-95"
+                                    title="تصدير PDF"
                                 >
-                                    <Printer size={16} />
-                                    <span>تصدير PDF</span>
+                                    <Printer size={15} />
+                                    <span className="inline">تصدير PDF</span>
                                 </button>
                             </div>
                         </div>
 
-                        {/* Summary cards */}
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                            <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800">
-                                <span className="text-[10px] font-black text-slate-400">عدد كروت المشتريات النقدية</span>
-                                <div className="text-lg font-black text-emerald-600 dark:text-emerald-400">{totalMonthPurchasesCashQty} كارت</div>
+                        {/* Summary Cards */}
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3">
+                            <div className="bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col justify-between">
+                                <span className="text-[10px] sm:text-[11px] font-black text-slate-400">كروت مشتريات نقدي</span>
+                                <div className="text-base sm:text-lg font-black text-emerald-600 dark:text-emerald-400 mt-1">{totalMonthPurchasesCashQty.toLocaleString()} <span className="text-[10px] font-normal text-slate-400">كارت</span></div>
+                                <div className="text-[11px] font-bold text-slate-500 font-mono mt-0.5">{totalMonthPurchasesCashNet.toLocaleString()} ر.ي</div>
                             </div>
-                            <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800">
-                                <span className="text-[10px] font-black text-slate-400">عدد كروت المشتريات الآجلة</span>
-                                <div className="text-lg font-black text-amber-600 dark:text-amber-400">{totalMonthPurchasesCreditQty} كارت</div>
+                            <div className="bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col justify-between">
+                                <span className="text-[10px] sm:text-[11px] font-black text-slate-400">كروت مشتريات أجل</span>
+                                <div className="text-base sm:text-lg font-black text-amber-600 dark:text-amber-400 mt-1">{totalMonthPurchasesCreditQty.toLocaleString()} <span className="text-[10px] font-normal text-slate-400">كارت</span></div>
+                                <div className="text-[11px] font-bold text-slate-500 font-mono mt-0.5">{totalMonthPurchasesCreditNet.toLocaleString()} ر.ي</div>
                             </div>
-                            <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800">
-                                <span className="text-[10px] font-black text-slate-400">مشتريات نقدية مسددة</span>
-                                <div className="text-lg font-black text-emerald-600 dark:text-emerald-400">{totalMonthPurchasesCashNet.toFixed(2)} ريال يمني</div>
+                            <div className="bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col justify-between">
+                                <span className="text-[10px] sm:text-[11px] font-black text-slate-400">إجمالي الكروت المشتراة</span>
+                                <div className="text-base sm:text-lg font-black text-indigo-600 dark:text-indigo-400 mt-1">{totalMonthPurchasesOverallQty.toLocaleString()} <span className="text-[10px] font-normal text-slate-400">كارت</span></div>
+                                <div className="text-[11px] font-bold text-slate-500 font-mono mt-0.5">{monthlyGroupedPurchaseInvoices.length} فاتورة توريد</div>
                             </div>
-                            <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800">
-                                <span className="text-[10px] font-black text-slate-400">مشتريات أجل مستحقة للموردين</span>
-                                <div className="text-lg font-black text-amber-600 dark:text-amber-400">{totalMonthPurchasesCreditNet.toFixed(2)} ريال يمني</div>
+                            <div className="bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col justify-between">
+                                <span className="text-[10px] sm:text-[11px] font-black text-slate-400">إجمالي تكلفة المشتريات</span>
+                                <div className="text-base sm:text-lg font-black text-slate-900 dark:text-white mt-1 font-mono">{totalMonthPurchasesOverallNet.toLocaleString()} <span className="text-[10px] font-normal text-slate-400">ر.ي</span></div>
+                                <div className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 font-mono mt-0.5">شهر {selectedPurchaseMonth}</div>
                             </div>
                         </div>
 
-                        {/* Report Cards (squares 2 per row) */}
-                        {monthlyCategoryPurchaseReport.length === 0 ? (
-                            <div className="bg-white dark:bg-slate-900 p-8 text-center text-slate-400 font-bold rounded-3xl border border-slate-200 dark:border-slate-800">
-                                لا توجد مشتريات مسجلة في هذا الشهر حتى الآن.
-                            </div>
-                        ) : (
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
-                                {monthlyCategoryPurchaseReport.map((r) => (
-                                    <div key={r.categoryName} className="bg-white dark:bg-slate-900 p-5 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col justify-between space-y-4 animate-in fade-in duration-200">
-                                        {/* Header / Title */}
-                                        <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
-                                            <div className="flex items-center gap-2.5">
-                                                <div className="w-2.5 h-6 bg-indigo-500 rounded-full" />
-                                                <span className="font-black text-slate-900 dark:text-white text-base">{r.categoryName}</span>
-                                            </div>
-                                            <span className="text-[11px] font-black bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 px-3 py-1 rounded-full border border-indigo-100/50 dark:border-indigo-900/30">
-                                                العدد الكلي: {r.totalQty} كارت
-                                            </span>
-                                        </div>
+                        {/* View Switcher Tabs */}
+                        <div className="flex flex-wrap sm:flex-nowrap items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800/80 rounded-2xl border border-slate-200 dark:border-slate-700/60 text-[11px] sm:text-xs font-black">
+                            <button
+                                onClick={() => setMonthlyPurchasesTab('categories')}
+                                className={`flex-1 py-1.5 sm:py-2 px-2 sm:px-3 rounded-xl flex items-center justify-center gap-1.5 transition ${
+                                    monthlyPurchasesTab === 'categories'
+                                        ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm'
+                                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                                }`}
+                            >
+                                <BarChart3 size={14} className="shrink-0" />
+                                <span className="truncate">جدول فئات المشتريات</span>
+                            </button>
+                            <button
+                                onClick={() => setMonthlyPurchasesTab('invoices')}
+                                className={`flex-1 py-1.5 sm:py-2 px-2 sm:px-3 rounded-xl flex items-center justify-center gap-1.5 transition ${
+                                    monthlyPurchasesTab === 'invoices'
+                                        ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm'
+                                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                                }`}
+                            >
+                                <Receipt size={14} className="shrink-0" />
+                                <span className="truncate">سجل الفواتير ({monthlyGroupedPurchaseInvoices.length})</span>
+                            </button>
+                            <button
+                                onClick={() => setMonthlyPurchasesTab('suppliers')}
+                                className={`flex-1 py-1.5 sm:py-2 px-2 sm:px-3 rounded-xl flex items-center justify-center gap-1.5 transition ${
+                                    monthlyPurchasesTab === 'suppliers'
+                                        ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm'
+                                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                                }`}
+                            >
+                                <Truck size={14} className="shrink-0" />
+                                <span className="truncate">أكثر الموردين توريداً</span>
+                            </button>
+                        </div>
 
-                                        {/* Metrics Grid */}
-                                        <div className="grid grid-cols-2 gap-3">
-                                            {/* Cash column */}
-                                            <div className="bg-slate-50 dark:bg-slate-950/50 p-3 rounded-2xl border border-slate-100 dark:border-slate-900 flex flex-col justify-between min-h-[75px]">
-                                                <span className="text-[10px] font-black text-slate-400">كروت نقدية</span>
-                                                <span className="text-sm font-black text-emerald-600 dark:text-emerald-400">+{r.cashQty} كارت</span>
-                                                <span className="text-[11px] font-bold text-slate-500 mt-1">{r.cashAmountTotal.toFixed(2)} ريال يمني</span>
-                                            </div>
-                                            
-                                            {/* Credit column */}
-                                            <div className="bg-slate-50 dark:bg-slate-950/50 p-3 rounded-2xl border border-slate-100 dark:border-slate-900 flex flex-col justify-between min-h-[75px]">
-                                                <span className="text-[10px] font-black text-slate-400">كروت آجلة</span>
-                                                <span className="text-sm font-black text-amber-600 dark:text-amber-500">+{r.creditQty} كارت</span>
-                                                <span className="text-[11px] font-bold text-slate-500 mt-1">{r.creditAmountTotal.toFixed(2)} ريال يمني</span>
-                                            </div>
-                                        </div>
-
-                                        {/* Footer / Total Net */}
-                                        <div className="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-slate-800">
-                                            <span className="text-xs font-black text-slate-500">إجمالي صافي المشتريات</span>
-                                            <span className="text-base font-black text-indigo-600 dark:text-indigo-400">{r.totalAmount.toFixed(2)} ريال يمني</span>
-                                        </div>
+                        {/* TAB 1: Categories Full Width Structured Table */}
+                        {monthlyPurchasesTab === 'categories' && (
+                            <div className="-mx-4 sm:-mx-6 bg-white dark:bg-slate-900 border-y border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden animate-in fade-in duration-150">
+                                {monthlyCategoryPurchaseReport.length === 0 ? (
+                                    <div className="p-8 text-center text-slate-400 font-bold text-xs">
+                                        لا توجد مشتريات مسجلة في هذا الشهر حتى الآن.
                                     </div>
-                                ))}
+                                ) : (
+                                    <div className="w-full">
+                                        <table className="w-full text-right text-[11px] sm:text-xs">
+                                            <thead className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400">
+                                                <tr>
+                                                    <th className="py-2.5 sm:py-3.5 px-1 sm:px-3 font-black text-center w-6 sm:w-10">#</th>
+                                                    <th className="py-2.5 sm:py-3.5 px-1.5 sm:px-3 font-black">فئة الكرت</th>
+                                                    <th className="py-2.5 sm:py-3.5 px-1 sm:px-2 font-black text-center">
+                                                        <span className="hidden sm:inline">مشتريات نقدية</span>
+                                                        <span className="sm:hidden">نقدي</span>
+                                                    </th>
+                                                    <th className="py-2.5 sm:py-3.5 px-1 sm:px-2 font-black text-center">
+                                                        <span className="hidden sm:inline">مشتريات آجلة</span>
+                                                        <span className="sm:hidden">آجل</span>
+                                                    </th>
+                                                    <th className="py-2.5 sm:py-3.5 px-1 sm:px-2 font-black text-center">
+                                                        <span className="hidden sm:inline">إجمالي الكروت</span>
+                                                        <span className="sm:hidden">العدد</span>
+                                                    </th>
+                                                    <th className="py-2.5 sm:py-3.5 px-1.5 sm:px-3 font-black text-left">
+                                                        <span className="hidden sm:inline">إجمالي التكلفة</span>
+                                                        <span className="sm:hidden">التكلفة</span>
+                                                    </th>
+                                                    <th className="py-2.5 sm:py-3.5 px-1 sm:px-2 font-black text-center w-10 sm:w-24">النسبة</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-slate-800 dark:text-slate-200">
+                                                {monthlyCategoryPurchaseReport.map((r, idx) => {
+                                                    const percent = totalMonthPurchasesOverallNet > 0 ? (r.totalAmount / totalMonthPurchasesOverallNet) * 100 : 0;
+                                                    return (
+                                                        <tr key={r.categoryName} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition font-bold">
+                                                            <td className="py-2.5 px-1 text-center font-mono text-slate-400 text-[10px] sm:text-[11px]">{idx + 1}</td>
+                                                            <td className="py-2.5 px-1.5 sm:px-3">
+                                                                <div className="flex items-center gap-1.5">
+                                                                    <div className="w-1.5 h-4 bg-indigo-500 rounded-full shrink-0" />
+                                                                    <span className="font-black text-slate-900 dark:text-white text-[11px] sm:text-sm truncate">{r.categoryName}</span>
+                                                                </div>
+                                                            </td>
+                                                            <td className="py-2.5 px-1 sm:px-2 text-center">
+                                                                <div className="flex flex-col items-center leading-tight">
+                                                                    <span className="font-mono font-black text-emerald-600 dark:text-emerald-400 text-[10px] sm:text-xs">{r.cashQty}</span>
+                                                                    <span className="text-[9px] sm:text-[10px] text-slate-400 font-mono">{r.cashAmountTotal.toFixed(0)}</span>
+                                                                </div>
+                                                            </td>
+                                                            <td className="py-2.5 px-1 sm:px-2 text-center">
+                                                                <div className="flex flex-col items-center leading-tight">
+                                                                    <span className="font-mono font-black text-amber-600 dark:text-amber-400 text-[10px] sm:text-xs">{r.creditQty}</span>
+                                                                    <span className="text-[9px] sm:text-[10px] text-slate-400 font-mono">{r.creditAmountTotal.toFixed(0)}</span>
+                                                                </div>
+                                                            </td>
+                                                            <td className="py-2.5 px-1 sm:px-2 text-center">
+                                                                <span className="inline-block px-1.5 sm:px-2.5 py-0.5 sm:py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 font-mono font-black text-[10px] sm:text-xs border border-indigo-100 dark:border-indigo-900/30">
+                                                                    {r.totalQty}
+                                                                </span>
+                                                            </td>
+                                                            <td className="py-2.5 px-1.5 sm:px-3 text-left">
+                                                                <span className="font-mono font-black text-slate-900 dark:text-white text-[10px] sm:text-xs whitespace-nowrap">
+                                                                    {r.totalAmount.toFixed(2)}
+                                                                </span>
+                                                            </td>
+                                                            <td className="py-2.5 px-1 sm:px-2 text-center">
+                                                                <div className="flex flex-col items-center gap-0.5">
+                                                                    <span className="font-mono font-bold text-[10px] text-slate-600 dark:text-slate-400">{percent.toFixed(1)}%</span>
+                                                                    <div className="hidden sm:block w-16 h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                                                                        <div className="h-full bg-indigo-500 rounded-full" style={{ width: `${Math.min(percent, 100)}%` }} />
+                                                                    </div>
+                                                                </div>
+                                                            </td>
+                                                        </tr>
+                                                    );
+                                                })}
+                                            </tbody>
+                                            <tfoot className="bg-slate-100/80 dark:bg-slate-800/80 border-t-2 border-slate-200 dark:border-slate-700 font-black text-[11px] sm:text-xs">
+                                                <tr>
+                                                    <td colSpan={2} className="py-2.5 sm:py-3.5 px-2 sm:px-4 text-slate-900 dark:text-white">
+                                                        <span className="hidden sm:inline">الإجمالي العام لشهر {selectedPurchaseMonth}</span>
+                                                        <span className="sm:hidden">الإجمالي</span>
+                                                    </td>
+                                                    <td className="py-2.5 sm:py-3.5 px-1 sm:px-2 text-center text-emerald-600 dark:text-emerald-400 font-mono">
+                                                        <div>{totalMonthPurchasesCashQty}</div>
+                                                        <div className="text-[9px] sm:text-[10px] font-mono">{totalMonthPurchasesCashNet.toFixed(0)}</div>
+                                                    </td>
+                                                    <td className="py-2.5 sm:py-3.5 px-1 sm:px-2 text-center text-amber-600 dark:text-amber-400 font-mono">
+                                                        <div>{totalMonthPurchasesCreditQty}</div>
+                                                        <div className="text-[9px] sm:text-[10px] font-mono">{totalMonthPurchasesCreditNet.toFixed(0)}</div>
+                                                    </td>
+                                                    <td className="py-2.5 sm:py-3.5 px-1 sm:px-2 text-center text-indigo-600 dark:text-indigo-400 font-mono text-[11px] sm:text-sm">
+                                                        {totalMonthPurchasesOverallQty}
+                                                    </td>
+                                                    <td className="py-2.5 sm:py-3.5 px-1.5 sm:px-3 text-left font-mono text-slate-950 dark:text-white text-[11px] sm:text-sm whitespace-nowrap">
+                                                        {totalMonthPurchasesOverallNet.toFixed(2)}
+                                                    </td>
+                                                    <td className="py-2.5 sm:py-3.5 px-1 sm:px-2 text-center text-slate-400 font-mono text-[10px] sm:text-xs">100%</td>
+                                                </tr>
+                                            </tfoot>
+                                        </table>
+                                    </div>
+                                )}
                             </div>
                         )}
 
-                        {/* Top Suppliers Report */}
-                        {(() => {
-                            const monthSuppPurchases = purchases.filter(p => p.month === selectedPurchaseMonth);
-                            if (monthSuppPurchases.length === 0) return null;
-                            
-                            const suppMap = new Map<string, { name: string, qty: number, net: number }>();
-                            monthSuppPurchases.forEach(p => {
-                                const name = p.supplierName || 'مورد نقدي';
-                                if (!suppMap.has(name)) {
-                                    suppMap.set(name, { name, qty: 0, net: 0 });
+                    {/* TAB 2: Monthly Purchase Invoices Log */}
+                    {monthlyPurchasesTab === 'invoices' && (
+                        <div className="space-y-3 animate-in fade-in duration-150">
+                            <div className="relative">
+                                <Search className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                                <input
+                                    type="text"
+                                    placeholder="بحث برقم الفاتورة، اسم المورد، الفئة..."
+                                    value={monthlyPurchasesSearch}
+                                    onChange={(e) => setMonthlyPurchasesSearch(e.target.value)}
+                                    className="w-full pr-10 pl-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-bold outline-none focus:border-indigo-600 text-slate-900 dark:text-white"
+                                />
+                            </div>
+
+                            {(() => {
+                                const q = monthlyPurchasesSearch.toLowerCase().trim();
+                                const filtered = monthlyGroupedPurchaseInvoices.filter(inv => {
+                                    if (!q) return true;
+                                    return (
+                                        inv.invoiceNumber.toLowerCase().includes(q) ||
+                                        inv.supplierName.toLowerCase().includes(q) ||
+                                        inv.items.some(it => it.categoryName.toLowerCase().includes(q))
+                                    );
+                                });
+
+                                if (filtered.length === 0) {
+                                    return (
+                                        <div className="-mx-4 sm:-mx-6 bg-white dark:bg-slate-900 p-8 text-center text-slate-400 font-bold border-y border-slate-200 dark:border-slate-800 text-xs">
+                                            لا توجد فواتير مشتريات مطابقة للبحث في هذا الشهر.
+                                        </div>
+                                    );
                                 }
-                                const entry = suppMap.get(name)!;
-                                entry.qty += p.quantity;
-                                entry.net += p.totalAmount;
-                            });
 
-                            const topSuppliers = Array.from(suppMap.values()).sort((a, b) => b.qty - a.qty).slice(0, 5);
+                                return (
+                                    <div className="-mx-4 sm:-mx-6 divide-y divide-slate-100 dark:divide-slate-800 bg-white dark:bg-slate-900 border-y border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
+                                        {filtered.map(inv => {
+                                            const isExp = !!expandedMonthlyPurchaseInvoices[inv.invoiceNumber];
+                                            return (
+                                                <div key={inv.invoiceNumber} className="transition">
+                                                    <div className="p-3 sm:p-3.5 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 hover:bg-slate-50/80 dark:hover:bg-slate-800/40">
+                                                        <div className="flex items-center gap-3">
+                                                            <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-mono font-black text-xs ${
+                                                                inv.paymentType === 'cash'
+                                                                    ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 border border-emerald-200/60 dark:border-emerald-800/40'
+                                                                    : 'bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 border border-amber-200/60 dark:border-amber-800/40'
+                                                            }`}>
+                                                                {inv.paymentType === 'cash' ? 'نقد' : 'أجل'}
+                                                            </div>
+                                                            <div>
+                                                                <div className="flex items-center gap-2">
+                                                                    <span className="font-black text-slate-900 dark:text-white text-xs sm:text-sm">#{inv.invoiceNumber}</span>
+                                                                    <span className="font-bold text-slate-700 dark:text-slate-300 text-xs">- {inv.supplierName}</span>
+                                                                </div>
+                                                                <div className="flex items-center gap-2 text-[10px] text-slate-400 font-bold mt-0.5">
+                                                                    <span>{inv.dateTime}</span>
+                                                                    <span>•</span>
+                                                                    <span>بواسطة: {inv.userName}</span>
+                                                                </div>
+                                                            </div>
+                                                        </div>
 
-                            return (
-                                <div className="bg-white dark:bg-slate-900 p-5 sm:p-6 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm mt-6">
-                                    <h3 className="text-sm sm:text-base font-black text-slate-900 dark:text-white mb-4 sm:mb-5 flex items-center gap-2">
-                                        <Truck className="text-indigo-500" size={20} />
-                                        <span>أكثر الموردين توريداً هذا الشهر</span>
-                                    </h3>
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                                        {topSuppliers.map((d, idx) => (
-                                            <div key={idx} className="flex items-center justify-between p-4 rounded-2xl bg-slate-50 dark:bg-slate-800 border border-slate-100 dark:border-slate-700/50 hover:-translate-y-1 hover:shadow-md transition-all duration-300">
-                                                <div className="flex items-center gap-3">
-                                                    <div className="w-10 h-10 rounded-2xl bg-indigo-100 dark:bg-indigo-900/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center font-black text-sm border border-indigo-200 dark:border-indigo-800/50 shadow-sm">
-                                                        #{idx + 1}
+                                                        <div className="flex items-center justify-between sm:justify-end gap-3 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100 dark:border-slate-800">
+                                                            <div className="text-right sm:text-left">
+                                                                <span className="block text-xs sm:text-sm font-black font-mono text-slate-900 dark:text-white">{inv.totalAmount.toFixed(2)} ر.ي</span>
+                                                                <span className="block text-[10px] font-bold text-indigo-600 dark:text-indigo-400">{inv.totalQuantity} كارت ({inv.items.length} صنف)</span>
+                                                            </div>
+
+                                                            <div className="flex items-center gap-1.5">
+                                                                <button
+                                                                    onClick={() => {
+                                                                        const invoiceObj: InvoicePdfInput = {
+                                                                            id: inv.id,
+                                                                            invoiceNumber: inv.invoiceNumber,
+                                                                            type: 'purchase',
+                                                                            totalAmount: inv.totalAmount,
+                                                                            paymentType: inv.paymentType,
+                                                                            partyName: inv.supplierName,
+                                                                            dateTime: inv.dateTime,
+                                                                            userName: inv.userName,
+                                                                            status: inv.status,
+                                                                            items: inv.items.map(it => ({
+                                                                                categoryName: it.categoryName,
+                                                                                quantity: it.quantity,
+                                                                                unitPrice: it.unitCost,
+                                                                                totalAmount: it.totalAmount
+                                                                            }))
+                                                                        };
+                                                                        setActionModalInvoice(invoiceObj);
+                                                                        setActionModalOpen(true);
+                                                                    }}
+                                                                    className="p-2 text-slate-500 hover:text-indigo-600 bg-slate-50 dark:bg-slate-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 rounded-xl transition"
+                                                                    title="عرض وطباعة الفاتورة"
+                                                                >
+                                                                    <Eye size={15} />
+                                                                </button>
+                                                                <button
+                                                                    onClick={() => setExpandedMonthlyPurchaseInvoices(prev => ({ ...prev, [inv.invoiceNumber]: !isExp }))}
+                                                                    className="p-2 text-slate-500 hover:text-slate-900 dark:hover:text-white bg-slate-50 dark:bg-slate-800 rounded-xl transition"
+                                                                    title="تفاصيل الأصناف"
+                                                                >
+                                                                    {isExp ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+                                                                </button>
+                                                            </div>
+                                                        </div>
                                                     </div>
-                                                    <span className="font-bold text-slate-800 dark:text-slate-200 text-sm">{d.name}</span>
+
+                                                    {/* Expanded Items Table */}
+                                                    {isExp && (
+                                                        <div className="bg-slate-50 dark:bg-slate-950/50 p-3 sm:p-4 border-t border-slate-100 dark:border-slate-800">
+                                                            <table className="w-full text-right text-[11px]">
+                                                                <thead>
+                                                                    <tr className="text-slate-500 dark:text-slate-400 font-black border-b border-slate-200 dark:border-slate-800">
+                                                                        <th className="pb-1.5 px-2">#</th>
+                                                                        <th className="pb-1.5 px-2">فئة الكرت</th>
+                                                                        <th className="pb-1.5 px-2 text-center">الكمية</th>
+                                                                        <th className="pb-1.5 px-2 text-center">سعر التكلفة</th>
+                                                                        <th className="pb-1.5 px-2 text-left">الإجمالي</th>
+                                                                    </tr>
+                                                                </thead>
+                                                                <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
+                                                                    {inv.items.map((it, iIdx) => (
+                                                                        <tr key={iIdx} className="font-bold text-slate-800 dark:text-slate-200">
+                                                                            <td className="py-1.5 px-2 text-slate-400 font-mono">{iIdx + 1}</td>
+                                                                            <td className="py-1.5 px-2">{it.categoryName}</td>
+                                                                            <td className="py-1.5 px-2 text-center font-mono text-indigo-600 dark:text-indigo-400">{it.quantity} كارت</td>
+                                                                            <td className="py-1.5 px-2 text-center font-mono">{it.unitCost.toFixed(2)} ر.ي</td>
+                                                                            <td className="py-1.5 px-2 text-left font-mono font-black">{it.totalAmount.toFixed(2)} ر.ي</td>
+                                                                        </tr>
+                                                                    ))}
+                                                                </tbody>
+                                                            </table>
+                                                        </div>
+                                                    )}
                                                 </div>
-                                                <div className="text-left">
-                                                    <span className="block text-sm font-black text-slate-900 dark:text-white">{d.qty} كارت</span>
-                                                    <span className="block text-xs font-bold text-slate-500 dark:text-slate-400">{d.net.toLocaleString()} ريال يمني</span>
-                                                </div>
-                                            </div>
-                                        ))}
+                                            );
+                                        })}
                                     </div>
+                                );
+                            })()}
+                        </div>
+                    )}
+
+                    {/* TAB 3: Top Suppliers Structured Table */}
+                    {monthlyPurchasesTab === 'suppliers' && (() => {
+                        const monthSuppPurchases = filteredMonthPurchases.filter(p => p.supplierName);
+                        if (monthSuppPurchases.length === 0) {
+                            return (
+                                <div className="-mx-4 sm:-mx-6 bg-white dark:bg-slate-900 p-8 text-center text-slate-400 font-bold border-y border-slate-200 dark:border-slate-800 text-xs">
+                                    لا توجد مشتريات موردين مسجلة في هذا الشهر حتى الآن.
                                 </div>
                             );
-                        })()}
+                        }
+                        
+                        const suppMap = new Map<string, { name: string; cashQty: number; creditQty: number; totalQty: number; cashNet: number; creditNet: number; totalNet: number }>();
+                        monthSuppPurchases.forEach(p => {
+                            const name = p.supplierName || 'مورد نقدي';
+                            if (!suppMap.has(name)) {
+                                suppMap.set(name, { name, cashQty: 0, creditQty: 0, totalQty: 0, cashNet: 0, creditNet: 0, totalNet: 0 });
+                            }
+                            const entry = suppMap.get(name)!;
+                            const qty = Number(p.quantity) || 0;
+                            const net = Number(p.totalAmount) || 0;
+                            entry.totalQty += qty;
+                            entry.totalNet += net;
+                            if (p.paymentType === 'cash') {
+                                entry.cashQty += qty;
+                                entry.cashNet += net;
+                            } else {
+                                entry.creditQty += qty;
+                                entry.creditNet += net;
+                            }
+                        });
 
-                    </div>
-                );
-            })()}
+                        const sortedSuppliers = Array.from(suppMap.values()).sort((a, b) => b.totalNet - a.totalNet);
+
+                        return (
+                            <div className="-mx-4 sm:-mx-6 bg-white dark:bg-slate-900 border-y border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden animate-in fade-in duration-150">
+                                <div className="w-full">
+                                    <table className="w-full text-right text-[11px] sm:text-xs">
+                                        <thead className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 font-black">
+                                            <tr>
+                                                <th className="py-2.5 sm:py-3.5 px-1 sm:px-3 font-black w-6 sm:w-10 text-center">#</th>
+                                                <th className="py-2.5 sm:py-3.5 px-1.5 sm:px-3 font-black">المورد</th>
+                                                <th className="py-2.5 sm:py-3.5 px-1 sm:px-2 font-black text-center">
+                                                    <span className="hidden sm:inline">توريد نقدي</span>
+                                                    <span className="sm:hidden">نقدي</span>
+                                                </th>
+                                                <th className="py-2.5 sm:py-3.5 px-1 sm:px-2 font-black text-center">
+                                                    <span className="hidden sm:inline">توريد آجل</span>
+                                                    <span className="sm:hidden">آجل</span>
+                                                </th>
+                                                <th className="py-2.5 sm:py-3.5 px-1 sm:px-2 font-black text-center">
+                                                    <span className="hidden sm:inline">إجمالي الكروت</span>
+                                                    <span className="sm:hidden">العدد</span>
+                                                </th>
+                                                <th className="py-2.5 sm:py-3.5 px-1.5 sm:px-3 font-black text-left">
+                                                    <span className="hidden sm:inline">إجمالي التكلفة</span>
+                                                    <span className="sm:hidden">التكلفة</span>
+                                                </th>
+                                                <th className="py-2.5 sm:py-3.5 px-1 sm:px-2 font-black text-center w-10 sm:w-24">النسبة</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-slate-800 dark:text-slate-200">
+                                            {sortedSuppliers.map((d, idx) => {
+                                                const sharePercent = totalMonthPurchasesOverallNet > 0 ? (d.totalNet / totalMonthPurchasesOverallNet) * 100 : 0;
+                                                return (
+                                                    <tr key={d.name} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition font-bold">
+                                                        <td className="py-2.5 px-1 text-center">
+                                                            <span className={`inline-flex items-center justify-center w-5 h-5 sm:w-7 sm:h-7 rounded-lg sm:rounded-xl font-black text-[10px] sm:text-xs ${
+                                                                idx === 0
+                                                                    ? 'bg-indigo-100 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-400 border border-indigo-300 dark:border-indigo-800'
+                                                                    : idx === 1
+                                                                    ? 'bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
+                                                                    : idx === 2
+                                                                    ? 'bg-purple-100 dark:bg-purple-950/80 text-purple-700 dark:text-purple-400'
+                                                                    : 'text-slate-400 font-mono'
+                                                            }`}>
+                                                                #{idx + 1}
+                                                            </span>
+                                                        </td>
+                                                        <td className="py-2.5 px-1.5 sm:px-3">
+                                                            <span className="font-black text-slate-900 dark:text-white text-[11px] sm:text-sm truncate block">{d.name}</span>
+                                                        </td>
+                                                        <td className="py-2.5 px-1 sm:px-2 text-center">
+                                                            <div className="flex flex-col items-center leading-tight">
+                                                                <span className="font-mono font-black text-emerald-600 dark:text-emerald-400 text-[10px] sm:text-xs">{d.cashQty}</span>
+                                                                <span className="text-[9px] sm:text-[10px] text-slate-400 font-mono">{d.cashNet.toFixed(0)}</span>
+                                                            </div>
+                                                        </td>
+                                                        <td className="py-2.5 px-1 sm:px-2 text-center">
+                                                            <div className="flex flex-col items-center leading-tight">
+                                                                <span className="font-mono font-black text-amber-600 dark:text-amber-400 text-[10px] sm:text-xs">{d.creditQty}</span>
+                                                                <span className="text-[9px] sm:text-[10px] text-slate-400 font-mono">{d.creditNet.toFixed(0)}</span>
+                                                            </div>
+                                                        </td>
+                                                        <td className="py-2.5 px-1 sm:px-2 text-center">
+                                                            <span className="inline-block px-1.5 sm:px-2.5 py-0.5 sm:py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 font-mono font-black text-[10px] sm:text-xs">
+                                                                {d.totalQty}
+                                                            </span>
+                                                        </td>
+                                                        <td className="py-2.5 px-1.5 sm:px-3 text-left">
+                                                            <span className="font-mono font-black text-slate-900 dark:text-white text-[10px] sm:text-xs whitespace-nowrap">
+                                                                {d.totalNet.toFixed(2)}
+                                                            </span>
+                                                        </td>
+                                                        <td className="py-2.5 px-1 sm:px-2 text-center">
+                                                            <div className="flex flex-col items-center gap-0.5">
+                                                                <span className="font-mono font-bold text-[10px] text-slate-600 dark:text-slate-400">{sharePercent.toFixed(1)}%</span>
+                                                                <div className="hidden sm:block w-16 h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                                                                    <div className="h-full bg-indigo-500 rounded-full" style={{ width: `${Math.min(sharePercent, 100)}%` }} />
+                                                                </div>
+                                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        );
+                    })()}
+                </div>
+            );
+        })()}
 
             {/* SECTION 5: صندوق المبيعات (Sales Cashbox) */}
             {activeSection === 'sales_cashbox' && (
-                <div className="space-y-6 animate-in fade-in duration-200">
-                    <div className="bg-white dark:bg-slate-900 p-4 sm:p-5 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-3">
-                        <h2 className="text-lg font-black text-slate-900 dark:text-white">صندوق مبيعات الكروت</h2>
-                        <div className="flex items-center gap-2 flex-wrap">
-                            <div className="px-3 py-2 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 rounded-2xl flex items-center gap-2">
-                                <Wallet className="text-emerald-600 dark:text-emerald-400" size={16} />
-                                <span className="text-xs font-bold text-slate-600 dark:text-slate-400">الرصيد:</span>
-                                <span className="text-xs font-black text-emerald-700 dark:text-emerald-300">{cashboxBalance.toFixed(2)} ريال يمني</span>
-                            </div>
-                            {canAdd && (
-                                <button
-                                    onClick={() => setIsCashboxModalOpen(true)}
-                                    className="px-4 py-2.5 bg-amber-600 hover:bg-amber-700 text-white font-black text-xs rounded-2xl shadow-lg shadow-amber-600/20 flex items-center gap-2 transition"
-                                >
-                                    <Plus size={16} />
-                                    <span>إيداع / مسحوبات</span>
-                                </button>
-                            )}
-                        </div>
-                    </div>
-
-                    <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-right text-xs">
-                                <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-400 font-black border-b border-slate-200 dark:border-slate-800">
-                                    <tr>
-                                        <th className="p-4">البيان</th>
-                                        <th className="p-4">نوع الحركة</th>
-                                        <th className="p-4 text-left">المبلغ</th>
-                                        <th className="p-4">التاريخ والوقت</th>
-                                        <th className="p-4">المستخدم</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-bold text-slate-800 dark:text-slate-200">
-                                    {cashboxEntries.length === 0 ? (
-                                        <tr>
-                                            <td colSpan={5} className="p-8 text-center text-slate-400 font-bold">
-                                                لا توجد حركات في صندوق المبيعات حتى الآن.
-                                            </td>
-                                        </tr>
-                                    ) : (
-                                        cashboxEntries.map((entry) => (
-                                            <tr key={entry.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                                                <td className="p-4 font-black">{entry.title}</td>
-                                                <td className="p-4">
-                                                    <span className={`px-2.5 py-1 rounded-full text-[10px] font-black ${
-                                                        entry.isIncome 
-                                                            ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300' 
-                                                            : 'bg-rose-50 text-rose-700 dark:bg-rose-950 dark:text-rose-300'
-                                                    }`}>
-                                                        {entry.isIncome ? 'إيداع / مقبوضات +' : 'مصروفات / مسحوبات -'}
-                                                    </span>
-                                                </td>
-                                                <td className={`p-4 text-left font-black ${entry.isIncome ? 'text-emerald-600' : 'text-rose-600'}`}>
-                                                    {entry.isIncome ? '+' : '-'}{entry.amount.toFixed(2)} ريال يمني
-                                                </td>
-                                                <td className="p-4 text-slate-500">{entry.dateTime}</td>
-                                                <td className="p-4 text-slate-500">{entry.userName}</td>
-                                            </tr>
-                                        ))
-                                    )}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
+                <CardCashboxSection
+                    entries={cashboxEntries}
+                    sales={sales}
+                    purchases={purchases}
+                    vouchers={vouchers}
+                    purchaseVouchers={purchaseVouchers}
+                    cashboxBalance={cashboxBalance}
+                    canAdd={canAdd}
+                    onOpenDepositWithdraw={() => setIsCashboxModalOpen(true)}
+                    appUser={appUser}
+                />
             )}
 
             {/* SECTION 6: سندات القبض والصرف للموزعين (Vouchers) */}
@@ -4440,8 +5261,8 @@ export default function CardsManagement() {
                         setActionModalInvoice(invoice);
                         setActionModalOpen(true);
                     }}
-                    onEditInvoice={hasPermission('sales', 'edit') ? handleEditSaleInvoice : undefined}
-                    onCancelInvoice={hasPermission('sales', 'delete') ? handleCancelSaleInvoice : undefined}
+                    onEditInvoice={getSecPermission('cards_sales_report', 'edit') ? handleEditSaleInvoice : undefined}
+                    onCancelInvoice={getSecPermission('cards_sales_report', 'delete') ? handleCancelSaleInvoice : undefined}
                     appUser={appUser}
                 />
             )}
@@ -4454,9 +5275,24 @@ export default function CardsManagement() {
                         setActionModalInvoice(invoice);
                         setActionModalOpen(true);
                     }}
-                    onEditInvoice={hasPermission('purchases', 'edit') ? handleEditPurchaseInvoice : undefined}
-                    onCancelInvoice={hasPermission('purchases', 'delete') ? handleCancelPurchaseInvoice : undefined}
+                    onEditInvoice={getSecPermission('cards_stock', 'edit') ? handleEditPurchaseInvoice : undefined}
+                    onCancelInvoice={getSecPermission('cards_stock', 'delete') ? handleCancelPurchaseInvoice : undefined}
                     appUser={appUser}
+                />
+            )}
+
+            {/* SECTION: مطابقة الأرصدة والمبيعات (Reconciliation & Audit) */}
+            {activeSection === 'reconciliation' && (
+                <CardReconciliationSection
+                    categories={categories}
+                    sales={sales}
+                    purchases={purchases}
+                    stockLogs={stockLogs}
+                    distributors={distributors}
+                    selectedMonth={selectedMonth}
+                    onMonthChange={(m) => setSelectedMonth(m)}
+                    onOpenSalesSection={() => setActiveSection('card_sales_section')}
+                    onOpenPurchasesSection={() => setActiveSection('card_purchases_section')}
                 />
             )}
 
@@ -4971,7 +5807,7 @@ export default function CardsManagement() {
                     prefetchedDistributors={distributors}
                     isOpen={!!saleModalCategory || isCardSaleModalOpen}
                     editingInvoice={editingCardSale}
-                    onReverseInvoice={editingCardSale ? () => reverseCardInvoice(editingCardSale.invoiceNumber, 'sale', true) : undefined}
+                    onReverseInvoice={editingCardSale ? () => reverseCardInvoice(editingCardSale, 'sale', true) : undefined}
                     onClose={() => { setSaleModalCategory(null); setIsCardSaleModalOpen(false); setEditingCardSale(null); }}
                     categoryName={saleModalCategory || undefined}
                     onInvoiceCreated={(invoice) => {
@@ -5043,13 +5879,42 @@ export default function CardsManagement() {
                 prefetchedSuppliers={suppliers}
                 isOpen={isCardPurchaseModalOpen}
                 editingInvoice={editingCardPurchase}
-                onReverseInvoice={editingCardPurchase ? () => reverseCardInvoice(editingCardPurchase.invoiceNumber, 'purchase', true) : undefined}
+                onReverseInvoice={editingCardPurchase ? () => reverseCardInvoice(editingCardPurchase, 'purchase', true) : undefined}
                 onClose={() => { setIsCardPurchaseModalOpen(false); setEditingCardPurchase(null); }}
                 onInvoiceCreated={(invoice) => {
                     setActionModalInvoice(invoice);
                     setActionModalOpen(true);
                 }}
             />
+
+            {confirmDialog && confirmDialog.isOpen && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                    <div className="bg-white dark:bg-gray-800 rounded-2xl w-full max-w-sm overflow-hidden shadow-2xl border border-gray-100 dark:border-gray-700">
+                        <div className="p-6">
+                            <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-2">
+                                {confirmDialog.title || 'تأكيد'}
+                            </h3>
+                            <p className="text-gray-600 dark:text-gray-300 text-sm mb-6 whitespace-pre-wrap">
+                                {confirmDialog.message}
+                            </p>
+                            <div className="flex gap-3">
+                                <button
+                                    onClick={confirmDialog.onCancel}
+                                    className="flex-1 bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 font-bold py-2.5 rounded-xl transition-colors"
+                                >
+                                    تراجع
+                                </button>
+                                <button
+                                    onClick={confirmDialog.onConfirm}
+                                    className="flex-1 bg-rose-600 hover:bg-rose-700 text-white font-bold py-2.5 rounded-xl transition-colors"
+                                >
+                                    تأكيد الإلغاء
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             <CardInvoiceActionModal
                 isOpen={actionModalOpen}

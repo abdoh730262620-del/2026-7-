@@ -163,6 +163,49 @@ export const CardInvoiceActionModal: React.FC<CardInvoiceActionModalProps> = ({
 
                     {/* Scrollable Content */}
                     <div className="space-y-4 overflow-y-auto pr-1 pl-1 flex-1">
+                        
+                        {invoice.status === 'cancelled' && (
+                            <div className="bg-rose-50 dark:bg-rose-950/30 p-4 rounded-2xl border border-rose-200 dark:border-rose-900/50 flex flex-col gap-3">
+                                <div className="flex items-center gap-2 text-rose-700 dark:text-rose-400">
+                                    <X className="w-5 h-5" />
+                                    <h4 className="font-black text-sm">تم إلغاء هذه الفاتورة</h4>
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs text-rose-800 dark:text-rose-300">
+                                    <div>
+                                        <span className="block text-[10px] opacity-70 mb-1">ألغيت بواسطة</span>
+                                        <strong className="font-bold">{invoice.cancelledBy || 'النظام'}</strong>
+                                    </div>
+                                    <div>
+                                        <span className="block text-[10px] opacity-70 mb-1">تاريخ الإلغاء</span>
+                                        <strong className="font-bold font-mono">
+                                            {invoice.cancelledAt ? new Date(invoice.cancelledAt).toLocaleString('en-GB') : 'غير متوفر'}
+                                        </strong>
+                                    </div>
+                                    <div className="sm:col-span-2 bg-white/50 dark:bg-black/20 p-3 rounded-xl mt-1">
+                                        <span className="block text-[10px] opacity-70 mb-1.5 font-bold">بيان الحركة العكسية (تفاصيل الإلغاء)</span>
+                                        <ul className="list-disc list-inside space-y-1 font-medium">
+                                            <li>تم إرجاع الكروت الموضحة أدناه إلى المخزون (فئات الكروت).</li>
+                                            {invoice.paymentType === 'cash' ? (
+                                                <li>
+                                                    {isSale 
+                                                        ? `تم إرجاع المبلغ النقدي (${Math.abs(invoice.totalAmount).toFixed(2)} ريال) وخصمه من الصندوق.` 
+                                                        : `تم استرداد المبلغ النقدي (${Math.abs(invoice.totalAmount).toFixed(2)} ريال) وإضافته إلى الصندوق.`
+                                                    }
+                                                </li>
+                                            ) : (
+                                                <li>
+                                                    {isSale
+                                                        ? `تم إرجاع الكروت وخصم قيمتها (${Math.abs(invoice.totalAmount).toFixed(2)} ريال) من حساب العميل/الموزع: ${invoice.partyName || 'نقدي / عام'}.`
+                                                        : `تم إرجاع الكروت وخصم قيمتها (${Math.abs(invoice.totalAmount).toFixed(2)} ريال) من حساب المورد: ${invoice.partyName || 'نقدي / عام'}.`
+                                                    }
+                                                </li>
+                                            )}
+                                        </ul>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
                         {/* Invoice Metadata Box */}
                         <div className="bg-slate-50 dark:bg-slate-800/50 p-4 rounded-2xl border border-slate-100 dark:border-slate-800 grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
                             <div>

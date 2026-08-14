@@ -321,6 +321,81 @@ export default function SalesReport({ dateRange }: { dateRange: { startDate: str
         generateExcel(exportData, `تقرير_المبيعات_${new Date().getTime()}`);
     };
 
+    const getPlainRowValue = (item: any, header: string, index: number) => {
+        switch (header) {
+            case 'الفاتورة':
+            case 'المرجع':
+            case 'الفاتورة/المرجع':
+                return item.invoiceNumber ? `#${item.invoiceNumber}` : `#${item.id?.substring(0, 6)}`;
+            case 'التاريخ':
+                const ts = item.date || item.createdAt || 0;
+                return new Date(ts).toLocaleDateString('ar-EG', {
+                    year: 'numeric',
+                    month: 'numeric',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                });
+            case 'العميل':
+                return item.customerId ? (customers.find(c => c.id === item.customerId)?.name || 'غير معروف') : (item.customerName || 'نقدي/عام');
+            case 'طريقة الدفع':
+                const payTypes: Record<string, string> = {
+                    cash: 'نقدي',
+                    credit: 'آجل',
+                    card: 'بطاقة',
+                    cheque: 'شيك',
+                    bank: 'حوالة'
+                };
+                return payTypes[item.paymentType || 'cash'] || 'نقدي';
+            case 'المبلغ':
+            case 'المبيعات':
+            case 'الإجمالي':
+            case 'الإجمالي بعد الخصم':
+                const val = item.totalAmount || item.total || item.sum || 0;
+                return `${(val || 0).toLocaleString()} ر.س`;
+            case 'التكلفة':
+                const totalCost = (item.items || []).reduce((acc: number, it: any) => acc + ((it.cost || products[it.id]?.cost || 0) * (it.quantity || 1)), 0);
+                return `${totalCost.toLocaleString()} ر.س`;
+            case 'الربح':
+                const itemSales = item.totalAmount || item.total || 0;
+                const costOfSales = (item.items || []).reduce((acc: number, it: any) => acc + ((it.cost || products[it.id]?.cost || 0) * (it.quantity || 1)), 0);
+                const profitTotal = itemSales - costOfSales;
+                return `${profitTotal.toLocaleString()} ر.س`;
+            case 'النوع':
+                return item.paymentType === 'cash' ? 'نقدي' : 'آجل';
+            case 'الإجمالي قبل الخصم':
+                const beforeDisc = (item.totalAmount || item.total || 0) + (item.discount || 0);
+                return `${beforeDisc.toLocaleString()} ر.س`;
+            case 'الخصم':
+                return `${(item.discount || 0).toLocaleString()} ر.س`;
+            case 'المدفوع':
+                return `${(item.paidAmount || 0).toLocaleString()} ر.س`;
+            case 'المتبقي':
+                const rem = (item.totalAmount || item.total || 0) - (item.paidAmount || 0);
+                return `${rem.toLocaleString()} ر.س`;
+            case 'المبلغ المسترجع':
+                return `${(item.totalAmount || item.total || 0).toLocaleString()} ر.س`;
+            case 'العرض':
+                return `#${item.quotationNumber || item.id?.substring(0, 6)}`;
+            case 'الحالة':
+                return item.status === 'accepted' ? 'مقبول' : item.status === 'rejected' ? 'مرفوض' : 'مسودة';
+            case 'عدد الفواتير':
+                return String(item.count || 1);
+            case 'إجمالي المبيعات':
+                return `${(item.sum || 0).toLocaleString()} ر.س`;
+            case 'المبيعات دون ضريبة':
+                return `${(item.salesNoTax || 0).toLocaleString()} ر.س`;
+            case 'الضريبة':
+                return `${(item.taxAmount || item.tax || 0).toLocaleString()} ر.س`;
+            case 'الصنف':
+                return item.name || 'غير معروف';
+            case 'الكمية المباعة':
+                return String(item.quantity || 0);
+            default:
+                return String(item[header] || '');
+        }
+    };
+
     const getRowValue = (item: any, header: string, index: number) => {
         switch (header) {
             case 'الفاتورة':
@@ -597,37 +672,11 @@ export default function SalesReport({ dateRange }: { dateRange: { startDate: str
                 <div className="p-1 px-3 border-b border-gray-100 flex justify-end items-center bg-[#f8f9fa] z-10 sticky top-0 shadow-sm">
                     {computedData.type !== 'excel_ready' && (
                         <button onClick={() => {
-                            const rows = computedData.items.map((s, idx) => {
-                                const row = [];
-                                if (computedData.headers.includes('الفاتورة')) row.push('#' + (s.invoiceNumber || ''));
-                                if (computedData.headers.includes('التاريخ')) row.push(new Date(s.createdAt).toLocaleString('ar-EG'));
-                                if (computedData.headers.includes('العميل')) row.push(s.customerId ? customers[s.customerId]?.name || 'غير معروف' : 'نقدي/عام');
-                                if (computedData.headers.includes('طريقة الدفع')) row.push(s.paymentType === 'cash' ? 'نقدي' : s.paymentType === 'credit' ? 'آجل' : s.paymentType === 'card' ? 'بطاقة' : s.paymentType === 'bank' ? 'حوالة' : 'شيك');
-                                if (computedData.headers.includes('النوع')) row.push(s.paymentType === 'cash' ? 'نقدي' : 'آجل');
-                                if (computedData.headers.includes('المبلغ')) row.push((s.totalAmount || s.total || 0).toLocaleString());
-                                if (computedData.headers.includes('الصنف')) row.push('قريباً');
-                                if (computedData.headers.includes('الكمية المباعة')) row.push('0');
-                                if (computedData.headers.includes('الإجمالي') && !computedData.headers.includes('الفاتورة')) row.push('0');
-                                if (computedData.headers.includes('المدفوع')) row.push((s.paidAmount || 0).toLocaleString());
-                                if (computedData.headers.includes('المتبقي')) row.push(((s.totalAmount || s.total || 0) - (s.paidAmount || 0)).toLocaleString());
-                                if (computedData.headers.includes('الإجمالي قبل الخصم')) row.push(((s.totalAmount || s.total || 0) + (s.discount || 0)).toLocaleString());
-                                if (computedData.headers.includes('الخصم')) row.push(s.discount || 0);
-                                if (computedData.headers.includes('الإجمالي بعد الخصم')) row.push((s.totalAmount || s.total || 0).toLocaleString());
-                                if (computedData.headers.includes('الفاتورة/المرجع')) row.push('#' + (s.invoiceNumber || ''));
-                                if (computedData.headers.includes('العرض')) row.push('#' + (s.quotationNumber || ''));
-                                if (computedData.headers.includes('الحالة')) row.push(s.status === 'accepted' ? 'مقبول' : s.status === 'rejected' ? 'مرفوض' : 'مسودة');
-                                if (computedData.headers.includes('المبلغ المسترجع')) row.push((s.totalAmount || s.total || 0).toLocaleString());
-                                if (computedData.headers.includes('المرجع')) row.push('#' + (s.invoiceNumber || ''));
-                                if (computedData.headers.includes('التكلفة')) row.push('قريباً');
-                                if (computedData.headers.includes('المبيعات') && !computedData.headers.includes('المبلغ')) row.push((s.totalAmount || s.total || 0).toLocaleString());
-                                if (computedData.headers.includes('الربح')) row.push('قريباً');
-                                if (computedData.headers.includes('المبيعات دون ضريبة')) row.push(((s.totalAmount || s.total || 0) - (s.taxAmount || 0)).toLocaleString());
-                                if (computedData.headers.includes('الضريبة')) row.push((s.taxAmount || 0).toLocaleString());
-                                return row;
-                            });
-                            
                             // Remove columns that are actions
                             const filteredHeaders = computedData.headers.filter(h => h !== 'عرض');
+                            const rows = computedData.items.map((s, idx) => {
+                                return filteredHeaders.map(h => getPlainRowValue(s, h, idx));
+                            });
                             printReport(computedData.title, filteredHeaders, rows);
                         }} className="justify-center flex items-center gap-1.5 bg-white dark:bg-slate-800 text-blue-700 hover:bg-white border border-gray-200 px-3 py-1 flex-shrink-0 rounded-md transition text-[10px] font-black shadow-sm">
                             <Printer size={14} /> طباعة القائمة

@@ -1,4 +1,4 @@
-import * as React from 'react';
+import React, { createContext, useContext, useState, useEffect } from 'react';
 
 type ThemeMode = 'light' | 'dark';
 type ThemeStyle = 'modern' | 'classic' | 'glass';
@@ -14,11 +14,11 @@ interface ThemeContextType {
     toggleMode: () => void;
 }
 
-const ThemeContext = React.createContext<ThemeContextType | undefined>(undefined);
+const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
     const mode: ThemeMode = 'light';
-    const [style, setStyle] = React.useState<ThemeStyle>(() => {
+    const [style, setStyle] = useState<ThemeStyle>(() => {
         try {
             return (localStorage.getItem('theme-style') as ThemeStyle) || 'modern';
         } catch (e) {
@@ -26,7 +26,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
         }
     });
 
-    const [themeColor, setThemeColor] = React.useState<ThemeColor>(() => {
+    const [themeColor, setThemeColor] = useState<ThemeColor>(() => {
         try {
             return (localStorage.getItem('theme-color') as ThemeColor) || 'blue';
         } catch (e) {
@@ -34,13 +34,13 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
         }
     });
 
-    React.useEffect(() => {
+    useEffect(() => {
         const root = window.document.documentElement;
         root.classList.remove('dark');
         root.style.colorScheme = 'light';
     }, []);
 
-    React.useEffect(() => {
+    useEffect(() => {
         try {
             localStorage.setItem('theme-style', style);
         } catch (e) {}
@@ -49,7 +49,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
         document.body.classList.add(`style-${style}`);
     }, [style]);
 
-    React.useEffect(() => {
+    useEffect(() => {
         try {
             localStorage.setItem('theme-color', themeColor);
         } catch (e) {}
@@ -72,7 +72,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 }
 
 export function useTheme() {
-    const context = React.useContext(ThemeContext);
+    const context = useContext(ThemeContext);
     if (!context) throw new Error('useTheme must be used within a ThemeProvider');
     return context;
 }

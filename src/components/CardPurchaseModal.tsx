@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, ShoppingBag, Plus, Trash2, CheckCircle2, User, Phone, Search, CreditCard, DollarSign, Wifi } from 'lucide-react';
+import { X, ShoppingBag, Plus, Trash2, CheckCircle2, User, Phone, Search, CreditCard, DollarSign, Wifi, Star } from 'lucide-react';
 import { collection, query, where, onSnapshot, addDoc, doc, updateDoc, runTransaction, getDocs } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { useAuthStore } from '../store/authStore';
@@ -31,16 +31,6 @@ interface CartItem {
     availableStock: number;
 }
 
-const DEFAULT_DENOMINATIONS = [
-    { name: 'فئة 100 ريال', retailPrice: 100, wholesalePrice: 95 },
-    { name: 'فئة 200 ريال', retailPrice: 200, wholesalePrice: 190 },
-    { name: 'فئة 250 ريال', retailPrice: 250, wholesalePrice: 235 },
-    { name: 'فئة 500 ريال', retailPrice: 500, wholesalePrice: 475 },
-    { name: 'فئة 1000 ريال', retailPrice: 1000, wholesalePrice: 950 },
-    { name: 'فئة 1500 ريال', retailPrice: 1500, wholesalePrice: 1425 },
-    { name: 'فئة 3000 ريال', retailPrice: 3000, wholesalePrice: 2850 },
-    { name: 'فئة 5000 ريال', retailPrice: 5000, wholesalePrice: 4750 },
-];
 
 export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuccess, onInvoiceCreated, editingInvoice, onReverseInvoice, prefetchedCategories, prefetchedSuppliers }: CardPurchaseModalProps) {
     const { appUser } = useAuthStore();
@@ -77,6 +67,16 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
     const [autoUpdateCostPrice, setAutoUpdateCostPrice] = useState<boolean>(true);
     const [notes, setNotes] = useState<string>('');
     const [saving, setSaving] = useState<boolean>(false);
+
+    // Favorites for quick access
+    const [favorites, setFavorites] = useState<string[]>(() => {
+        try {
+            return JSON.parse(localStorage.getItem('favorite_card_categories_purchase') || '[]');
+        } catch {
+            return [];
+        }
+    });
+    const [showOnlyFavorites, setShowOnlyFavorites] = useState<boolean>(false);
 
     // Pre-fill if editingInvoice is provided
     useEffect(() => {
@@ -146,22 +146,10 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
         if (prefetchedSuppliers) setSuppliers(prefetchedSuppliers);
     }, [prefetchedSuppliers]);
 
-    // Available categories display list (from default 8 network card sections + custom categories)
+    // Available categories display list (strictly from the actual card categories in Card Management)
     const displayCategories = (() => {
         const processedNames = new Set<string>();
-        const list = DEFAULT_DENOMINATIONS.map(denom => {
-            processedNames.add(denom.name.trim());
-            const matching = categories.filter(c => c.name.trim() === denom.name.trim() || c.linkedSection?.trim() === denom.name.trim());
-            const totalStock = matching.reduce((sum, c) => sum + (c.availableCount || 0), 0);
-            const mainCat = matching.find(c => c.name.trim() === denom.name.trim()) || matching[0];
-            return {
-                id: mainCat?.id,
-                name: denom.name,
-                retailPrice: mainCat?.retailPrice || denom.retailPrice,
-                wholesalePrice: mainCat?.wholesalePrice || denom.wholesalePrice,
-                availableCount: totalStock
-            };
-        });
+        let list: { id: string; name: string; retailPrice: number; wholesalePrice: number; availableCount: number }[] = [];
 
         categories.forEach(cat => {
             const catName = cat.name?.trim();
@@ -179,8 +167,22 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
             }
         });
 
+        if (showOnlyFavorites) {
+            list = list.filter(item => favorites.includes(item.name.trim()));
+        }
+
         return list;
     })();
+
+    const toggleFavorite = (catName: string, e: React.MouseEvent) => {
+        e.stopPropagation();
+        const trimmed = catName.trim();
+        const updated = favorites.includes(trimmed)
+            ? favorites.filter(name => name !== trimmed)
+            : [...favorites, trimmed];
+        setFavorites(updated);
+        localStorage.setItem('favorite_card_categories_purchase', JSON.stringify(updated));
+    };
 
     // Initialize initial category when opened
     useEffect(() => {
@@ -395,7 +397,7 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                         });
                     }
 
-                    // Add to Cashbox and Cash Ledger if Cash
+                    // Add to Cashbox if Cash
                     if (paymentType === 'cash') {
                         const cashboxRef = doc(collection(db, 'card_cashbox'));
                         transaction.set(cashboxRef, {
@@ -408,19 +410,6 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                             dateTime: `${dateStr} ${timeStr}`,
                             userName: staffName,
                             createdAt: Date.now()
-                        });
-
-                        const mainCashRef = doc(collection(db, 'cash'));
-                        transaction.set(mainCashRef, {
-                            date: Date.now(),
-                            amount: invoiceTotal,
-                            type: 'out',
-                            category: 'card_purchase',
-                            description: `مشتريات كروت - ${selectedSupplier ? selectedSupplier.name : 'نقدي'} (${totalCardsQty} كارت)`,
-                            referenceId: cashboxRef.id,
-                            createdBy: appUser?.uid || 'unknown',
-                            createdAt: Date.now(),
-                            tenantId
                         });
                     }
 
@@ -545,45 +534,95 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                 <div className="overflow-y-auto space-y-3 pr-1 pl-1 custom-scrollbar flex-1">
                     {/* TOP SECTION: Categories Grid */}
                     <div>
-                        <div className="flex items-center justify-between mb-2">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2.5">
                             <label className="text-xs font-black text-slate-700 dark:text-slate-300">
                                 اختر فئة الكارت لتزويدها بالرصيد
                             </label>
+                            
+                            {/* Filter Tabs for Favorites vs All */}
+                            <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800/80 p-0.5 rounded-xl text-[10px] font-black w-fit border border-slate-200/50 dark:border-slate-700/50">
+                                <button
+                                    type="button"
+                                    onClick={() => setShowOnlyFavorites(false)}
+                                    className={`px-2.5 py-1 rounded-lg transition-all duration-200 flex items-center gap-1.5 ${
+                                        !showOnlyFavorites
+                                            ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
+                                            : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'
+                                    }`}
+                                >
+                                    <span>الكل</span>
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setShowOnlyFavorites(true)}
+                                    className={`px-2.5 py-1 rounded-lg transition-all duration-200 flex items-center gap-1 ${
+                                        showOnlyFavorites
+                                            ? 'bg-amber-500 text-white shadow-sm'
+                                            : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'
+                                    }`}
+                                >
+                                    <Star size={11} className={showOnlyFavorites ? "fill-current" : ""} />
+                                    <span>المفضلة ({favorites.length})</span>
+                                </button>
+                            </div>
+
                             {activeCatObj && (
                                 <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400">
                                     المتبقي: <strong>{availableStock} كارت</strong>
                                 </span>
                             )}
                         </div>
-                        <div className="grid grid-cols-4 gap-2 sm:gap-2.5">
-                            {displayCategories.map((cat) => {
-                                const isSelected = selectedCategoryName.trim() === cat.name.trim();
-                                return (
-                                    <button
-                                        key={cat.name}
-                                        type="button"
-                                        onClick={() => handleSelectCategory(cat.name)}
-                                        className={`p-2.5 sm:p-3 rounded-2xl border-2 text-center transition flex flex-col items-center justify-center relative cursor-pointer ${
-                                            isSelected
-                                                ? 'bg-indigo-50/90 dark:bg-indigo-950/80 border-indigo-600 shadow-md shadow-indigo-600/10 text-slate-900 dark:text-white'
-                                                : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-indigo-300'
-                                        }`}
-                                    >
-                                        <div className={`w-8 h-8 rounded-full flex items-center justify-center mb-1 ${
-                                            isSelected ? 'bg-indigo-100 dark:bg-indigo-900/60 text-indigo-600 dark:text-indigo-400' : 'bg-slate-100 dark:bg-slate-700 text-slate-500'
-                                        }`}>
-                                            <Wifi size={18} />
+                        {displayCategories.length === 0 ? (
+                            <div className="text-center py-8 px-4 rounded-2xl bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/40 text-amber-800 dark:text-amber-400 font-bold text-xs">
+                                {showOnlyFavorites 
+                                    ? 'لم تقم بإضافة أي فئات إلى المفضلة بعد. انقر على أيقونة النجمة ⭐ على أي فئة من تبويب "الكل" لإضافتها هنا للوصول السريع.'
+                                    : 'لا توجد فئات كروت مضافة حالياً في "إدارة الكروت". يرجى إضافة الفئات أولاً من لوحة تحكم الكروت لتتمكن من تزويد رصيدها هنا.'}
+                            </div>
+                        ) : (
+                            <div className="grid grid-cols-4 gap-2 sm:gap-2.5">
+                                {displayCategories.map((cat) => {
+                                    const isSelected = selectedCategoryName.trim() === cat.name.trim();
+                                    const isFav = favorites.includes(cat.name.trim());
+                                    return (
+                                        <div
+                                            key={cat.name}
+                                            onClick={() => handleSelectCategory(cat.name)}
+                                            className={`p-2.5 sm:p-3 rounded-2xl border-2 text-center transition flex flex-col items-center justify-center relative cursor-pointer ${
+                                                isSelected
+                                                    ? 'bg-indigo-50/90 dark:bg-indigo-950/80 border-indigo-600 shadow-md shadow-indigo-600/10 text-slate-900 dark:text-white'
+                                                    : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-indigo-300'
+                                            }`}
+                                        >
+                                            {/* Star icon for toggling favorite */}
+                                            <button
+                                                type="button"
+                                                onClick={(e) => toggleFavorite(cat.name, e)}
+                                                className={`absolute top-1.5 right-1.5 w-6 h-6 rounded-full flex items-center justify-center transition active:scale-90 hover:bg-slate-200/50 dark:hover:bg-slate-700/50 ${
+                                                    isFav
+                                                        ? 'text-amber-500'
+                                                        : 'text-slate-300 hover:text-slate-400 dark:text-slate-600 dark:hover:text-slate-500'
+                                                }`}
+                                                title={isFav ? "إزالة من المفضلة" : "إضافة إلى المفضلة"}
+                                            >
+                                                <Star size={13} className={isFav ? "fill-current" : ""} />
+                                            </button>
+
+                                            <div className={`w-8 h-8 rounded-full flex items-center justify-center mb-1 ${
+                                                isSelected ? 'bg-indigo-100 dark:bg-indigo-900/60 text-indigo-600 dark:text-indigo-400' : 'bg-slate-100 dark:bg-slate-700 text-slate-500'
+                                            }`}>
+                                                <Wifi size={18} />
+                                            </div>
+                                            <div className="font-black text-xs sm:text-sm leading-tight text-slate-900 dark:text-white select-none">
+                                                {cat.name}
+                                            </div>
+                                            <span className={`text-[10px] font-black mt-1 px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 select-none`}>
+                                                المتبقي: {cat.availableCount}
+                                            </span>
                                         </div>
-                                        <div className="font-black text-xs sm:text-sm leading-tight text-slate-900 dark:text-white">
-                                            {cat.name}
-                                        </div>
-                                        <span className={`text-[10px] font-black mt-1 px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300`}>
-                                            المتبقي: {cat.availableCount}
-                                        </span>
-                                    </button>
-                                );
-                            })}
-                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
                     </div>
 
                     {/* INPUTS SECTION */}

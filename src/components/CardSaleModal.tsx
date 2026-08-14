@@ -493,6 +493,7 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                         const saleRef = doc(collection(db, 'card_sales'));
                         transaction.set(saleRef, {
                             tenantId,
+                            categoryId: currentCategoryId,
                             categoryName: item.categoryName,
                             quantity: item.quantity,
                             saleType: item.saleType,
@@ -517,7 +518,7 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                         });
                     }
 
-                    // Add to Cashbox and Cash Ledger if payment type is cash
+                    // Add to Cashbox if payment type is cash
                     if (paymentType === 'cash') {
                         const cashboxRef = doc(collection(db, 'card_cashbox'));
                         transaction.set(cashboxRef, {
@@ -530,19 +531,6 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                             dateTime: `${dateStr} ${timeStr}`,
                             userName: staffName,
                             createdAt: Date.now()
-                        });
-
-                        const mainCashRef = doc(collection(db, 'cash'));
-                        transaction.set(mainCashRef, {
-                            date: Date.now(),
-                            amount: netTotal,
-                            type: 'in',
-                            category: 'card_sale',
-                            description: `بيع كروت - ${selectedDistributor ? selectedDistributor.name : 'نقدي'} (${totalCardsQty} كارت)`,
-                            referenceId: cashboxRef.id,
-                            createdBy: appUser?.uid || 'unknown',
-                            createdAt: Date.now(),
-                            tenantId
                         });
                     }
 

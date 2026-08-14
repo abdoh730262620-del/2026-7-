@@ -25,7 +25,7 @@ export default function NetworkCards() {
     const tenantId = 'single_store';
     const [loading, setLoading] = useState(true);
     const [categories, setCategories] = useState<CardCategory[]>([]);
-    const [monthSales, setMonthSales] = useState<CardSale[]>([]);
+    const [allSales, setAllSales] = useState<CardSale[]>([]);
     
     // Modal state for selling card
     const [selectedCategoryForSale, setSelectedCategoryForSale] = useState<string | null>(null);
@@ -51,28 +51,75 @@ export default function NetworkCards() {
             setLoading(false);
         });
 
-        // Fetch Current Month Sales
+        // Fetch All Sales for Tenant to ensure real-time reactive updates
         const qSales = query(
             collection(db, 'card_sales'),
-            where('tenantId', '==', tenantId),
-            where('month', '==', currentMonthStr)
+            where('tenantId', '==', tenantId)
         );
         const unsubSales = onSnapshot(qSales, (snapshot) => {
             const list: CardSale[] = snapshot.docs.map((doc) => ({
                 id: doc.id,
                 ...doc.data()
             } as CardSale));
-            setMonthSales(list);
+            setAllSales(list);
         }, (err) => console.error(err));
 
         return () => {
             unsubCat();
             unsubSales();
         };
-    }, [currentMonthStr]);
+    }, []);
+
+    // Filter current month sales reliably
+    const isCurrentMonthSale = (s: CardSale) => {
+        if (s.month === currentMonthStr) return true;
+        if (s.date && s.date.startsWith(currentMonthStr)) return true;
+        if (s.dateTime && s.dateTime.startsWith(currentMonthStr)) return true;
+        return false;
+    };
+    const monthSales = allSales.filter(isCurrentMonthSale);
 
     // Build displayed items matching default 8 denominations AND any custom categories added now or in the future
     const processedCategoryNames = new Set<string>();
+
+    const isCancelledStatus = (status?: string) => {
+        if (!status) return false;
+        const st = status.trim().toLowerCase();
+        return st === 'cancelled' || st === 'canceled' || st === 'returned';
+    };
+
+    // Filter active sales in the month (excluding cancelled sales and converted credit sales)
+    const activeCashInvoices = new Set(
+        monthSales
+            .filter(s => (s.status === 'completed' || !s.status) && !isCancelledStatus(s.status) && s.paymentType === 'cash' && s.invoiceNumber)
+            .map(s => s.invoiceNumber)
+    );
+
+    const activeMonthSales = monthSales.filter(s => {
+        if (isCancelledStatus(s.status)) return false;
+        // If an invoice was converted from credit to cash, prevent counting the old credit items
+        if (s.paymentType === 'credit' && s.invoiceNumber && activeCashInvoices.has(s.invoiceNumber)) {
+            return false;
+        }
+        return s.status === 'completed' || !s.status;
+    });
+
+    const isCategoryMatch = (saleName?: string, saleCatId?: string, targetName?: string, targetId?: string, linkedSec?: string) => {
+        if (!saleName && !saleCatId) return false;
+        if (targetId && saleCatId && saleCatId === targetId) return true;
+        
+        const clean = (str?: string) => (str || '').replace(/فئة|كروت|كرت|ريال|\s+/g, '').toLowerCase();
+        const cleanSale = clean(saleName);
+        const cleanTarget = clean(targetName);
+        const cleanLinked = clean(linkedSec);
+
+        if (cleanSale && cleanTarget && cleanSale === cleanTarget) return true;
+        if (cleanSale && cleanLinked && cleanSale === cleanLinked) return true;
+        if (saleName && targetName && saleName.trim() === targetName.trim()) return true;
+        if (saleName && linkedSec && saleName.trim() === linkedSec.trim()) return true;
+
+        return false;
+    };
 
     const defaultGridItems = DENOMINATIONS.map(denom => {
         processedCategoryNames.add(denom.name.trim());
@@ -80,7 +127,8 @@ export default function NetworkCards() {
         // Find matching categories by direct name OR linkedSection setting
         const matchingCategories = categories.filter(c => 
             c.name.trim() === denom.name.trim() || 
-            c.linkedSection?.trim() === denom.name.trim()
+            c.linkedSection?.trim() === denom.name.trim() ||
+            isCategoryMatch(c.name, c.id, denom.name)
         );
 
         matchingCategories.forEach(c => processedCategoryNames.add(c.name.trim()));
@@ -93,18 +141,19 @@ export default function NetworkCards() {
         const retailPrice = mainCat?.retailPrice || denom.defaultRetail;
 
         // Count cash and credit sales for this category/section in current month
-        const categorySales = monthSales.filter(s => {
+        const categorySales = activeMonthSales.filter(s => {
             const isDirectName = s.categoryName?.trim() === denom.name.trim();
-            const isLinkedCat = matchingCategories.some(c => c.name?.trim() === s.categoryName?.trim() || c.id === s.categoryId);
-            return isDirectName || isLinkedCat;
+            const isMatch = isCategoryMatch(s.categoryName, s.categoryId, denom.name, mainCat?.id);
+            const isLinkedCat = matchingCategories.some(c => isCategoryMatch(s.categoryName, s.categoryId, c.name, c.id, c.linkedSection));
+            return isDirectName || isMatch || isLinkedCat;
         });
 
         const cashQty = categorySales
             .filter(s => s.paymentType === 'cash')
-            .reduce((sum, s) => sum + (s.quantity || 0), 0);
+            .reduce((sum, s) => sum + (Number(s.quantity) || 0), 0);
         const creditQty = categorySales
             .filter(s => s.paymentType === 'credit')
-            .reduce((sum, s) => sum + (s.quantity || 0), 0);
+            .reduce((sum, s) => sum + (Number(s.quantity) || 0), 0);
 
         return {
             id: mainCat?.id || denom.name,
@@ -122,21 +171,21 @@ export default function NetworkCards() {
         if (catName && !processedCategoryNames.has(catName)) {
             processedCategoryNames.add(catName);
 
-            const matchingCategories = categories.filter(c => c.name?.trim() === catName);
+            const matchingCategories = categories.filter(c => c.name?.trim() === catName || c.id === cat.id);
             const availableCount = matchingCategories.reduce((sum, c) => sum + (c.availableCount || 0), 0);
             
             const retailPrice = cat.retailPrice || (catName.match(/\d+/) ? parseInt(catName.match(/\d+/)![0], 10) : 0);
 
-            const categorySales = monthSales.filter(s => {
-                return s.categoryName?.trim() === catName || s.categoryId === cat.id;
+            const categorySales = activeMonthSales.filter(s => {
+                return isCategoryMatch(s.categoryName, s.categoryId, cat.name, cat.id, cat.linkedSection);
             });
 
             const cashQty = categorySales
                 .filter(s => s.paymentType === 'cash')
-                .reduce((sum, s) => sum + (s.quantity || 0), 0);
+                .reduce((sum, s) => sum + (Number(s.quantity) || 0), 0);
             const creditQty = categorySales
                 .filter(s => s.paymentType === 'credit')
-                .reduce((sum, s) => sum + (s.quantity || 0), 0);
+                .reduce((sum, s) => sum + (Number(s.quantity) || 0), 0);
 
             customGridItems.push({
                 id: cat.id,

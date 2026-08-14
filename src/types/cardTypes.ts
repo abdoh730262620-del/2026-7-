@@ -28,6 +28,7 @@ export interface CardStockLog {
     userName: string;
     additionDate: string;
     availableCountAfter: number;
+    notes?: string;
 }
 
 export interface CardSale {
@@ -51,6 +52,8 @@ export interface CardSale {
     userName: string;
     invoiceNumber?: string;
     status?: 'draft' | 'completed' | 'cancelled';
+    cancelledBy?: string;
+    cancelledAt?: number;
 }
 
 export interface CardVoucher {
@@ -70,7 +73,7 @@ export interface CardVoucher {
 export interface CardCashboxEntry {
     id: string;
     tenantId: string;
-    type: 'cash_sale' | 'distributor_payment' | 'manual_in' | 'manual_out';
+    type: 'cash_sale' | 'distributor_payment' | 'distributor_sale_cash' | 'distributor_return_cash' | 'supplier_payment' | 'supplier_purchase_cash' | 'supplier_return_cash' | 'manual_in' | 'manual_out' | string;
     title: string;
     amount: number;
     isIncome: boolean;
@@ -109,6 +112,8 @@ export interface CardPurchase {
     userName: string;
     invoiceNumber?: string;
     status?: 'draft' | 'completed' | 'cancelled';
+    cancelledBy?: string;
+    cancelledAt?: number;
 }
 
 export interface CardPurchaseVoucher {

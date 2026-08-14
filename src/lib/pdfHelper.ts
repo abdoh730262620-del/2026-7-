@@ -199,6 +199,9 @@ export interface InvoicePdfInput {
     userName: string;
     notes?: string;
     items?: InvoicePdfItem[];
+    status?: string;
+    cancelledBy?: string;
+    cancelledAt?: number;
 }
 
 export const generateInvoicePdf = async (

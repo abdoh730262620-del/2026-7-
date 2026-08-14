@@ -129,13 +129,73 @@ export default function Sales() {
         batch.update(doc(db, 'sales', invoice.id), { status: actionType });
         const tenantId = appUser?.tenantId || 'single_store';
         
-        (invoice.items || []).forEach((item: any) => {
+        // Loop over the invoice items to update quantities and reverse any associated card sales
+        for (const item of (invoice.items || [])) {
             if (item.productId) {
                 batch.set(doc(db, 'products', item.productId), {
                     quantity: increment(item.quantity)
                 }, { merge: true });
             }
-        });
+
+            // Check if this product is linked to a network card category to return card stock
+            const matchingCardCat = cardCategories.find(c => 
+                c.name.trim().toLowerCase() === item.name.trim().toLowerCase() || 
+                (c.linkedSection && c.linkedSection.trim().toLowerCase() === item.name.trim().toLowerCase())
+            );
+            
+            if (matchingCardCat) {
+                // 1. Return the quantity to card_categories availableCount
+                const cardCatRef = doc(db, 'card_categories', matchingCardCat.id);
+                batch.update(cardCatRef, {
+                    availableCount: increment(item.quantity),
+                    updatedAt: Date.now()
+                });
+
+                // 2. Add to card_stock_logs as a return/revert log
+                const cardStockLogRef = doc(collection(db, 'card_stock_logs'));
+                const dateStr = new Date().toISOString().split('T')[0];
+                const timeStr = new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
+                batch.set(cardStockLogRef, {
+                    tenantId,
+                    categoryId: matchingCardCat.id,
+                    categoryName: matchingCardCat.name,
+                    quantityAdded: item.quantity, // positive since it's returned to stock
+                    userName: appUser?.name || appUser?.email || 'المدير',
+                    additionDate: `${dateStr} ${timeStr}`,
+                    availableCountAfter: (matchingCardCat.availableCount || 0) + item.quantity
+                });
+            }
+        }
+
+        // Cancel associated card sales if any
+        try {
+            // First, try matching by invoiceId
+            const cardSalesQuery = query(
+                collection(db, 'card_sales'), 
+                where('tenantId', '==', tenantId), 
+                where('invoiceId', '==', invoice.id)
+            );
+            const cardSalesSnap = await getDocs(cardSalesQuery);
+            
+            if (!cardSalesSnap.empty) {
+                cardSalesSnap.docs.forEach(docSnap => {
+                    batch.update(docSnap.ref, { status: 'cancelled' });
+                });
+            } else if (invoice.invoiceNumber) {
+                // Failsafe fallback: try matching by invoiceNumber for backward compatibility
+                const cardSalesQueryByNum = query(
+                    collection(db, 'card_sales'),
+                    where('tenantId', '==', tenantId),
+                    where('invoiceNumber', '==', invoice.invoiceNumber)
+                );
+                const cardSalesSnapByNum = await getDocs(cardSalesQueryByNum);
+                cardSalesSnapByNum.docs.forEach(docSnap => {
+                    batch.update(docSnap.ref, { status: 'cancelled' });
+                });
+            }
+        } catch (err) {
+            console.error("Error cancelling associated card sales:", err);
+        }
 
         if (invoice.paymentType === 'cash' || invoice.status === 'paid' || parseFloat(invoice.paidAmount || 0) > 0) {
             const amountToRefund = invoice.paymentType === 'cash' || invoice.status === 'paid' ? parseFloat(invoice.total) : parseFloat(invoice.paidAmount || 0);
@@ -840,6 +900,8 @@ export default function Sales() {
                     const timeStr = new Date(now).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
                     batch.set(cardSaleRef, {
                         tenantId,
+                        invoiceId: saleRef.id,
+                        invoiceNumber: finalInvoiceNum,
                         categoryName: matchingCardCat.name,
                         quantity: item.cartQuantity,
                         saleType: 'retail', // sales via main sales page are retail sales

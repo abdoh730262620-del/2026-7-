@@ -1,5 +1,4 @@
-import * as React from 'react';
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { BrowserRouter as Router, HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { doc, onSnapshot, setDoc, collection, getDocs, updateDoc } from 'firebase/firestore';
 import { db } from './lib/firebase';

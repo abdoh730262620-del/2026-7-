@@ -45,10 +45,15 @@ function setupNetworkSync(dbRef: any) {
 
 // We use persistence by default to satisfy the "local database" requirement.
 // If persistence fails or causes internal state assertions in iframe environments, we fall back to memoryLocalCache.
-const useMemoryCache = typeof window !== 'undefined' && sessionStorage.getItem('firestore_use_memory_cache') === 'true';
+const isIframe = typeof window !== 'undefined' && window.self !== window.top;
+const useMemoryCache = isIframe || (typeof window !== 'undefined' && sessionStorage.getItem('firestore_use_memory_cache') === 'true');
 
 if (useMemoryCache) {
-    console.log("Firestore initializing with memoryLocalCache due to previous persistent cache assertion.");
+    if (isIframe) {
+        console.log("Firestore initializing with memoryLocalCache because the application is running inside a sandboxed iframe.");
+    } else {
+        console.log("Firestore initializing with memoryLocalCache due to previous persistent cache assertion.");
+    }
     try {
         dbInstance = initializeFirestore(app, {
             localCache: memoryLocalCache()

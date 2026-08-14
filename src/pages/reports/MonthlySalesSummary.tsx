@@ -88,13 +88,17 @@ export default function MonthlySalesSummary({ dateRange }: { dateRange: { startD
                     );
                     const cardsSnap = await getDocs(qCards);
                     let totalCardSales = 0;
+                    let validCardCount = 0;
                     cardsSnap.forEach(cDoc => {
                         const cData = cDoc.data();
-                        totalCardSales += parseFloat(cData.totalAmount || 0);
+                        if (cData.status !== 'cancelled') {
+                            totalCardSales += parseFloat(cData.totalAmount || 0);
+                            validCardCount++;
+                        }
                     });
 
                     // Only add if there are sales or cards in this period, or if we want to show all accounts regardless
-                    if (salesSnap.size > 0 || cardsSnap.size > 0) {
+                    if (salesSnap.size > 0 || validCardCount > 0) {
                         results.push({
                             customerId: cust.id,
                             customerName: cust.name,
@@ -103,7 +107,7 @@ export default function MonthlySalesSummary({ dateRange }: { dateRange: { startD
                             totalSales,
                             invoiceCount: salesSnap.size,
                             totalCardSales,
-                            cardCount: cardsSnap.size
+                            cardCount: validCardCount
                         });
                     }
                 }

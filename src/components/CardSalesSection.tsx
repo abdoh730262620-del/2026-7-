@@ -14,7 +14,9 @@ interface CardSalesSectionProps {
 
 interface GroupedSaleInvoice {
     id: string;
+    docIds: string[];
     invoiceNumber: string;
+    rawInvoiceNumber?: string;
     distributorId: string;
     distributorName: string;
     paymentType: 'cash' | 'credit';
@@ -29,6 +31,9 @@ interface GroupedSaleInvoice {
     }[];
     totalAmount: number;
     totalQuantity: number;
+    status?: string;
+    cancelledBy?: string;
+    cancelledAt?: number;
 }
 
 export const CardSalesSection: React.FC<CardSalesSectionProps> = ({
@@ -65,7 +70,6 @@ export const CardSalesSection: React.FC<CardSalesSectionProps> = ({
         const groupedMap: { [key: string]: GroupedSaleInvoice } = {};
 
         sales.forEach(sale => {
-            if (sale.status === 'cancelled') return;
             const dateOnly = sale.date || (sale.dateTime && sale.dateTime.split(' ')[0]) || '';
             const invNumber = getNumericInvoiceNumber(sale.invoiceNumber, sale.id);
             
@@ -76,17 +80,31 @@ export const CardSalesSection: React.FC<CardSalesSectionProps> = ({
             if (!groupedMap[key]) {
                 groupedMap[key] = {
                     id: sale.id,
+                    docIds: [sale.id],
                     invoiceNumber: invNumber,
+                    rawInvoiceNumber: sale.invoiceNumber || '',
                     distributorId: sale.distributorId || '',
                     distributorName: sale.distributorName || 'موزع نقدي / عام',
                     paymentType: sale.paymentType || 'cash',
                     dateTime: sale.dateTime || sale.date || '',
                     date: dateOnly,
                     userName: sale.userName || 'النظام',
+                    status: sale.status || 'completed',
+                    cancelledBy: sale.cancelledBy,
+                    cancelledAt: sale.cancelledAt,
                     items: [],
                     totalAmount: 0,
                     totalQuantity: 0
                 };
+            } else {
+                if (!groupedMap[key].docIds.includes(sale.id)) {
+                    groupedMap[key].docIds.push(sale.id);
+                }
+                if (sale.status === 'cancelled') {
+                    groupedMap[key].status = 'cancelled';
+                    if (sale.cancelledBy) groupedMap[key].cancelledBy = sale.cancelledBy;
+                    if (sale.cancelledAt) groupedMap[key].cancelledAt = sale.cancelledAt;
+                }
             }
 
             const qty = Math.abs(sale.quantity || 0);
@@ -128,10 +146,11 @@ export const CardSalesSection: React.FC<CardSalesSectionProps> = ({
         return true;
     });
 
-    const totalInvoicesCount = filteredInvoices.length;
-    const totalQtySold = filteredInvoices.reduce((sum, inv) => sum + inv.totalQuantity, 0);
-    const cashTotal = filteredInvoices.reduce((sum, inv) => inv.paymentType === 'cash' ? sum + inv.totalAmount : sum, 0);
-    const creditTotal = filteredInvoices.reduce((sum, inv) => inv.paymentType === 'credit' ? sum + inv.totalAmount : sum, 0);
+    const activeInvoices = filteredInvoices.filter(inv => inv.status !== 'cancelled');
+    const totalInvoicesCount = activeInvoices.length;
+    const totalQtySold = activeInvoices.reduce((sum, inv) => sum + inv.totalQuantity, 0);
+    const cashTotal = activeInvoices.reduce((sum, inv) => inv.paymentType === 'cash' ? sum + inv.totalAmount : sum, 0);
+    const creditTotal = activeInvoices.reduce((sum, inv) => inv.paymentType === 'credit' ? sum + inv.totalAmount : sum, 0);
     const overallTotal = cashTotal + creditTotal;
 
     const totalPages = Math.ceil(filteredInvoices.length / itemsPerPage) || 1;
@@ -170,6 +189,9 @@ export const CardSalesSection: React.FC<CardSalesSectionProps> = ({
         partyName: inv.distributorName,
         dateTime: inv.dateTime,
         userName: inv.userName,
+        status: inv.status,
+        cancelledBy: inv.cancelledBy,
+        cancelledAt: inv.cancelledAt,
         items: inv.items.map(it => ({
             categoryName: it.categoryName,
             quantity: it.quantity,
@@ -179,93 +201,101 @@ export const CardSalesSection: React.FC<CardSalesSectionProps> = ({
     });
 
     return (
-        <div className="space-y-6 animate-in fade-in duration-200 text-right" dir="rtl">
+        <div className="space-y-3 sm:space-y-3.5 animate-in fade-in duration-200 text-right" dir="rtl">
             {/* Header & Controls */}
-            <div className="bg-white dark:bg-slate-900 p-5 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <div>
-                    <h2 className="text-lg font-black text-slate-900 dark:text-white flex items-center gap-2">
-                        <TrendingUp className="text-emerald-500" size={24} />
-                        <span>قسم مبيعات الكروت</span>
-                    </h2>
-                    <p className="text-xs font-bold text-slate-400 mt-1">
-                        عرض كشوف فواتير المبيعات الفردية لكروت الشبكة، فلترة وتصدير التقارير، ومعاينة الفواتير كـ PDF.
-                    </p>
+            <div className="bg-white dark:bg-slate-900 p-3.5 sm:p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-3">
+                <div className="flex items-center gap-2.5">
+                    <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center border border-emerald-100 dark:border-emerald-900/50 shrink-0">
+                        <TrendingUp size={20} />
+                    </div>
+                    <div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                            <h2 className="text-sm sm:text-base font-black text-slate-900 dark:text-white">قسم مبيعات الكروت</h2>
+                            <span className="px-2.5 py-0.5 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 text-[11px] font-black font-mono rounded-lg">
+                                {totalInvoicesCount} فاتورة
+                            </span>
+                        </div>
+                        <p className="text-[10px] sm:text-[11px] font-bold text-slate-400 mt-0.5">
+                            سجل فواتير مبيعات كروت الشبكة، فلترة وتصدير التقارير، ومعاينة وطباعة الفواتير
+                        </p>
+                    </div>
                 </div>
                 
-                <div className="flex items-center gap-3">
-                    {/* Filter Icon Toggle Button */}
+                {/* Compact Icon Buttons Toolbar (Side-by-side) */}
+                <div className="flex items-center gap-1.5 self-end sm:self-auto shrink-0">
+                    {/* Filter Toggle Icon Button */}
                     <button
                         onClick={() => setShowFilters(!showFilters)}
-                        className={`p-3 rounded-2xl flex items-center gap-2 font-black text-xs transition shadow-sm ${
+                        title="تصفية وفلترة الفواتير"
+                        aria-label="تصفية وفلترة"
+                        className={`w-9 h-9 sm:w-10 sm:h-10 rounded-xl relative flex items-center justify-center transition border ${
                             showFilters || startDate || endDate || searchText
-                                ? 'bg-emerald-600 text-white shadow-emerald-600/20'
-                                : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                                ? 'bg-emerald-600 text-white border-emerald-500 shadow-sm'
+                                : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 border-slate-200 dark:border-slate-700'
                         }`}
-                        title="فلترة الفواتير"
                     >
-                        <Filter size={18} />
-                        <span>فلترة وبحث</span>
+                        <Filter size={17} />
                         {(startDate || endDate || searchText) && (
-                            <span className="w-2 h-2 rounded-full bg-amber-300"></span>
+                            <span className="w-2 h-2 rounded-full bg-amber-300 absolute top-1.5 right-1.5 border border-emerald-600"></span>
                         )}
                     </button>
 
-                    {/* Export PDF Button */}
+                    {/* Export PDF Icon Button */}
                     <button
                         onClick={handleExportPDF}
                         disabled={filteredInvoices.length === 0}
-                        className="px-4 py-3 bg-slate-900 dark:bg-slate-800 hover:bg-slate-800 dark:hover:bg-slate-700 disabled:opacity-50 active:scale-95 text-white font-black text-xs rounded-2xl shadow-sm flex items-center gap-2 transition"
+                        title="طباعة وتصدير تقرير المبيعات PDF"
+                        aria-label="تصدير PDF"
+                        className="w-9 h-9 sm:w-10 sm:h-10 bg-slate-900 dark:bg-slate-800 hover:bg-slate-800 dark:hover:bg-slate-700 disabled:opacity-40 active:scale-95 text-white rounded-xl shadow-sm flex items-center justify-center transition border border-slate-700"
                     >
-                        <Printer size={16} />
-                        <span>تصدير PDF</span>
+                        <Printer size={17} />
                     </button>
                 </div>
             </div>
 
-            {/* Toggleable Filter Panel */}
+            {/* Compact Toggleable Filter Panel */}
             {showFilters && (
-                <div className="bg-white dark:bg-slate-900 p-5 rounded-3xl border border-emerald-200 dark:border-emerald-900/50 shadow-lg grid grid-cols-1 md:grid-cols-3 gap-4 animate-in slide-in-from-top-2 duration-200">
+                <div className="bg-white dark:bg-slate-900 p-3 sm:p-3.5 rounded-2xl border border-emerald-200 dark:border-emerald-900/50 shadow-sm grid grid-cols-1 sm:grid-cols-3 gap-2.5 animate-in slide-in-from-top-1 duration-150">
                     <div className="relative">
-                        <label className="block text-xs font-black text-slate-700 dark:text-slate-300 mb-2">بحث ذكي</label>
                         <div className="relative">
-                            <Search className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                            <Search className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
                             <input
                                 type="text"
-                                placeholder="اسم الموزع، رقم الفاتورة، الصنف..."
+                                placeholder="بحث: اسم الموزع، رقم الفاتورة، الصنف..."
                                 value={searchText}
                                 onChange={(e) => setSearchText(e.target.value)}
-                                className="w-full pr-10 pl-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl text-xs font-bold outline-none focus:border-emerald-600 text-slate-900 dark:text-white"
+                                className="w-full pr-8 pl-3 py-1.5 sm:py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold outline-none focus:border-emerald-600 text-slate-900 dark:text-white"
                             />
                             {searchText && (
-                                <button onClick={() => setSearchText('')} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-rose-500">
-                                    <X size={14} />
+                                <button onClick={() => setSearchText('')} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-rose-500">
+                                    <X size={13} />
                                 </button>
                             )}
                         </div>
                     </div>
 
-                    <div>
-                        <label className="block text-xs font-black text-slate-700 dark:text-slate-300 mb-2">من تاريخ</label>
+                    <div className="relative">
                         <div className="relative">
-                            <Calendar className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                            <Calendar className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
                             <input
                                 type="date"
                                 value={startDate}
                                 onChange={(e) => setStartDate(e.target.value)}
-                                className="w-full pr-10 pl-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl text-xs font-bold outline-none focus:border-emerald-600 text-slate-900 dark:text-white"
+                                className="w-full pr-8 pl-3 py-1.5 sm:py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold outline-none focus:border-emerald-600 text-slate-900 dark:text-white"
+                                title="من تاريخ"
                             />
                         </div>
                     </div>
 
-                    <div>
-                        <label className="block text-xs font-black text-slate-700 dark:text-slate-300 mb-2">إلى تاريخ</label>
+                    <div className="relative">
                         <div className="relative">
-                            <Calendar className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                            <Calendar className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
                             <input
                                 type="date"
                                 value={endDate}
                                 onChange={(e) => setEndDate(e.target.value)}
-                                className="w-full pr-10 pl-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl text-xs font-bold outline-none focus:border-emerald-600 text-slate-900 dark:text-white"
+                                className="w-full pr-8 pl-3 py-1.5 sm:py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold outline-none focus:border-emerald-600 text-slate-900 dark:text-white"
+                                title="إلى تاريخ"
                             />
                         </div>
                     </div>
@@ -273,30 +303,30 @@ export const CardSalesSection: React.FC<CardSalesSectionProps> = ({
             )}
 
             {/* Quick Statistics Cards */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                <div className="bg-white dark:bg-slate-900 p-4 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3">
+                <div className="bg-white dark:bg-slate-900 p-3 sm:p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm">
                     <span className="text-[10px] font-black text-slate-400">عدد الفواتير</span>
-                    <div className="text-lg font-black text-slate-950 dark:text-white mt-1">{totalInvoicesCount} فاتورة</div>
+                    <div className="text-sm sm:text-base font-black text-slate-950 dark:text-white mt-0.5">{totalInvoicesCount} فاتورة</div>
                 </div>
-                <div className="bg-white dark:bg-slate-900 p-4 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm">
+                <div className="bg-white dark:bg-slate-900 p-3 sm:p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm">
                     <span className="text-[10px] font-black text-slate-400">إجمالي الكروت المباعة</span>
-                    <div className="text-lg font-black text-emerald-600 dark:text-emerald-400 mt-1">{totalQtySold} كارت</div>
+                    <div className="text-sm sm:text-base font-black text-emerald-600 dark:text-emerald-400 mt-0.5">{totalQtySold} كارت</div>
                 </div>
-                <div className="bg-white dark:bg-slate-900 p-4 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm">
+                <div className="bg-white dark:bg-slate-900 p-3 sm:p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm">
                     <span className="text-[10px] font-black text-slate-400">مبيعات نقدية</span>
-                    <div className="text-lg font-black text-indigo-600 dark:text-indigo-400 mt-1">{cashTotal.toFixed(2)} ريال يمني</div>
+                    <div className="text-sm sm:text-base font-black text-indigo-600 dark:text-indigo-400 mt-0.5">{cashTotal.toFixed(2)} ر.ي</div>
                 </div>
-                <div className="bg-white dark:bg-slate-900 p-4 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm">
+                <div className="bg-white dark:bg-slate-900 p-3 sm:p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm">
                     <span className="text-[10px] font-black text-slate-400">مبيعات آجلة</span>
-                    <div className="text-lg font-black text-amber-600 dark:text-amber-400 mt-1">{creditTotal.toFixed(2)} ريال يمني</div>
+                    <div className="text-sm sm:text-base font-black text-amber-600 dark:text-amber-400 mt-0.5">{creditTotal.toFixed(2)} ر.ي</div>
                 </div>
             </div>
 
             {/* Invoices List with Collapsible Structured Tables per Invoice */}
-            <div className="space-y-3">
+            <div className="space-y-2 sm:space-y-2.5">
                 {paginatedInvoices.length === 0 ? (
-                    <div className="bg-white dark:bg-slate-900 p-12 rounded-3xl border border-slate-200 dark:border-slate-800 text-center text-slate-400 font-bold text-xs space-y-2">
-                        <FileText className="mx-auto text-slate-300 dark:text-slate-700" size={36} />
+                    <div className="bg-white dark:bg-slate-900 p-8 rounded-2xl border border-slate-200 dark:border-slate-800 text-center text-slate-400 font-bold text-xs space-y-2">
+                        <FileText className="mx-auto text-slate-300 dark:text-slate-700" size={32} />
                         <p>لا توجد فواتير مبيعات مطابقة.</p>
                     </div>
                 ) : (
@@ -305,22 +335,22 @@ export const CardSalesSection: React.FC<CardSalesSectionProps> = ({
                         return (
                             <div 
                                 key={inv.id}
-                                className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden hover:border-emerald-300 transition"
+                                className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden hover:border-emerald-300 transition"
                             >
                                 {/* Invoice Header Bar (Clickable to Expand/Collapse) */}
                                 <div 
                                     onClick={() => toggleExpand(inv.id)}
-                                    className="p-3.5 bg-slate-50 dark:bg-slate-800/50 border-b border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 cursor-pointer select-none"
+                                    className="p-2.5 sm:p-3 bg-slate-50 dark:bg-slate-800/50 border-b border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2 cursor-pointer select-none"
                                 >
-                                    <div className="flex items-center gap-3">
+                                    <div className="flex items-center gap-2.5">
                                         <div className="p-1 rounded-lg bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
-                                            {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                                            {isExpanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
                                         </div>
-                                        <span className="px-3 py-1 bg-emerald-600 text-white font-mono font-black text-xs rounded-xl shadow-sm">
-                                            فاتورة #{inv.invoiceNumber}
+                                        <span className="px-2.5 py-0.5 bg-emerald-600 text-white font-mono font-black text-[11px] rounded-lg shadow-sm">
+                                            #{inv.invoiceNumber}
                                         </span>
                                         <div>
-                                            <h4 className="font-black text-slate-900 dark:text-white text-xs flex items-center gap-2">
+                                            <h4 className="font-black text-slate-900 dark:text-white text-xs flex items-center gap-1.5">
                                                 <span>{inv.distributorName}</span>
                                                 <span className="text-[10px] text-slate-400 font-normal">({inv.totalQuantity} كارت)</span>
                                             </h4>
@@ -328,11 +358,15 @@ export const CardSalesSection: React.FC<CardSalesSectionProps> = ({
                                         </div>
                                     </div>
 
-                                    <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                                        <span className="font-mono font-black text-emerald-600 dark:text-emerald-400 text-xs">
+                                    <div className={`flex items-center gap-2 ${inv.status === 'cancelled' ? 'opacity-60' : ''}`} onClick={(e) => e.stopPropagation()}>
+                                        <span className={`font-mono font-black text-xs ${inv.status === 'cancelled' ? 'text-gray-500 line-through' : 'text-emerald-600 dark:text-emerald-400'}`}>
                                             {inv.totalAmount.toFixed(2)} ريال يمني
                                         </span>
-
+                                        {inv.status === 'cancelled' && (
+                                            <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">
+                                                ملغاة
+                                            </span>
+                                        )}
                                         <span className={`px-2.5 py-1 rounded-full text-[10px] font-black ${
                                             inv.paymentType === 'cash' 
                                                 ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300'
@@ -348,7 +382,7 @@ export const CardSalesSection: React.FC<CardSalesSectionProps> = ({
                                             <Eye size={13} />
                                             <span>عرض</span>
                                         </button>
-                                        {onEditInvoice && inv.invoiceNumber && (
+                                        {onEditInvoice && inv.status !== 'cancelled' && (
                                             <button
                                                 onClick={() => onEditInvoice(inv)}
                                                 className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-[10px] font-black inline-flex items-center gap-1.5 shadow-md shadow-blue-600/20 active:scale-95 transition"
@@ -356,9 +390,12 @@ export const CardSalesSection: React.FC<CardSalesSectionProps> = ({
                                                 <span>تعديل</span>
                                             </button>
                                         )}
-                                        {onCancelInvoice && inv.invoiceNumber && (
+                                        {onCancelInvoice && inv.status !== 'cancelled' && (
                                             <button
-                                                onClick={() => onCancelInvoice(inv)}
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    onCancelInvoice(inv);
+                                                }}
                                                 className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-[10px] font-black inline-flex items-center gap-1.5 shadow-md shadow-rose-600/20 active:scale-95 transition"
                                             >
                                                 <X size={13} />
