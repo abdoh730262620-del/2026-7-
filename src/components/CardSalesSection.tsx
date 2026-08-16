@@ -74,8 +74,8 @@ export const CardSalesSection: React.FC<CardSalesSectionProps> = ({
             const invNumber = getNumericInvoiceNumber(sale.invoiceNumber, sale.id);
             
             const key = sale.invoiceNumber 
-                ? `inv_${sale.invoiceNumber}` 
-                : `grp_${sale.dateTime}_${sale.distributorId || 'walkin'}_${sale.paymentType}`;
+                ? `inv_${sale.invoiceNumber}_${sale.status || 'completed'}` 
+                : `grp_${sale.dateTime}_${sale.distributorId || 'walkin'}_${sale.paymentType}_${sale.status || 'completed'}`;
 
             if (!groupedMap[key]) {
                 groupedMap[key] = {

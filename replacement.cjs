@@ -1,16 +1,21 @@
-const fs = require('fs');
+const { readFileSync, writeFileSync } = require('fs');
 
-const purchasePath = 'src/components/CardPurchaseModal.tsx';
-let pContent = fs.readFileSync(purchasePath, 'utf8');
+const pPath = 'src/components/CardPurchaseModal.tsx';
+let pContent = readFileSync(pPath, 'utf8');
 
-const pStartStr = "await runTransaction(db, async (transaction) => {";
-const pEndStr = "            // Trigger action modal with full compiled invoice";
-let pStart = pContent.indexOf(pStartStr);
-let pEnd = pContent.indexOf(pEndStr);
+const startBlock = "            await runTransaction(db, async (transaction) => {";
+const endBlock = "            // Trigger action modal with full compiled invoice";
 
-if (pStart > -1 && pEnd > -1) {
-    const newTransactionPurchase = `await runTransaction(db, async (transaction) => {
-                // --- PHASE 1: COMPUTE DELTAS ---
+let pStart = pContent.indexOf(startBlock);
+let pEnd = pContent.indexOf(endBlock);
+
+if (pStart === -1 || pEnd === -1) {
+    console.error("Could not find block in PurchaseModal");
+    process.exit(1);
+}
+
+const replacementCode = `            await runTransaction(db, async (transaction) => {
+                // --- PHASE 1: COMPUTE DELTAS AND COLLECT OLD DATA ---
                 let oldInvoiceTotal = 0;
                 let oldPaymentType = '';
                 let oldSupplierId = '';
@@ -36,17 +41,21 @@ if (pStart > -1 && pEnd > -1) {
 
                 const newItemsWithCats = cartItems.map(item => {
                     const catDoc = categories.find(c => c.name.trim() === item.categoryName.trim() || c.linkedSection?.trim() === item.categoryName.trim());
-                    return { ...item, catId: catDoc ? catDoc.id : null };
+                    // Generate a temp ID for new categories to track them
+                    const catId = catDoc ? catDoc.id : ('new_' + item.categoryName.trim());
+                    return { ...item, catId, isNewCat: !catDoc };
                 });
 
                 const stockDeltas = {};
                 for (const old of oldItems) {
-                    if (old.categoryId) stockDeltas[old.categoryId] = (stockDeltas[old.categoryId] || 0) - (old.quantity || 0);
+                    if (old.categoryId) {
+                        stockDeltas[old.categoryId] = (stockDeltas[old.categoryId] || 0) - (old.quantity || 0);
+                    }
                 }
                 
                 if (invoiceStatus === 'completed') {
                     for (const item of newItemsWithCats) {
-                        if (item.catId) stockDeltas[item.catId] = (stockDeltas[item.catId] || 0) + (item.quantity || 0);
+                        stockDeltas[item.catId] = (stockDeltas[item.catId] || 0) + (item.quantity || 0);
                     }
                 }
 
@@ -64,8 +73,14 @@ if (pStart > -1 && pEnd > -1) {
 
                 // --- PHASE 2: ALL READS ---
                 const categorySnaps = {};
+                for (const item of newItemsWithCats) {
+                    if (!item.isNewCat) {
+                        const ref = doc(db, 'card_categories', item.catId);
+                        if (!categorySnaps[item.catId]) categorySnaps[item.catId] = { ref, snap: await transaction.get(ref) };
+                    }
+                }
                 for (const catId of Object.keys(stockDeltas)) {
-                    if (stockDeltas[catId] !== 0) {
+                    if (!catId.startsWith('new_') && stockDeltas[catId] !== 0 && !categorySnaps[catId]) {
                         const ref = doc(db, 'card_categories', catId);
                         categorySnaps[catId] = { ref, snap: await transaction.get(ref) };
                     }
@@ -80,13 +95,48 @@ if (pStart > -1 && pEnd > -1) {
                 }
 
                 // --- PHASE 3: ALL WRITES ---
+                // 1. Delete old docs
                 for (const ref of oldDocsToDelete) transaction.delete(ref);
 
+                // 2. Map new categories to their actual Firestore IDs before saving
+                const newCatRefs = {};
+                if (invoiceStatus === 'completed') {
+                    for (const item of newItemsWithCats) {
+                        if (item.isNewCat && !newCatRefs[item.catId]) {
+                            const newCatRef = doc(collection(db, 'card_categories'));
+                            transaction.set(newCatRef, {
+                                tenantId,
+                                name: item.categoryName,
+                                wholesalePrice: item.unitPrice,
+                                retailPrice: item.unitPrice * 1.05,
+                                availableCount: item.quantity,
+                                createdAt: Date.now()
+                            });
+                            newCatRefs[item.catId] = newCatRef.id;
+
+                            const stockLogRef = doc(collection(db, 'card_stock_logs'));
+                            transaction.set(stockLogRef, {
+                                tenantId,
+                                categoryId: newCatRef.id,
+                                categoryName: item.categoryName,
+                                quantityAdded: item.quantity,
+                                userName: staffName,
+                                additionDate: \`\${dateStr} \${timeStr}\`,
+                                availableCountAfter: item.quantity,
+                                notes: \`إنشاء صنف جديد - فاتورة مشتريات #\${nextInvoiceNumber}\`,
+                                createdAt: Date.now()
+                            });
+                        }
+                    }
+                }
+
+                // 3. Create new purchase docs
                 for (const item of newItemsWithCats) {
+                    const finalCatId = item.isNewCat ? newCatRefs[item.catId] : item.catId;
                     const purchaseRef = doc(collection(db, 'card_purchases'));
                     transaction.set(purchaseRef, {
                         tenantId,
-                        categoryId: item.catId || '',
+                        categoryId: finalCatId || '',
                         categoryName: item.categoryName,
                         quantity: item.quantity,
                         purchaseType: 'supplier',
@@ -108,8 +158,11 @@ if (pStart > -1 && pEnd > -1) {
                     });
                 }
 
+                // 4. Update existing categories stock
                 if (invoiceStatus === 'completed') {
                     for (const catId of Object.keys(stockDeltas)) {
+                        if (catId.startsWith('new_')) continue; // Handled above
+                        
                         const delta = stockDeltas[catId];
                         if (delta !== 0 && categorySnaps[catId] && categorySnaps[catId].snap.exists()) {
                             const catRef = categorySnaps[catId].ref;
@@ -118,7 +171,6 @@ if (pStart > -1 && pEnd > -1) {
                             const newStock = currentStock + delta;
                             
                             const catUpdate = { availableCount: newStock, updatedAt: Date.now() };
-                            // Find unitPrice from newItemsWithCats to optionally update wholesalePrice
                             const matchingItem = newItemsWithCats.find(i => i.catId === catId);
                             if (matchingItem && autoUpdateCostPrice && matchingItem.unitPrice > 0) {
                                 catUpdate.wholesalePrice = matchingItem.unitPrice;
@@ -137,43 +189,10 @@ if (pStart > -1 && pEnd > -1) {
                                 notes: oldDocsToDelete.length > 0 ? \`تسوية كمية (تعديل فاتورة مشتريات #\${nextInvoiceNumber})\` : \`فاتورة مشتريات #\${nextInvoiceNumber}\`,
                                 createdAt: Date.now()
                             });
-                        } else if (delta !== 0 && (!categorySnaps[catId] || !categorySnaps[catId].snap.exists())) {
-                            // If category doesn't exist, we must create it!
-                            const newCatRef = doc(collection(db, 'card_categories'));
-                            const matchingItem = newItemsWithCats.find(i => i.catId === null && i.categoryName === catId); // This is tricky, we mapped catId to null if not found. Let's fix that below.
-                        }
-                    }
-                    
-                    // Handle creating NEW categories for items that didn't match any existing category
-                    for (const item of newItemsWithCats) {
-                        if (!item.catId) {
-                            const newCatRef = doc(collection(db, 'card_categories'));
-                            transaction.set(newCatRef, {
-                                tenantId,
-                                name: item.categoryName,
-                                wholesalePrice: item.unitPrice,
-                                retailPrice: item.unitPrice * 1.05,
-                                availableCount: item.quantity,
-                                createdAt: Date.now()
-                            });
-                            
-                            const stockLogRef = doc(collection(db, 'card_stock_logs'));
-                            transaction.set(stockLogRef, {
-                                tenantId,
-                                categoryId: newCatRef.id,
-                                categoryName: item.categoryName,
-                                quantityAdded: item.quantity,
-                                userName: staffName,
-                                additionDate: \`\${dateStr} \${timeStr}\`,
-                                availableCountAfter: item.quantity,
-                                notes: \`إنشاء صنف جديد - فاتورة مشتريات #\${nextInvoiceNumber}\`,
-                                createdAt: Date.now()
-                            });
-                            // We also need to update the purchase doc with the new categoryId... 
-                            // But we already wrote the purchase doc! 
                         }
                     }
 
+                    // 5. Update supplier balances
                     for (const suppId of Object.keys(supplierDeltas)) {
                         const delta = supplierDeltas[suppId];
                         if (delta !== 0 && supplierSnaps[suppId] && supplierSnaps[suppId].snap.exists()) {
@@ -186,6 +205,7 @@ if (pStart > -1 && pEnd > -1) {
                         }
                     }
 
+                    // 6. Apply cashbox diff
                     if (netCashboxOutflow !== 0) {
                         const cashboxRef = doc(collection(db, 'card_cashbox'));
                         const isIncome = netCashboxOutflow < 0; 
@@ -204,7 +224,7 @@ if (pStart > -1 && pEnd > -1) {
                         });
                     }
 
-                    // Only send notification if it's a NEW invoice
+                    // 7. Notification
                     if (oldDocsToDelete.length === 0) {
                         const notifRef = doc(collection(db, 'notifications'));
                         transaction.set(notifRef, {
@@ -226,7 +246,7 @@ if (pStart > -1 && pEnd > -1) {
                 }
             });
 `;
-    // Wait, the newItemsWithCats logic has a bug: if item.catId is null, it won't be in stockDeltas.
-    // Also, if we write the purchase doc first, we don't know the new category ID.
-    // Let's rewrite the replacement perfectly.
-}
+
+writeFileSync(pPath, pContent.slice(0, pStart) + replacementCode + pContent.slice(pEnd));
+console.log("Purchase replaced successfully");
+

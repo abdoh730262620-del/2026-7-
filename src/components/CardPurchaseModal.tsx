@@ -274,13 +274,6 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
         const timeStr = now.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
 
         try {
-            if (editingInvoice && onReverseInvoice) {
-                const reversed = await onReverseInvoice();
-                if (!reversed) {
-                    throw new Error('فشل إلغاء الفاتورة السابقة أثناء التعديل.');
-                }
-            }
-
             // Generate purely numeric invoice number
             let nextInvoiceNumber = '';
             if (editingInvoice && editingInvoice.invoiceNumber) {
@@ -304,47 +297,124 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
             }
 
             await runTransaction(db, async (transaction) => {
-                // 1. READ ALL CATEGORIES FIRST (only if completed)
-                const categoryDocs = [];
-                if (invoiceStatus === 'completed') {
-                    for (const item of cartItems) {
-                        const catDoc = categories.find(c => c.name.trim() === item.categoryName.trim() || c.linkedSection?.trim() === item.categoryName.trim());
-                        if (catDoc) {
-                            const catRef = doc(db, 'card_categories', catDoc.id);
-                            const snap = await transaction.get(catRef);
-                            categoryDocs.push({ item, ref: catRef, snap, exists: true });
-                        } else {
-                            categoryDocs.push({ item, ref: null, snap: null, exists: false });
+                // --- PHASE 1: COMPUTE DELTAS AND COLLECT OLD DATA ---
+                let oldInvoiceTotal = 0;
+                let oldPaymentType = '';
+                let oldSupplierId = '';
+                const oldItems = [];
+                const oldDocsToDelete = [];
+                let oldCreatedAt = Date.now();
+                
+                if (editingInvoice && editingInvoice.docIds) {
+                    for (const docId of editingInvoice.docIds) {
+                        const oldDocRef = doc(db, 'card_purchases', docId);
+                        const oldDocSnap = await transaction.get(oldDocRef);
+                        if (oldDocSnap.exists() && oldDocSnap.data().status !== 'cancelled') {
+                            const data = oldDocSnap.data();
+                            oldDocsToDelete.push(oldDocRef);
+                            oldItems.push(data);
+                            oldInvoiceTotal += (data.totalAmount || 0);
+                            oldPaymentType = data.paymentType;
+                            oldSupplierId = data.supplierId || '';
+                            if (data.createdAt) oldCreatedAt = data.createdAt;
                         }
                     }
                 }
 
-                let supplierRef = null;
-                let supplierSnap = null;
-                if (invoiceStatus === 'completed' && paymentType === 'credit' && selectedSupplierId) {
-                    supplierRef = doc(db, 'card_suppliers', selectedSupplierId);
-                    supplierSnap = await transaction.get(supplierRef);
+                const cleanName = (s?: string) => (s || '').replace(/فئة|كروت|كرت|ريال|\s+/g, '').toLowerCase();
+
+                const newItemsWithCats = cartItems.map(item => {
+                    // 1. Match by item.categoryId directly if present
+                    let catDoc = item.categoryId ? categories.find(c => c.id === item.categoryId) : undefined;
+                    
+                    // 2. Match by exact name or linkedSection
+                    if (!catDoc) {
+                        catDoc = categories.find(c => 
+                            c.name.trim() === item.categoryName.trim() || 
+                            c.linkedSection?.trim() === item.categoryName.trim()
+                        );
+                    }
+                    
+                    // 3. Match by cleaned normalized name
+                    if (!catDoc) {
+                        const itemClean = cleanName(item.categoryName);
+                        catDoc = categories.find(c => 
+                            cleanName(c.name) === itemClean || 
+                            cleanName(c.linkedSection) === itemClean
+                        );
+                    }
+
+                    // Generate a temp ID for new categories to track them
+                    const catId = catDoc ? catDoc.id : (item.categoryId || ('new_' + item.categoryName.trim()));
+                    return { ...item, catId, isNewCat: !catDoc && !item.categoryId };
+                });
+
+                const stockDeltas: Record<string, number> = {};
+                for (const old of oldItems) {
+                    let oldCatId = old.categoryId;
+                    if (!oldCatId && old.categoryName) {
+                        const matched = categories.find(c => 
+                            c.name.trim() === old.categoryName.trim() || 
+                            c.linkedSection?.trim() === old.categoryName.trim() ||
+                            cleanName(c.name) === cleanName(old.categoryName)
+                        );
+                        if (matched) oldCatId = matched.id;
+                    }
+                    if (oldCatId) {
+                        stockDeltas[oldCatId] = (stockDeltas[oldCatId] || 0) - (old.quantity || 0);
+                    }
+                }
+                
+                if (invoiceStatus === 'completed') {
+                    for (const item of newItemsWithCats) {
+                        stockDeltas[item.catId] = (stockDeltas[item.catId] || 0) + (item.quantity || 0);
+                    }
                 }
 
-                // 2. ALL WRITES/UPDATES NEXT
-                if (invoiceStatus === 'completed') {
-                    for (const { item, ref, snap, exists } of categoryDocs) {
-                        let currentCategoryId = item.categoryId || '';
-                        let newStock = item.quantity;
+                const supplierDeltas = {};
+                if (oldPaymentType === 'credit' && oldSupplierId) {
+                    supplierDeltas[oldSupplierId] = (supplierDeltas[oldSupplierId] || 0) - oldInvoiceTotal;
+                }
+                if (invoiceStatus === 'completed' && paymentType === 'credit' && selectedSupplierId) {
+                    supplierDeltas[selectedSupplierId] = (supplierDeltas[selectedSupplierId] || 0) + invoiceTotal;
+                }
 
-                        if (exists && ref && snap && snap.exists()) {
-                            const catData = snap.data();
-                            newStock = (catData.availableCount || 0) + item.quantity;
-                            currentCategoryId = snap.id;
-                            const catUpdate: any = {
-                                availableCount: newStock,
-                                updatedAt: Date.now()
-                            };
-                            if (autoUpdateCostPrice && item.unitPrice > 0) {
-                                catUpdate.wholesalePrice = item.unitPrice;
-                            }
-                            transaction.update(ref, catUpdate);
-                        } else {
+                let netCashboxOutflow = 0;
+                if (oldPaymentType === 'cash') netCashboxOutflow -= oldInvoiceTotal;
+                if (invoiceStatus === 'completed' && paymentType === 'cash') netCashboxOutflow += invoiceTotal;
+
+                // --- PHASE 2: ALL READS ---
+                const categorySnaps = {};
+                for (const item of newItemsWithCats) {
+                    if (!item.isNewCat) {
+                        const ref = doc(db, 'card_categories', item.catId);
+                        if (!categorySnaps[item.catId]) categorySnaps[item.catId] = { ref, snap: await transaction.get(ref) };
+                    }
+                }
+                for (const catId of Object.keys(stockDeltas)) {
+                    if (!catId.startsWith('new_') && stockDeltas[catId] !== 0 && !categorySnaps[catId]) {
+                        const ref = doc(db, 'card_categories', catId);
+                        categorySnaps[catId] = { ref, snap: await transaction.get(ref) };
+                    }
+                }
+
+                const supplierSnaps = {};
+                for (const suppId of Object.keys(supplierDeltas)) {
+                    if (supplierDeltas[suppId] !== 0) {
+                        const ref = doc(db, 'card_suppliers', suppId);
+                        supplierSnaps[suppId] = { ref, snap: await transaction.get(ref) };
+                    }
+                }
+
+                // --- PHASE 3: ALL WRITES ---
+                // 1. Delete old docs
+                for (const ref of oldDocsToDelete) transaction.delete(ref);
+
+                // 2. Map new categories to their actual Firestore IDs before saving
+                const newCatRefs = {};
+                if (invoiceStatus === 'completed') {
+                    for (const item of newItemsWithCats) {
+                        if (item.isNewCat && !newCatRefs[item.catId]) {
                             const newCatRef = doc(collection(db, 'card_categories'));
                             transaction.set(newCatRef, {
                                 tenantId,
@@ -354,58 +424,111 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                                 availableCount: item.quantity,
                                 createdAt: Date.now()
                             });
-                            newStock = item.quantity;
-                            currentCategoryId = newCatRef.id;
+                            newCatRefs[item.catId] = newCatRef.id;
+
+                            const stockLogRef = doc(collection(db, 'card_stock_logs'));
+                            transaction.set(stockLogRef, {
+                                tenantId,
+                                categoryId: newCatRef.id,
+                                categoryName: item.categoryName,
+                                quantityAdded: item.quantity,
+                                userName: staffName,
+                                additionDate: `${dateStr} ${timeStr}`,
+                                availableCountAfter: item.quantity,
+                                notes: `إنشاء صنف جديد - فاتورة مشتريات #${nextInvoiceNumber}`,
+                                createdAt: Date.now()
+                            });
                         }
+                    }
+                }
 
-                        // Create stock log
-                        const stockLogRef = doc(collection(db, 'card_stock_logs'));
-                        transaction.set(stockLogRef, {
-                            tenantId,
-                            categoryId: currentCategoryId,
-                            categoryName: item.categoryName,
-                            quantityAdded: item.quantity,
-                            userName: staffName,
-                            additionDate: `${dateStr} ${timeStr}`,
-                            availableCountAfter: newStock,
-                            createdAt: Date.now()
-                        });
+                // 3. Create new purchase docs
+                for (const item of newItemsWithCats) {
+                    const finalCatId = item.isNewCat ? newCatRefs[item.catId] : item.catId;
+                    const purchaseRef = doc(collection(db, 'card_purchases'));
+                    transaction.set(purchaseRef, {
+                        tenantId,
+                        categoryId: finalCatId || '',
+                        categoryName: item.categoryName,
+                        quantity: item.quantity,
+                        purchaseType: 'supplier',
+                        paymentType,
+                        supplierId: selectedSupplierId || '',
+                        supplierName: selectedSupplier ? selectedSupplier.name : 'مورد نقدي عام',
+                        unitPrice: item.unitPrice,
+                        totalAmount: item.totalAmount,
+                        month: yearMonth,
+                        date: dateStr,
+                        dateTime: `${dateStr} ${timeStr}`,
+                        userName: staffName,
+                        sellerName: staffName,
+                        createdByName: staffName,
+                        invoiceNumber: nextInvoiceNumber,
+                        status: invoiceStatus,
+                        notes: notes.trim(),
+                        createdAt: oldDocsToDelete.length > 0 ? oldCreatedAt : Date.now()
+                    });
+                }
 
-                        // Add Card Purchase record
-                        const purchaseRef = doc(collection(db, 'card_purchases'));
-                        transaction.set(purchaseRef, {
-                            tenantId,
-                            categoryId: currentCategoryId,
-                            categoryName: item.categoryName,
-                            quantity: item.quantity,
-                            purchaseType: 'supplier',
-                            paymentType,
-                            supplierId: selectedSupplierId || '',
-                            supplierName: selectedSupplier ? selectedSupplier.name : 'مورد نقدي عام',
-                            unitPrice: item.unitPrice,
-                            totalAmount: item.totalAmount,
-                            month: yearMonth,
-                            date: dateStr,
-                            dateTime: `${dateStr} ${timeStr}`,
-                            userName: staffName,
-                            sellerName: staffName,
-                            createdByName: staffName,
-                            invoiceNumber: nextInvoiceNumber,
-                            status: invoiceStatus,
-                            notes: notes.trim(),
-                            createdAt: Date.now()
-                        });
+                // 4. Update existing categories stock
+                if (invoiceStatus === 'completed') {
+                    for (const catId of Object.keys(stockDeltas)) {
+                        if (catId.startsWith('new_')) continue; // Handled above
+                        
+                        const delta = stockDeltas[catId];
+                        if (delta !== 0 && categorySnaps[catId] && categorySnaps[catId].snap.exists()) {
+                            const catRef = categorySnaps[catId].ref;
+                            const catData = categorySnaps[catId].snap.data();
+                            const currentStock = catData.availableCount || 0;
+                            const newStock = currentStock + delta;
+                            
+                            const catUpdate: any = { availableCount: newStock, updatedAt: Date.now() };
+                            const matchingItem = newItemsWithCats.find(i => i.catId === catId);
+                            if (matchingItem && autoUpdateCostPrice && matchingItem.unitPrice > 0) {
+                                catUpdate.wholesalePrice = matchingItem.unitPrice;
+                            }
+                            transaction.update(catRef, catUpdate);
+
+                            const stockLogRef = doc(collection(db, 'card_stock_logs'));
+                            transaction.set(stockLogRef, {
+                                tenantId,
+                                categoryId: catId,
+                                categoryName: catData.name || 'فئة كروت',
+                                quantityAdded: delta,
+                                userName: staffName,
+                                additionDate: `${dateStr} ${timeStr}`,
+                                availableCountAfter: newStock,
+                                notes: oldDocsToDelete.length > 0 ? `تسوية كمية (تعديل فاتورة مشتريات #${nextInvoiceNumber})` : `فاتورة مشتريات #${nextInvoiceNumber}`,
+                                createdAt: Date.now()
+                            });
+                        }
                     }
 
-                    // Add to Cashbox if Cash
-                    if (paymentType === 'cash') {
+                    // 5. Update supplier balances
+                    for (const suppId of Object.keys(supplierDeltas)) {
+                        const delta = supplierDeltas[suppId];
+                        if (delta !== 0 && supplierSnaps[suppId] && supplierSnaps[suppId].snap.exists()) {
+                            const suppRef = supplierSnaps[suppId].ref;
+                            const currentBalance = supplierSnaps[suppId].snap.data().balance || 0;
+                            transaction.update(suppRef, {
+                                balance: currentBalance + delta,
+                                updatedAt: Date.now()
+                            });
+                        }
+                    }
+
+                    // 6. Apply cashbox diff
+                    if (netCashboxOutflow !== 0) {
                         const cashboxRef = doc(collection(db, 'card_cashbox'));
+                        const isIncome = netCashboxOutflow < 0; 
+                        const absAmount = Math.abs(netCashboxOutflow);
+                        
                         transaction.set(cashboxRef, {
                             tenantId,
-                            type: 'supplier_purchase_cash',
-                            title: `فاتورة شراء كروت نقدية (${totalCardsQty} كارت) - المورد: ${selectedSupplier ? selectedSupplier.name : 'نقدي'}`,
-                            amount: invoiceTotal,
-                            isIncome: false,
+                            type: isIncome ? 'manual_in' : 'supplier_purchase_cash',
+                            title: oldDocsToDelete.length > 0 ? `تسوية تعديل فاتورة مشتريات #${nextInvoiceNumber} (فارق السعر)` : `فاتورة شراء كروت نقدية (${totalCardsQty} كارت)`,
+                            amount: absAmount,
+                            isIncome: isIncome,
                             date: dateStr,
                             dateTime: `${dateStr} ${timeStr}`,
                             userName: staffName,
@@ -413,62 +536,27 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                         });
                     }
 
-                    // Update Supplier Balance if Credit
-                    if (paymentType === 'credit' && supplierRef && supplierSnap && supplierSnap.exists()) {
-                        const currentBalance = supplierSnap.data().balance || 0;
-                        transaction.update(supplierRef, {
-                            balance: currentBalance + invoiceTotal,
-                            updatedAt: Date.now()
-                        });
-                    }
-
-                    // Manager Invoice Notification
-                    const notifRef = doc(collection(db, 'notifications'));
-                    transaction.set(notifRef, {
-                        tenantId,
-                        type: 'invoice_created',
-                        invoiceType: 'card_purchase',
-                        invoiceNumber: String(nextInvoiceNumber),
-                        amount: invoiceTotal,
-                        createdById: appUser?.uid || '',
-                        createdByName: staffName,
-                        createdByRole: appUser?.role || 'user',
-                        recipientRole: 'admin',
-                        createdAt: Date.now(),
-                        read: false,
-                        title: `🧾 فاتورة شراء كروت جديدة #${nextInvoiceNumber}`,
-                        body: `قام المستخدم (${staffName}) بإنشاء فاتورة شراء كروت بمبلغ ${invoiceTotal.toLocaleString('ar-SA')} ريال يمني`
-                    });
-                } else {
-                    // For draft or cancelled, we only save the purchase records themselves
-                    for (const item of cartItems) {
-                        const purchaseRef = doc(collection(db, 'card_purchases'));
-                        transaction.set(purchaseRef, {
+                    // 7. Notification
+                    if (oldDocsToDelete.length === 0) {
+                        const notifRef = doc(collection(db, 'notifications'));
+                        transaction.set(notifRef, {
                             tenantId,
-                            categoryId: item.categoryId || '',
-                            categoryName: item.categoryName,
-                            quantity: item.quantity,
-                            purchaseType: 'supplier',
-                            paymentType,
-                            supplierId: selectedSupplierId || '',
-                            supplierName: selectedSupplier ? selectedSupplier.name : 'مورد نقدي عام',
-                            unitPrice: item.unitPrice,
-                            totalAmount: item.totalAmount,
-                            month: yearMonth,
-                            date: dateStr,
-                            dateTime: `${dateStr} ${timeStr}`,
-                            userName: staffName,
-                            sellerName: staffName,
+                            type: 'invoice_created',
+                            invoiceType: 'card_purchase',
+                            invoiceNumber: String(nextInvoiceNumber),
+                            amount: invoiceTotal,
+                            createdById: appUser?.uid || '',
                             createdByName: staffName,
-                            invoiceNumber: nextInvoiceNumber,
-                            status: invoiceStatus,
-                            notes: notes.trim(),
-                            createdAt: Date.now()
+                            createdByRole: appUser?.role || 'user',
+                            recipientRole: 'admin',
+                            createdAt: Date.now(),
+                            read: false,
+                            title: `🧾 فاتورة شراء كروت جديدة #${nextInvoiceNumber}`,
+                            body: `قام المستخدم (${staffName}) بإنشاء فاتورة شراء كروت بمبلغ ${invoiceTotal.toLocaleString('ar-SA')} ريال يمني`
                         });
                     }
                 }
             });
-
             // Trigger action modal with full compiled invoice
             if (onInvoiceCreated) {
                 onInvoiceCreated({

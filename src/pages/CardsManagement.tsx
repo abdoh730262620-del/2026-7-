@@ -402,7 +402,7 @@ export default function CardsManagement() {
             const batch = writeBatch(db);
             const categoryUpdates: Record<string, number> = {};
             const partyUpdates: Record<string, number> = {};
-            let cashTotal = 0;
+            let cashboxEntriesToAdd: Array<{ type: string; amount: number; isIncome: boolean; title: string }> = [];
             let displayInvNum = targetInvNum || targetRawInvNum || '';
 
             // Process every item in the invoice
@@ -419,9 +419,24 @@ export default function CardsManagement() {
                     cancelledBy: appUser?.name || 'النظام'
                 }, { merge: true });
 
-                // Calculate stock restoration
-                const qty = Math.abs(docData.quantity || 0);
-                if (qty > 0) {
+                // 1. Calculate stock restoration
+                // docData.quantity is positive for normal, negative for returns in Sales/Purchases
+                const rawQty = docData.quantity || 0;
+                let qtyChange = 0;
+                
+                if (type === 'sale') {
+                    // Sale: qty=10 (subtracted 10). Cancel should add 10.
+                    // Return Sale: qty=-10 (added 10). Cancel should subtract 10.
+                    // So qtyChange = rawQty
+                    qtyChange = rawQty;
+                } else {
+                    // Purchase: qty=10 (added 10). Cancel should subtract 10.
+                    // Return Purchase: qty=-10 (subtracted 10). Cancel should add 10.
+                    // So qtyChange = -rawQty
+                    qtyChange = -rawQty;
+                }
+
+                if (qtyChange !== 0) {
                     let catId = docData.categoryId;
                     if (!catId && docData.categoryName) {
                         const matchedCat = categories.find(c =>
@@ -430,29 +445,55 @@ export default function CardsManagement() {
                         );
                         if (matchedCat) catId = matchedCat.id;
                     }
-                    
                     if (catId) {
-                        const qtyChange = type === 'sale' ? qty : -qty;
                         categoryUpdates[catId] = (categoryUpdates[catId] || 0) + qtyChange;
                     }
                 }
 
-                // Calculate party debt/balance adjustment
-                const itemTotal = Math.abs(docData.netTotal || docData.totalAmount || 0);
-                if (docData.paymentType === 'credit') {
+                // 2. Calculate party debt/balance and cashbox adjustment
+                const rawTotal = docData.netTotal || docData.totalAmount || 0;
+                const absTotal = Math.abs(rawTotal);
+
+                if (docData.paymentType === 'cash') {
+                    if (absTotal > 0) {
+                        if (type === 'sale') {
+                            // Sale: rawTotal=100 (Income). Cancel needs Expense 100.
+                            // Return Sale: rawTotal=-100 (Expense). Cancel needs Income 100.
+                            const isReversalIncome = rawTotal < 0;
+                            cashboxEntriesToAdd.push({
+                                type: isReversalIncome ? 'manual_in' : 'manual_out',
+                                amount: absTotal,
+                                isIncome: isReversalIncome,
+                                title: `إلغاء فاتورة مبيعات #${displayInvNum || docData.invoiceNumber || '---'} (${isReversalIncome ? 'إرجاع مرتجع' : 'عكس بيع'})`
+                            });
+                        } else {
+                            // Purchase: rawTotal=100 (Expense). Cancel needs Income 100.
+                            // Return Purchase: rawTotal=-100 (Income). Cancel needs Expense 100.
+                            const isReversalIncome = rawTotal > 0;
+                            cashboxEntriesToAdd.push({
+                                type: isReversalIncome ? 'manual_in' : 'manual_out',
+                                amount: absTotal,
+                                isIncome: isReversalIncome,
+                                title: `إلغاء فاتورة مشتريات #${displayInvNum || docData.invoiceNumber || '---'} (${isReversalIncome ? 'عكس شراء' : 'إرجاع مرتجع'})`
+                            });
+                        }
+                    }
+                } else if (docData.paymentType === 'credit') {
                     const partyId = type === 'sale' ? docData.distributorId : docData.supplierId;
                     if (partyId && partyId !== 'walkin' && partyId !== 'cash') {
-                        partyUpdates[partyId] = (partyUpdates[partyId] || 0) + itemTotal;
+                        // For both: Cancellation reverses the sign of the original transaction.
+                        // Normal Sale: rawTotal=100 (Debt increased). Cancellation needs -100 (Debt decreased).
+                        // Return Sale: rawTotal=-100 (Debt decreased). Cancellation needs +100 (Debt increased).
+                        // Normal Purchase: rawTotal=100 (Debt increased). Cancellation needs -100 (Debt decreased).
+                        // Return Purchase: rawTotal=-100 (Debt decreased). Cancellation needs +100 (Debt increased).
+                        partyUpdates[partyId] = (partyUpdates[partyId] || 0) - rawTotal;
                     }
-                } else if (docData.paymentType === 'cash') {
-                    cashTotal += itemTotal;
                 }
             }
 
-            // Restore category stock in batch and record stock log
+            // A. Restore category stock in batch and record stock log
             for (const catId of Object.keys(categoryUpdates)) {
                 if (categoryUpdates[catId] !== 0) {
-                    console.log(`[reverseCardInvoice] Updating stock for cat ${catId} by ${categoryUpdates[catId]}`);
                     batch.set(doc(db, 'card_categories', catId), {
                         availableCount: increment(categoryUpdates[catId])
                     }, { merge: true });
@@ -460,7 +501,6 @@ export default function CardsManagement() {
                     const matchedCat = categories.find(c => c.id === catId);
                     const catName = matchedCat ? matchedCat.name : 'فئة كروت';
                     const currentCount = matchedCat ? (matchedCat.availableCount || 0) : 0;
-                    const newCount = currentCount + categoryUpdates[catId];
 
                     const stockLogRef = doc(collection(db, 'card_stock_logs'));
                     batch.set(stockLogRef, {
@@ -470,34 +510,32 @@ export default function CardsManagement() {
                         quantityAdded: categoryUpdates[catId],
                         userName: appUser?.name || 'النظام',
                         additionDate: new Date().toISOString().replace('T', ' ').slice(0, 19),
-                        availableCountAfter: newCount,
+                        availableCountAfter: currentCount + categoryUpdates[catId],
                         notes: `إلغاء فاتورة ${type === 'sale' ? 'مبيعات' : 'مشتريات'} رقم #${displayInvNum || '---'}`,
                         createdAt: Date.now()
                     });
                 }
             }
 
-            // Adjust distributor / supplier balances in batch
+            // B. Adjust distributor / supplier balances in batch
             const partyCollection = type === 'sale' ? 'card_distributors' : 'card_suppliers';
             for (const partyId of Object.keys(partyUpdates)) {
-                if (partyUpdates[partyId] > 0) {
-                    console.log(`[reverseCardInvoice] Updating party ${partyId} balance by -${partyUpdates[partyId]}`);
+                if (partyUpdates[partyId] !== 0) {
                     batch.set(doc(db, partyCollection, partyId), {
-                        balance: increment(-partyUpdates[partyId])
+                        balance: increment(partyUpdates[partyId])
                     }, { merge: true });
                 }
             }
 
-            // If cash transactions were cancelled, adjust Card Sales Cashbox
-            if (cashTotal > 0) {
-                console.log(`[reverseCardInvoice] Reversing cash of ${cashTotal}`);
+            // C. Add cashbox reversal entries
+            for (const entry of cashboxEntriesToAdd) {
                 const cashboxRef = doc(collection(db, 'card_cashbox'));
                 batch.set(cashboxRef, {
                     tenantId,
-                    type: type === 'sale' ? 'manual_out' : 'manual_in',
-                    title: `إلغاء فاتورة ${type === 'sale' ? 'مبيعات' : 'مشتريات'} كروت #${displayInvNum || '---'}`,
-                    amount: cashTotal,
-                    isIncome: type === 'purchase',
+                    type: entry.type,
+                    title: entry.title,
+                    amount: entry.amount,
+                    isIncome: entry.isIncome,
                     date: new Date().toISOString().split('T')[0],
                     dateTime: new Date().toISOString().replace('T', ' ').slice(0, 19),
                     userName: appUser?.name || 'النظام',
@@ -1095,6 +1133,7 @@ export default function CardsManagement() {
                 transaction.set(saleRef, {
                     tenantId,
                     invoiceNumber: saleRef.id.slice(-6).toUpperCase(),
+                    categoryId: cat.id,
                     categoryName: catSnap.data().name,
                     quantity: saleIsReturn ? -qty : qty,
                     saleType: 'distributor',
@@ -1120,6 +1159,19 @@ export default function CardsManagement() {
                     updatedAt: Date.now()
                 });
 
+                const stockLogRef = doc(collection(db, 'card_stock_logs'));
+                transaction.set(stockLogRef, {
+                    tenantId,
+                    categoryId: cat.id,
+                    categoryName: catSnap.data().name,
+                    quantityAdded: saleIsReturn ? qty : -qty,
+                    userName: appUser?.name || appUser?.email || 'المدير',
+                    additionDate: `${dateStr} ${timeStr}`,
+                    availableCountAfter: newStock,
+                    notes: saleIsReturn ? `مرتجع مبيعات كروت للموزع (${distSnap.data().name})` : `مبيعات كروت للموزع (${distSnap.data().name})`,
+                    createdAt: Date.now()
+                });
+
                 if (isCash) {
                     const cashboxRef = doc(collection(db, 'card_cashbox'));
                     transaction.set(cashboxRef, {
@@ -1143,18 +1195,6 @@ export default function CardsManagement() {
                         updatedAt: Date.now()
                     });
                 }
-
-                const stockLogRef = doc(collection(db, 'card_stock_logs'));
-                transaction.set(stockLogRef, {
-                    tenantId,
-                    categoryId: cat.id,
-                    categoryName: catSnap.data().name,
-                    quantityAdded: saleIsReturn ? qty : -qty,
-                    userName: appUser?.name || appUser?.email || 'المدير',
-                    additionDate: `${dateStr} ${timeStr}`,
-                    availableCountAfter: newStock,
-                    createdAt: Date.now()
-                });
             });
 
             const invRef = saleRef.id.slice(-6).toUpperCase();
@@ -1324,6 +1364,19 @@ export default function CardsManagement() {
                     updatedAt: Date.now()
                 });
 
+                const stockLogRef = doc(collection(db, 'card_stock_logs'));
+                transaction.set(stockLogRef, {
+                    tenantId,
+                    categoryId: cat.id,
+                    categoryName: catSnap.data().name,
+                    quantityAdded: purchaseIsReturn ? -qty : qty,
+                    userName: appUser?.name || appUser?.email || 'المدير',
+                    additionDate: `${dateStr} ${timeStr}`,
+                    availableCountAfter: newStock,
+                    notes: purchaseIsReturn ? `مرتجع مشتريات #${purchaseRef.id.slice(-6).toUpperCase()}` : `فاتورة مشتريات #${purchaseRef.id.slice(-6).toUpperCase()}`,
+                    createdAt: Date.now()
+                });
+
                 if (isCash) {
                     const cashboxRef = doc(collection(db, 'card_cashbox'));
                     transaction.set(cashboxRef, {
@@ -1347,18 +1400,6 @@ export default function CardsManagement() {
                         updatedAt: Date.now()
                     });
                 }
-
-                const stockLogRef = doc(collection(db, 'card_stock_logs'));
-                transaction.set(stockLogRef, {
-                    tenantId,
-                    categoryId: cat.id,
-                    categoryName: catSnap.data().name,
-                    quantityAdded: purchaseIsReturn ? -qty : qty,
-                    userName: appUser?.name || appUser?.email || 'المدير',
-                    additionDate: `${dateStr} ${timeStr}`,
-                    availableCountAfter: newStock,
-                    createdAt: Date.now()
-                });
             });
 
             const invRef = purchaseRef.id.slice(-6).toUpperCase();
@@ -1496,6 +1537,28 @@ export default function CardsManagement() {
         }
     };
 
+    const handleDeleteCashboxEntry = async (entryId: string) => {
+        if (!appUser || appUser.role !== 'admin') {
+            alert('عذراً، لا تملك الصلاحية لحذف السجلات. هذه الميزة مخصصة لمدير النظام.');
+            return;
+        }
+        
+        setConfirmDialog({
+            isOpen: true,
+            title: 'تأكيد الحذف',
+            message: 'هل أنت متأكد من حذف هذه الحركة من الصندوق نهائياً؟ هذا الإجراء لا يمكن التراجع عنه.',
+            onCancel: () => setConfirmDialog(prev => ({ ...prev, isOpen: false })),
+            onConfirm: async () => {
+                setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+                try {
+                    await deleteDoc(doc(db, 'card_cashbox', entryId));
+                } catch (error) {
+                    handleFirestoreError(error, OperationType.WRITE, 'card_cashbox');
+                }
+            }
+        });
+    };
+
     // Calculate Cashbox total balance
     const cashboxBalance = cashboxEntries.reduce((acc, entry) => {
         return entry.isIncome ? acc + entry.amount : acc - entry.amount;
@@ -1589,6 +1652,7 @@ export default function CardsManagement() {
     }, [filteredMonthSales]);
 
     // Monthly Report Calculations per category (Network Cards only)
+    // Monthly Report Calculations per category (Network Cards only)
     const monthlyCategoryReport = useMemo(() => {
         const isNetworkCategory = (c: CardCategory) => {
             if (c.linkedSection && c.linkedSection.trim().length > 0) return true;
@@ -1619,49 +1683,9 @@ export default function CardsManagement() {
 
             const normName = c.name.trim().toLowerCase();
             const key = c.id ? `id_${c.id}` : `name_${normName}`;
-            if (!seenCatKeys.has(key) && !seenCatKeys.has(`name_${normName}`)) {
+            if (!seenCatKeys.has(key)) {
                 seenCatKeys.add(key);
-                seenCatKeys.add(`name_${normName}`);
                 uniqueCategories.push(c);
-            }
-        });
-
-        const defaultDenoms = [
-            'فئة 100 ريال', 'فئة 200 ريال', 'فئة 250 ريال', 'فئة 500 ريال',
-            'فئة 1000 ريال', 'فئة 1500 ريال', 'فئة 3000 ريال', 'فئة 5000 ريال'
-        ];
-
-        // 2. Also ensure default network denominations with sales are included if not present
-        defaultDenoms.forEach(denom => {
-            const denomNorm = denom.toLowerCase();
-            const cleanDenom = denom.replace(/فئة|كروت|كرت|ريال|\s+/g, '').toLowerCase();
-
-            const isCovered = uniqueCategories.some(c => {
-                const cNorm = (c.name || '').trim().toLowerCase();
-                const lNorm = (c.linkedSection || '').trim().toLowerCase();
-                return cNorm === denomNorm || lNorm === denomNorm ||
-                    cNorm.replace(/فئة|كروت|كرت|ريال|\s+/g, '') === cleanDenom ||
-                    lNorm.replace(/فئة|كروت|كرت|ريال|\s+/g, '') === cleanDenom;
-            });
-
-            if (!isCovered) {
-                const hasSales = filteredMonthSales.some(s => {
-                    const sNorm = (s.categoryName || '').trim().toLowerCase();
-                    const cleanSale = sNorm.replace(/فئة|كروت|كرت|ريال|\s+/g, '');
-                    return sNorm === denomNorm || (cleanSale && cleanSale === cleanDenom);
-                });
-
-                if (hasSales) {
-                    uniqueCategories.push({
-                        id: `denom_${denom}`,
-                        tenantId: tenantId,
-                        name: denom,
-                        wholesalePrice: 0,
-                        retailPrice: 0,
-                        availableCount: 0
-                    });
-                    seenCatKeys.add(`name_${denomNorm}`);
-                }
             }
         });
 
@@ -1703,7 +1727,7 @@ export default function CardsManagement() {
                 creditAmountTotal,
                 totalAmount: cashAmountTotal + creditAmountTotal
             };
-        });
+        }).filter(r => r.totalQty > 0 || r.totalAmount > 0);
     }, [categories, filteredMonthSales]);
 
     const totalMonthCashQty = monthlyCategoryReport.reduce((acc, r) => acc + r.cashQty, 0);
@@ -4092,7 +4116,7 @@ export default function CardsManagement() {
 
                     {/* TAB 1: Categories Full Width Structured Table matching CardCashboxSection */}
                     {monthlySalesTab === 'categories' && (
-                        <div className="-mx-4 sm:-mx-6 bg-white dark:bg-slate-900 border-y border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden animate-in fade-in duration-150">
+                        <div className="-mx-4 sm:-mx-6 lg:-mx-8 bg-white dark:bg-slate-900 border-y border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden animate-in fade-in duration-150">
                             {monthlyCategoryReport.length === 0 ? (
                                 <div className="p-8 text-center text-slate-400 font-bold text-xs">
                                     لا توجد مبيعات مسجلة في هذا الشهر حتى الآن.
@@ -4102,7 +4126,7 @@ export default function CardsManagement() {
                                     <table className="w-full text-right text-[11px] sm:text-xs">
                                         <thead className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400">
                                             <tr>
-                                                <th className="py-2.5 sm:py-3.5 px-1 sm:px-3 font-black text-center w-6 sm:w-10">#</th>
+                                                <th className="py-2.5 sm:py-3.5 px-1 sm:px-3 font-black text-center w-6 sm:w-10 hidden sm:table-cell">#</th>
                                                 <th className="py-2.5 sm:py-3.5 px-1.5 sm:px-3 font-black">فئة الكرت</th>
                                                 <th className="py-2.5 sm:py-3.5 px-1 sm:px-2 font-black text-center">
                                                     <span className="hidden sm:inline">مبيعات نقدية</span>
@@ -4120,7 +4144,7 @@ export default function CardsManagement() {
                                                     <span className="hidden sm:inline">إجمالي الصافي</span>
                                                     <span className="sm:hidden">الصافي</span>
                                                 </th>
-                                                <th className="py-2.5 sm:py-3.5 px-1 sm:px-2 font-black text-center w-10 sm:w-24">النسبة</th>
+                                                <th className="py-2.5 sm:py-3.5 px-1 sm:px-2 font-black text-center w-10 sm:w-24 hidden sm:table-cell">النسبة</th>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-slate-800 dark:text-slate-200">
@@ -4128,23 +4152,23 @@ export default function CardsManagement() {
                                                 const percent = totalMonthOverallNet > 0 ? (r.totalAmount / totalMonthOverallNet) * 100 : 0;
                                                 return (
                                                     <tr key={r.categoryName} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition font-bold">
-                                                        <td className="py-2.5 px-1 text-center font-mono text-slate-400 text-[10px] sm:text-[11px]">{idx + 1}</td>
-                                                        <td className="py-2.5 px-1.5 sm:px-3">
+                                                        <td className="py-2.5 px-1 text-center font-mono text-slate-400 text-[10px] sm:text-[11px] hidden sm:table-cell">{idx + 1}</td>
+                                                        <td className="py-2.5 px-1.5 sm:px-3 text-right">
                                                             <div className="flex items-center gap-1.5">
                                                                 <div className="w-1.5 h-4 bg-emerald-500 rounded-full shrink-0" />
-                                                                <span className="font-black text-slate-900 dark:text-white text-[11px] sm:text-sm truncate">{r.categoryName}</span>
+                                                                <span className="font-black text-slate-900 dark:text-white text-[10px] sm:text-sm truncate block">{r.categoryName}</span>
                                                             </div>
                                                         </td>
                                                         <td className="py-2.5 px-1 sm:px-2 text-center">
                                                             <div className="flex flex-col items-center leading-tight">
                                                                 <span className="font-mono font-black text-emerald-600 dark:text-emerald-400 text-[10px] sm:text-xs">{r.cashQty}</span>
-                                                                <span className="text-[9px] sm:text-[10px] text-slate-400 font-mono">{r.cashAmountTotal.toFixed(0)}</span>
+                                                                <span className="hidden sm:block text-[9px] sm:text-[10px] text-slate-400 font-mono">{r.cashAmountTotal.toFixed(0)}</span>
                                                             </div>
                                                         </td>
                                                         <td className="py-2.5 px-1 sm:px-2 text-center">
                                                             <div className="flex flex-col items-center leading-tight">
                                                                 <span className="font-mono font-black text-amber-600 dark:text-amber-400 text-[10px] sm:text-xs">{r.creditQty}</span>
-                                                                <span className="text-[9px] sm:text-[10px] text-slate-400 font-mono">{r.creditAmountTotal.toFixed(0)}</span>
+                                                                <span className="hidden sm:block text-[9px] sm:text-[10px] text-slate-400 font-mono">{r.creditAmountTotal.toFixed(0)}</span>
                                                             </div>
                                                         </td>
                                                         <td className="py-2.5 px-1 sm:px-2 text-center">
@@ -4154,10 +4178,10 @@ export default function CardsManagement() {
                                                         </td>
                                                         <td className="py-2.5 px-1.5 sm:px-3 text-left">
                                                             <span className="font-mono font-black text-slate-900 dark:text-white text-[10px] sm:text-xs whitespace-nowrap">
-                                                                {r.totalAmount.toFixed(2)}
+                                                                {r.totalAmount.toFixed(0)}
                                                             </span>
                                                         </td>
-                                                        <td className="py-2.5 px-1 sm:px-2 text-center">
+                                                        <td className="py-2.5 px-1 sm:px-2 text-center hidden sm:table-cell">
                                                             <div className="flex flex-col items-center gap-0.5">
                                                                 <span className="font-mono font-bold text-[10px] text-slate-600 dark:text-slate-400">{percent.toFixed(1)}%</span>
                                                                 <div className="hidden sm:block w-16 h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
@@ -4171,25 +4195,26 @@ export default function CardsManagement() {
                                         </tbody>
                                         <tfoot className="bg-slate-100/80 dark:bg-slate-800/80 border-t-2 border-slate-200 dark:border-slate-700 font-black text-[11px] sm:text-xs">
                                             <tr>
-                                                <td colSpan={2} className="py-2.5 sm:py-3.5 px-2 sm:px-4 text-slate-900 dark:text-white">
+                                                <td colSpan={2} className="py-2.5 sm:py-3.5 px-2 sm:px-4 text-slate-900 dark:text-white hidden sm:table-cell"></td>
+                                                <td className="py-2.5 sm:py-3.5 px-2 sm:px-4 text-slate-900 dark:text-white sm:text-right">
                                                     <span className="hidden sm:inline">الإجمالي العام لشهر {selectedMonth}</span>
-                                                    <span className="sm:hidden">الإجمالي</span>
+                                                    <span className="sm:hidden text-[10px]">الإجمالي العام</span>
                                                 </td>
                                                 <td className="py-2.5 sm:py-3.5 px-1 sm:px-2 text-center text-emerald-600 dark:text-emerald-400 font-mono">
                                                     <div>{totalMonthCashQty}</div>
-                                                    <div className="text-[9px] sm:text-[10px] font-mono">{totalMonthCashNet.toFixed(0)}</div>
+                                                    <div className="hidden sm:block text-[9px] sm:text-[10px] font-mono">{totalMonthCashNet.toFixed(0)}</div>
                                                 </td>
                                                 <td className="py-2.5 sm:py-3.5 px-1 sm:px-2 text-center text-amber-600 dark:text-amber-400 font-mono">
                                                     <div>{totalMonthCreditQty}</div>
-                                                    <div className="text-[9px] sm:text-[10px] font-mono">{totalMonthCreditNet.toFixed(0)}</div>
+                                                    <div className="hidden sm:block text-[9px] sm:text-[10px] font-mono">{totalMonthCreditNet.toFixed(0)}</div>
                                                 </td>
                                                 <td className="py-2.5 sm:py-3.5 px-1 sm:px-2 text-center text-indigo-600 dark:text-indigo-400 font-mono text-[11px] sm:text-sm">
                                                     {totalMonthOverallQty}
                                                 </td>
                                                 <td className="py-2.5 sm:py-3.5 px-1.5 sm:px-3 text-left font-mono text-slate-950 dark:text-white text-[11px] sm:text-sm whitespace-nowrap">
-                                                    {totalMonthOverallNet.toFixed(2)}
+                                                    {totalMonthOverallNet.toFixed(0)}
                                                 </td>
-                                                <td className="py-2.5 sm:py-3.5 px-1 sm:px-2 text-center text-slate-400 font-mono text-[10px] sm:text-xs">100%</td>
+                                                <td className="py-2.5 sm:py-3.5 px-1 sm:px-2 text-center text-slate-400 font-mono text-[10px] sm:text-xs hidden sm:table-cell">100%</td>
                                             </tr>
                                         </tfoot>
                                     </table>
@@ -4704,7 +4729,7 @@ export default function CardsManagement() {
 
                         {/* TAB 1: Categories Full Width Structured Table */}
                         {monthlyPurchasesTab === 'categories' && (
-                            <div className="-mx-4 sm:-mx-6 bg-white dark:bg-slate-900 border-y border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden animate-in fade-in duration-150">
+                            <div className="-mx-4 sm:-mx-6 lg:-mx-8 bg-white dark:bg-slate-900 border-y border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden animate-in fade-in duration-150">
                                 {monthlyCategoryPurchaseReport.length === 0 ? (
                                     <div className="p-8 text-center text-slate-400 font-bold text-xs">
                                         لا توجد مشتريات مسجلة في هذا الشهر حتى الآن.
@@ -4714,8 +4739,8 @@ export default function CardsManagement() {
                                         <table className="w-full text-right text-[11px] sm:text-xs">
                                             <thead className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400">
                                                 <tr>
-                                                    <th className="py-2.5 sm:py-3.5 px-1 sm:px-3 font-black text-center w-6 sm:w-10">#</th>
-                                                    <th className="py-2.5 sm:py-3.5 px-1.5 sm:px-3 font-black">فئة الكرت</th>
+                                                    <th className="py-2.5 sm:py-3.5 px-1 sm:px-3 font-black text-center w-6 sm:w-10 hidden sm:table-cell">#</th>
+                                                    <th className="py-2.5 sm:py-3.5 px-1.5 sm:px-3 font-black text-right">فئة الكرت</th>
                                                     <th className="py-2.5 sm:py-3.5 px-1 sm:px-2 font-black text-center">
                                                         <span className="hidden sm:inline">مشتريات نقدية</span>
                                                         <span className="sm:hidden">نقدي</span>
@@ -4732,7 +4757,7 @@ export default function CardsManagement() {
                                                         <span className="hidden sm:inline">إجمالي التكلفة</span>
                                                         <span className="sm:hidden">التكلفة</span>
                                                     </th>
-                                                    <th className="py-2.5 sm:py-3.5 px-1 sm:px-2 font-black text-center w-10 sm:w-24">النسبة</th>
+                                                    <th className="py-2.5 sm:py-3.5 px-1 sm:px-2 font-black text-center w-10 sm:w-24 hidden sm:table-cell">النسبة</th>
                                                 </tr>
                                             </thead>
                                             <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-slate-800 dark:text-slate-200">
@@ -4740,23 +4765,23 @@ export default function CardsManagement() {
                                                     const percent = totalMonthPurchasesOverallNet > 0 ? (r.totalAmount / totalMonthPurchasesOverallNet) * 100 : 0;
                                                     return (
                                                         <tr key={r.categoryName} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition font-bold">
-                                                            <td className="py-2.5 px-1 text-center font-mono text-slate-400 text-[10px] sm:text-[11px]">{idx + 1}</td>
-                                                            <td className="py-2.5 px-1.5 sm:px-3">
+                                                            <td className="py-2.5 px-1 text-center font-mono text-slate-400 text-[10px] sm:text-[11px] hidden sm:table-cell">{idx + 1}</td>
+                                                            <td className="py-2.5 px-1.5 sm:px-3 text-right">
                                                                 <div className="flex items-center gap-1.5">
                                                                     <div className="w-1.5 h-4 bg-indigo-500 rounded-full shrink-0" />
-                                                                    <span className="font-black text-slate-900 dark:text-white text-[11px] sm:text-sm truncate">{r.categoryName}</span>
+                                                                    <span className="font-black text-slate-900 dark:text-white text-[10px] sm:text-sm truncate block">{r.categoryName}</span>
                                                                 </div>
                                                             </td>
                                                             <td className="py-2.5 px-1 sm:px-2 text-center">
                                                                 <div className="flex flex-col items-center leading-tight">
                                                                     <span className="font-mono font-black text-emerald-600 dark:text-emerald-400 text-[10px] sm:text-xs">{r.cashQty}</span>
-                                                                    <span className="text-[9px] sm:text-[10px] text-slate-400 font-mono">{r.cashAmountTotal.toFixed(0)}</span>
+                                                                    <span className="hidden sm:block text-[9px] sm:text-[10px] text-slate-400 font-mono">{r.cashAmountTotal.toFixed(0)}</span>
                                                                 </div>
                                                             </td>
                                                             <td className="py-2.5 px-1 sm:px-2 text-center">
                                                                 <div className="flex flex-col items-center leading-tight">
                                                                     <span className="font-mono font-black text-amber-600 dark:text-amber-400 text-[10px] sm:text-xs">{r.creditQty}</span>
-                                                                    <span className="text-[9px] sm:text-[10px] text-slate-400 font-mono">{r.creditAmountTotal.toFixed(0)}</span>
+                                                                    <span className="hidden sm:block text-[9px] sm:text-[10px] text-slate-400 font-mono">{r.creditAmountTotal.toFixed(0)}</span>
                                                                 </div>
                                                             </td>
                                                             <td className="py-2.5 px-1 sm:px-2 text-center">
@@ -4766,10 +4791,10 @@ export default function CardsManagement() {
                                                             </td>
                                                             <td className="py-2.5 px-1.5 sm:px-3 text-left">
                                                                 <span className="font-mono font-black text-slate-900 dark:text-white text-[10px] sm:text-xs whitespace-nowrap">
-                                                                    {r.totalAmount.toFixed(2)}
+                                                                    {r.totalAmount.toFixed(0)}
                                                                 </span>
                                                             </td>
-                                                            <td className="py-2.5 px-1 sm:px-2 text-center">
+                                                            <td className="py-2.5 px-1 sm:px-2 text-center hidden sm:table-cell">
                                                                 <div className="flex flex-col items-center gap-0.5">
                                                                     <span className="font-mono font-bold text-[10px] text-slate-600 dark:text-slate-400">{percent.toFixed(1)}%</span>
                                                                     <div className="hidden sm:block w-16 h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
@@ -4783,25 +4808,26 @@ export default function CardsManagement() {
                                             </tbody>
                                             <tfoot className="bg-slate-100/80 dark:bg-slate-800/80 border-t-2 border-slate-200 dark:border-slate-700 font-black text-[11px] sm:text-xs">
                                                 <tr>
-                                                    <td colSpan={2} className="py-2.5 sm:py-3.5 px-2 sm:px-4 text-slate-900 dark:text-white">
-                                                        <span className="hidden sm:inline">الإجمالي العام لشهر {selectedPurchaseMonth}</span>
-                                                        <span className="sm:hidden">الإجمالي</span>
+                                                    <td colSpan={2} className="py-2.5 sm:py-3.5 px-2 sm:px-4 text-slate-900 dark:text-white hidden sm:table-cell"></td>
+                                                    <td className="py-2.5 sm:py-3.5 px-2 sm:px-4 text-slate-900 dark:text-white sm:text-right">
+                                                        <span className="hidden sm:inline">إجمالي مشتريات شهر {selectedPurchaseMonth}</span>
+                                                        <span className="sm:hidden text-[10px]">إجمالي المشتريات</span>
                                                     </td>
                                                     <td className="py-2.5 sm:py-3.5 px-1 sm:px-2 text-center text-emerald-600 dark:text-emerald-400 font-mono">
                                                         <div>{totalMonthPurchasesCashQty}</div>
-                                                        <div className="text-[9px] sm:text-[10px] font-mono">{totalMonthPurchasesCashNet.toFixed(0)}</div>
+                                                        <div className="hidden sm:block text-[9px] sm:text-[10px] font-mono">{totalMonthPurchasesCashNet.toFixed(0)}</div>
                                                     </td>
                                                     <td className="py-2.5 sm:py-3.5 px-1 sm:px-2 text-center text-amber-600 dark:text-amber-400 font-mono">
                                                         <div>{totalMonthPurchasesCreditQty}</div>
-                                                        <div className="text-[9px] sm:text-[10px] font-mono">{totalMonthPurchasesCreditNet.toFixed(0)}</div>
+                                                        <div className="hidden sm:block text-[9px] sm:text-[10px] font-mono">{totalMonthPurchasesCreditNet.toFixed(0)}</div>
                                                     </td>
                                                     <td className="py-2.5 sm:py-3.5 px-1 sm:px-2 text-center text-indigo-600 dark:text-indigo-400 font-mono text-[11px] sm:text-sm">
                                                         {totalMonthPurchasesOverallQty}
                                                     </td>
                                                     <td className="py-2.5 sm:py-3.5 px-1.5 sm:px-3 text-left font-mono text-slate-950 dark:text-white text-[11px] sm:text-sm whitespace-nowrap">
-                                                        {totalMonthPurchasesOverallNet.toFixed(2)}
+                                                        {totalMonthPurchasesOverallNet.toFixed(0)}
                                                     </td>
-                                                    <td className="py-2.5 sm:py-3.5 px-1 sm:px-2 text-center text-slate-400 font-mono text-[10px] sm:text-xs">100%</td>
+                                                    <td className="py-2.5 sm:py-3.5 px-1 sm:px-2 text-center text-slate-400 font-mono text-[10px] sm:text-xs hidden sm:table-cell">100%</td>
                                                 </tr>
                                             </tfoot>
                                         </table>
@@ -5087,6 +5113,7 @@ export default function CardsManagement() {
                     cashboxBalance={cashboxBalance}
                     canAdd={canAdd}
                     onOpenDepositWithdraw={() => setIsCashboxModalOpen(true)}
+                    onDeleteEntry={handleDeleteCashboxEntry}
                     appUser={appUser}
                 />
             )}

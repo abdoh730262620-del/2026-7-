@@ -2,10 +2,11 @@ import React, { useState } from 'react';
 import { 
     Search, Calendar, FileText, Printer, TrendingUp, X, Filter, 
     ChevronDown, ChevronUp, Wallet, ArrowDownLeft, ArrowUpRight, 
-    Plus, CheckCircle2, User, Clock, ArrowRightLeft, DollarSign, Receipt
+    Plus, CheckCircle2, User, Clock, ArrowRightLeft, DollarSign, Receipt, RefreshCw, Trash2
 } from 'lucide-react';
 import { CardCashboxEntry, CardSale, CardPurchase, CardVoucher, CardPurchaseVoucher } from '../types/cardTypes';
 import { printReport } from '../lib/printHelper';
+import { CardCashboxSyncModal } from './CardCashboxSyncModal';
 
 interface CardCashboxSectionProps {
     entries: CardCashboxEntry[];
@@ -17,6 +18,7 @@ interface CardCashboxSectionProps {
     canAdd: boolean;
     onOpenDepositWithdraw: () => void;
     appUser: any;
+    onDeleteEntry?: (id: string) => void;
 }
 
 export interface DetailedCashboxInvoice {
@@ -50,13 +52,15 @@ export const CardCashboxSection: React.FC<CardCashboxSectionProps> = ({
     cashboxBalance,
     canAdd,
     onOpenDepositWithdraw,
-    appUser
+    appUser,
+    onDeleteEntry
 }) => {
     const [searchText, setSearchText] = useState('');
     const [startDate, setStartDate] = useState('');
     const [endDate, setEndDate] = useState('');
     const [filterType, setFilterType] = useState<'all' | 'income' | 'expense'>('all');
     const [showFilters, setShowFilters] = useState(false);
+    const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
     const [expandedRows, setExpandedRows] = useState<{ [key: string]: boolean }>({});
     const [currentPage, setCurrentPage] = useState(1);
     const itemsPerPage = 10;
@@ -500,13 +504,27 @@ export const CardCashboxSection: React.FC<CardCashboxSectionProps> = ({
                                         </div>
 
                                         {/* Income / Expense Badge */}
-                                        <span className={`px-2 py-0.5 rounded-full text-[9px] font-black ${
-                                            inv.isIncome 
-                                                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 border border-emerald-200/50'
-                                                : 'bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300 border border-rose-200/50'
-                                        }`}>
-                                            {inv.isIncome ? 'مقبوضات' : 'مسحوبات'}
-                                        </span>
+                                        <div className="flex items-center gap-1.5">
+                                            <span className={`px-2 py-0.5 rounded-full text-[9px] font-black ${
+                                                inv.isIncome 
+                                                    ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 border border-emerald-200/50'
+                                                    : 'bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300 border border-rose-200/50'
+                                            }`}>
+                                                {inv.isIncome ? 'مقبوضات' : 'مسحوبات'}
+                                            </span>
+                                            {onDeleteEntry && appUser?.role === 'admin' && (
+                                                <button
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        onDeleteEntry(inv.id);
+                                                    }}
+                                                    title="حذف الحركة"
+                                                    className="w-7 h-7 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 dark:bg-rose-900/30 dark:hover:bg-rose-900/50 dark:text-rose-400 flex items-center justify-center transition"
+                                                >
+                                                    <Trash2 size={14} />
+                                                </button>
+                                            )}
+                                        </div>
 
                                         {/* Details toggle button */}
                                         <button
@@ -597,6 +615,34 @@ export const CardCashboxSection: React.FC<CardCashboxSectionProps> = ({
                     </div>
                 )}
             </div>
+
+            {/* Sync Button */}
+            {canAdd && appUser?.role === 'admin' && (
+                <div className="mt-3 shrink-0">
+                    <button
+                        onClick={() => setIsSyncModalOpen(true)}
+                        className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-3 rounded-2xl shadow-md shadow-indigo-600/20 flex justify-center items-center gap-2 font-black text-xs transition active:scale-[0.98]"
+                    >
+                        <RefreshCw size={16} />
+                        مزامنة ومطابقة صندوق الكروت
+                    </button>
+                </div>
+            )}
+
+            {/* Sync Modal */}
+            <CardCashboxSyncModal
+                isOpen={isSyncModalOpen}
+                onClose={() => setIsSyncModalOpen(false)}
+                tenantId={appUser?.tenantId || 'single_store'}
+                appUser={appUser}
+                currentBalance={cashboxBalance}
+                sales={sales}
+                purchases={purchases}
+                distributorVouchers={vouchers}
+                supplierVouchers={purchaseVouchers}
+                cashboxEntries={entries}
+                onSyncComplete={() => {}}
+            />
         </div>
     );
 };

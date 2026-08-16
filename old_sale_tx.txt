@@ -1,0 +1,260 @@
+            await runTransaction(db, async (transaction) => {
+                // --- PART A: REVERSAL (IF EDITING) ---
+                if (editingInvoice && editingInvoice.docIds) {
+                    for (const docId of editingInvoice.docIds) {
+                        const oldDocRef = doc(db, 'card_sales', docId);
+                        const oldDocSnap = await transaction.get(oldDocRef);
+                        
+                        if (oldDocSnap.exists() && oldDocSnap.data().status !== 'cancelled') {
+                            const oldData = oldDocSnap.data();
+                            
+                            // 1. Mark as cancelled
+                            transaction.update(oldDocRef, {
+                                status: 'cancelled',
+                                cancelledAt: Date.now(),
+                                cancelledBy: staffName
+                            });
+
+                            // 2. Reverse Stock (Add back)
+                            const qty = Math.abs(oldData.quantity || 0);
+                            if (qty > 0 && oldData.categoryId) {
+                                const catRef = doc(db, 'card_categories', oldData.categoryId);
+                                const catSnap = await transaction.get(catRef);
+                                if (catSnap.exists()) {
+                                    const currentStock = catSnap.data().availableCount || 0;
+                                    transaction.update(catRef, {
+                                        availableCount: currentStock + qty,
+                                        updatedAt: Date.now()
+                                    });
+
+                                    // Log the reversal
+                                    const stockLogRef = doc(collection(db, 'card_stock_logs'));
+                                    transaction.set(stockLogRef, {
+                                        tenantId,
+                                        categoryId: oldData.categoryId,
+                                        categoryName: oldData.categoryName || 'فئة كروت',
+                                        quantityAdded: qty,
+                                        userName: staffName,
+                                        additionDate: `${dateStr} ${timeStr}`,
+                                        availableCountAfter: currentStock + qty,
+                                        notes: `تعديل مبيعات الفاتورة #${nextInvoiceNumber} (إلغاء النسخة السابقة)`,
+                                        createdAt: Date.now()
+                                    });
+                                }
+                            }
+
+                            // 3. Reverse Distributor Balance (if credit)
+                            if (oldData.paymentType === 'credit' && oldData.distributorId) {
+                                const distRef = doc(db, 'card_distributors', oldData.distributorId);
+                                const distSnap = await transaction.get(distRef);
+                                if (distSnap.exists()) {
+                                    const currentBalance = distSnap.data().balance || 0;
+                                    transaction.update(distRef, {
+                                        balance: currentBalance - (oldData.netTotal || oldData.totalAmount || 0),
+                                        updatedAt: Date.now()
+                                    });
+                                }
+                            }
+
+                            // 4. Reverse Cashbox (if cash)
+                            if (oldData.paymentType === 'cash') {
+                                const cashboxRef = doc(collection(db, 'card_cashbox'));
+                                transaction.set(cashboxRef, {
+                                    tenantId,
+                                    type: 'manual_out',
+                                    title: `إلغاء النسخة السابقة من مبيعات #${nextInvoiceNumber} (للتعديل)`,
+                                    amount: oldData.netTotal || oldData.totalAmount || 0,
+                                    isIncome: false,
+                                    date: dateStr,
+                                    dateTime: `${dateStr} ${timeStr}`,
+                                    userName: staffName,
+                                    createdAt: Date.now()
+                                });
+                            }
+                        }
+                    }
+                }
+
+                // --- PART B: NEW SAVE ---
+                // 1. ALL READS FIRST (only if status is completed)
+                const categoryDocs = [];
+                if (invoiceStatus === 'completed') {
+                    for (const item of cartItems) {
+                        const catDoc = categories.find(c => c.name.trim() === item.categoryName.trim() || c.linkedSection?.trim() === item.categoryName.trim());
+                        if (catDoc) {
+                            const catRef = doc(db, 'card_categories', catDoc.id);
+                            const snap = await transaction.get(catRef);
+                            categoryDocs.push({ item, ref: catRef, snap, exists: true });
+                        } else {
+                            categoryDocs.push({ item, ref: null, snap: null, exists: false });
+                        }
+                    }
+                }
+
+                let distributorRef = null;
+                let distributorSnap = null;
+                if (invoiceStatus === 'completed' && paymentType === 'credit' && selectedDistributorId) {
+                    distributorRef = doc(db, 'card_distributors', selectedDistributorId);
+                    distributorSnap = await transaction.get(distributorRef);
+                }
+
+                // 2. VALIDATIONS INSIDE TRANSACTION
+                if (invoiceStatus === 'completed') {
+                    for (const { item, snap, exists } of categoryDocs) {
+                        if (exists && snap && snap.exists()) {
+                            const available = snap.data().availableCount || 0;
+                            if (available < item.quantity) {
+                                throw new Error(`الكمية المطلوبة للفئة "${item.categoryName}" غير متوفرة حالياً في المخزن! المتاح: ${available} كارت.`);
+                            }
+                        }
+                    }
+                }
+
+                // 3. ALL WRITES/UPDATES NEXT
+                if (invoiceStatus === 'completed') {
+                    for (const { item, ref, snap, exists } of categoryDocs) {
+                        let currentCategoryId = item.categoryId || '';
+                        let newAvailableCount = 0;
+
+                        if (exists && ref && snap && snap.exists()) {
+                            newAvailableCount = (snap.data().availableCount || 0) - item.quantity;
+                            currentCategoryId = snap.id;
+                            transaction.update(ref, {
+                                availableCount: newAvailableCount,
+                                updatedAt: Date.now()
+                            });
+                        } else {
+                            const newCatRef = doc(collection(db, 'card_categories'));
+                            transaction.set(newCatRef, {
+                                tenantId,
+                                name: item.categoryName,
+                                wholesalePrice: item.saleType === 'wholesale' ? item.unitPrice : 0,
+                                retailPrice: item.saleType === 'retail' ? item.unitPrice : 0,
+                                availableCount: -item.quantity,
+                                createdAt: Date.now()
+                            });
+                            currentCategoryId = newCatRef.id;
+                            newAvailableCount = -item.quantity;
+                        }
+
+                        // Create stock log
+                        const stockLogRef = doc(collection(db, 'card_stock_logs'));
+                        transaction.set(stockLogRef, {
+                            tenantId,
+                            categoryId: currentCategoryId,
+                            categoryName: item.categoryName,
+                            quantityAdded: -item.quantity,
+                            userName: staffName,
+                            additionDate: `${dateStr} ${timeStr}`,
+                            availableCountAfter: newAvailableCount,
+                            createdAt: Date.now()
+                        });
+
+                        // Add Card Sale record
+                        const itemCommission = item.totalAmount * (commissionPercent / 100);
+                        const itemNetTotal = item.totalAmount - itemCommission;
+                        const saleRef = doc(collection(db, 'card_sales'));
+                        transaction.set(saleRef, {
+                            tenantId,
+                            categoryId: currentCategoryId,
+                            categoryName: item.categoryName,
+                            quantity: item.quantity,
+                            saleType: item.saleType,
+                            paymentType,
+                            distributorId: selectedDistributorId || '',
+                            distributorName: selectedDistributor ? selectedDistributor.name : 'عميل نقدي',
+                            unitPrice: item.unitPrice,
+                            commissionPercent,
+                            commissionAmount: itemCommission,
+                            totalAmount: item.totalAmount,
+                            netTotal: itemNetTotal,
+                            month: yearMonth,
+                            monthNum: now.getMonth() + 1,
+                            yearNum: now.getFullYear(),
+                            date: dateStr,
+                            dateTime: `${dateStr} ${timeStr}`,
+                            userName: staffName,
+                            invoiceNumber: nextInvoiceNumber,
+                            status: invoiceStatus,
+                            notes: notes.trim(),
+                            createdAt: Date.now()
+                        });
+                    }
+
+                    // Add to Cashbox if payment type is cash
+                    if (paymentType === 'cash') {
+                        const cashboxRef = doc(collection(db, 'card_cashbox'));
+                        transaction.set(cashboxRef, {
+                            tenantId,
+                            type: 'cash_sale',
+                            title: `فاتورة بيع كروت نقدية (${totalCardsQty} كارت) - الموزع: ${selectedDistributor ? selectedDistributor.name : 'نقدي'}`,
+                            amount: netTotal,
+                            isIncome: true,
+                            date: dateStr,
+                            dateTime: `${dateStr} ${timeStr}`,
+                            userName: staffName,
+                            createdAt: Date.now()
+                        });
+                    }
+
+                    // Update Distributor Debt Balance if credit
+                    if (paymentType === 'credit' && distributorRef && distributorSnap && distributorSnap.exists()) {
+                        const currentBalance = distributorSnap.data().balance || 0;
+                        transaction.update(distributorRef, {
+                            balance: currentBalance + netTotal,
+                            updatedAt: Date.now()
+                        });
+                    }
+
+                    // Manager Invoice Notification
+                    const notifRef = doc(collection(db, 'notifications'));
+                    transaction.set(notifRef, {
+                        tenantId,
+                        type: 'invoice_created',
+                        invoiceType: 'card_sale',
+                        invoiceNumber: String(nextInvoiceNumber),
+                        amount: netTotal,
+                        createdById: appUser?.uid || '',
+                        createdByName: staffName,
+                        createdByRole: appUser?.role || 'user',
+                        recipientRole: 'admin',
+                        createdAt: Date.now(),
+                        read: false,
+                        title: `🧾 فاتورة كروت شبكة جديدة #${nextInvoiceNumber}`,
+                        body: `قام المستخدم (${staffName}) ببيع كروت شبكة بمبلغ ${netTotal.toLocaleString('ar-SA')} ريال يمني`
+                    });
+                } else {
+                    // For draft or cancelled, we only save the sale records themselves and do not update categories or balances or cashbox!
+                    for (const item of cartItems) {
+                        const itemCommission = item.totalAmount * (commissionPercent / 100);
+                        const itemNetTotal = item.totalAmount - itemCommission;
+                        const saleRef = doc(collection(db, 'card_sales'));
+                        transaction.set(saleRef, {
+                            tenantId,
+                            categoryName: item.categoryName,
+                            quantity: item.quantity,
+                            saleType: item.saleType,
+                            paymentType,
+                            distributorId: selectedDistributorId || '',
+                            distributorName: selectedDistributor ? selectedDistributor.name : 'عميل نقدي',
+                            unitPrice: item.unitPrice,
+                            commissionPercent,
+                            commissionAmount: itemCommission,
+                            totalAmount: item.totalAmount,
+                            netTotal: itemNetTotal,
+                            month: yearMonth,
+                            monthNum: now.getMonth() + 1,
+                            yearNum: now.getFullYear(),
+                            date: dateStr,
+                            dateTime: `${dateStr} ${timeStr}`,
+                            userName: staffName,
+                            sellerName: staffName,
+                            createdByName: staffName,
+                            invoiceNumber: nextInvoiceNumber,
+                            status: invoiceStatus,
+                            notes: notes.trim(),
+                            createdAt: Date.now()
+                        });
+                    }
+                }
+            });

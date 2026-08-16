@@ -137,25 +137,37 @@ export const CardInvoiceActionModal: React.FC<CardInvoiceActionModalProps> = ({
                     {/* Top Header Bar */}
                     <div className="flex items-center justify-between pb-4 mb-4 border-b border-slate-100 dark:border-slate-800">
                         <div className="flex items-center gap-3">
-                            <div className={`w-10 h-10 rounded-2xl flex items-center justify-center ${
+                            <div className={`w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 ${
                                 isSale ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/60 dark:text-emerald-400' : 'bg-blue-50 text-blue-600 dark:bg-blue-950/60 dark:text-blue-400'
                             }`}>
                                 {isSale ? <TrendingUp size={20} /> : <ShoppingBag size={20} />}
                             </div>
                             <div>
-                                <h3 className="text-sm font-black text-slate-900 dark:text-white">
+                                <h3 className="text-sm font-black text-slate-900 dark:text-white mb-1">
                                     {isSale ? 'فاتورة مبيعات كروت' : 'فاتورة مشتريات كروت'}
                                 </h3>
-                                <p className="text-[11px] font-mono text-indigo-600 dark:text-indigo-400 font-bold">
-                                    رقم الفاتورة: #{invoice.invoiceNumber}
-                                </p>
+                                <div className="flex items-center flex-wrap gap-1.5 text-[10px] font-bold">
+                                    <span className="font-mono text-indigo-600 dark:text-indigo-400 text-[11px]">
+                                        #{invoice.invoiceNumber}
+                                    </span>
+                                    <span className={`px-2 py-0.5 rounded-full ${
+                                        invoice.paymentType === 'cash' ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300' : 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+                                    }`}>
+                                        {invoice.paymentType === 'cash' ? 'نقدي' : 'آجل'}
+                                    </span>
+                                    {invoice.userName && (
+                                        <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                                            {invoice.userName}
+                                        </span>
+                                    )}
+                                </div>
                             </div>
                         </div>
 
                         {/* Close Button */}
                         <button
                             onClick={onClose}
-                            className="p-2 rounded-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-400 hover:text-slate-600 transition"
+                            className="p-2 rounded-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-400 hover:text-slate-600 transition shrink-0"
                         >
                             <X size={18} />
                         </button>
@@ -207,29 +219,15 @@ export const CardInvoiceActionModal: React.FC<CardInvoiceActionModalProps> = ({
                         )}
 
                         {/* Invoice Metadata Box */}
-                        <div className="bg-slate-50 dark:bg-slate-800/50 p-4 rounded-2xl border border-slate-100 dark:border-slate-800 grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
+                        <div className="bg-slate-50 dark:bg-slate-800/50 p-4 rounded-2xl border border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs">
                             <div>
                                 <span className="block text-[10px] text-slate-400 font-bold">{isSale ? 'الموزع / العميل' : 'المورد'}</span>
                                 <strong className="font-black text-slate-900 dark:text-white">{invoice.partyName || 'نقدي / عام'}</strong>
                             </div>
-                            <div>
-                                <span className="block text-[10px] text-slate-400 font-bold">طريقة الدفع</span>
-                                <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-black mt-0.5 ${
-                                    invoice.paymentType === 'cash' ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300' : 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
-                                }`}>
-                                    {invoice.paymentType === 'cash' ? 'نقدي' : 'آجل'}
-                                </span>
-                            </div>
-                            <div>
+                            <div className="text-left">
                                 <span className="block text-[10px] text-slate-400 font-bold">التاريخ والوقت</span>
                                 <span className="font-mono text-slate-700 dark:text-slate-300 font-bold">{invoice.dateTime}</span>
                             </div>
-                            {invoice.userName && (
-                                <div className="col-span-2">
-                                    <span className="block text-[10px] text-slate-400 font-bold">بواسطة الموظف</span>
-                                    <span className="text-slate-700 dark:text-slate-300 font-bold">{invoice.userName}</span>
-                                </div>
-                            )}
                         </div>
 
                         {/* Structured Items Table */}

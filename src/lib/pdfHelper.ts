@@ -259,14 +259,22 @@ export const generateInvoicePdf = async (
                 ${settings?.businessAddress ? `<p class="pdf-business-info">${settings.businessAddress}</p>` : ''}
                 ${settings?.businessPhone ? `<p class="pdf-business-info" dir="ltr">${settings.businessPhone}</p>` : ''}
                 <div class="pdf-badge">${title}</div>
-                <div class="pdf-ref">رقم الفاتورة: <strong style="color: #0f172a; font-family: monospace;">#${invoice.invoiceNumber}</strong></div>
+                <div class="pdf-ref" style="display: flex; justify-content: center; align-items: center; gap: 8px; flex-wrap: wrap;">
+                    <span>رقم الفاتورة: <strong style="color: #0f172a; font-family: monospace;">#${invoice.invoiceNumber}</strong></span>
+                    <span style="background: #e2e8f0; padding: 2px 8px; border-radius: 12px; font-size: 11px; color: #334155;">${invoice.paymentType === 'cash' ? 'نقدي' : 'آجل'}</span>
+                    ${invoice.userName ? `<span style="background: #e2e8f0; padding: 2px 8px; border-radius: 12px; font-size: 11px; color: #334155;">${invoice.userName}</span>` : ''}
+                </div>
             </div>
 
-            <div class="pdf-details">
-                <p><strong>طريقة الدفع:</strong> <span>${invoice.paymentType === 'cash' ? 'نقدي' : 'آجل'}</span></p>
-                <p><strong>${partyLabel}:</strong> <span>${invoice.partyName || 'نقدي / عام'}</span></p>
-                <p><strong>التاريخ والوقت:</strong> <span>${invoice.dateTime}</span></p>
-                <p><strong>المستخدم:</strong> <span>${invoice.userName || 'المدير'}</span></p>
+            <div class="pdf-details" style="display: flex; justify-content: space-between; align-items: center; padding-bottom: 8px;">
+                <div style="text-align: right;">
+                    <strong style="color: #475569; font-size: 10px; display: block;">${partyLabel}</strong>
+                    <span style="font-weight: 700; color: #0f172a;">${invoice.partyName || 'نقدي / عام'}</span>
+                </div>
+                <div style="text-align: left;">
+                    <strong style="color: #475569; font-size: 10px; display: block;">التاريخ والوقت</strong>
+                    <span style="font-weight: 700; color: #0f172a; font-family: monospace;">${invoice.dateTime}</span>
+                </div>
             </div>
 
             <table class="pdf-table">

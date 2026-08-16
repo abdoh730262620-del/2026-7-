@@ -86,8 +86,8 @@ export const CardPurchasesSection: React.FC<CardPurchasesSectionProps> = ({
             const invNumber = getNumericInvoiceNumber(p.invoiceNumber, p.id);
             
             const key = p.invoiceNumber 
-                ? `inv_${p.invoiceNumber}` 
-                : `grp_${p.dateTime}_${p.supplierId || 'cash'}_${p.paymentType}`;
+                ? `inv_${p.invoiceNumber}_${p.status || 'completed'}` 
+                : `grp_${p.dateTime}_${p.supplierId || 'cash'}_${p.paymentType}_${p.status || 'completed'}`;
 
             if (!groupedMap[key]) {
                 groupedMap[key] = {

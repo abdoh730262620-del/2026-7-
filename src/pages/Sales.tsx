@@ -902,6 +902,7 @@ export default function Sales() {
                         tenantId,
                         invoiceId: saleRef.id,
                         invoiceNumber: finalInvoiceNum,
+                        categoryId: matchingCardCat.id,
                         categoryName: matchingCardCat.name,
                         quantity: item.cartQuantity,
                         saleType: 'retail', // sales via main sales page are retail sales
