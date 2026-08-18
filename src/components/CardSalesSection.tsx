@@ -201,55 +201,52 @@ export const CardSalesSection: React.FC<CardSalesSectionProps> = ({
     });
 
     return (
-        <div className="space-y-3 sm:space-y-3.5 animate-in fade-in duration-200 text-right" dir="rtl">
+        <div className="space-y-3 sm:space-y-3.5 animate-in fade-in duration-200 text-right w-full max-w-full overflow-hidden" dir="rtl">
             {/* Header & Controls */}
-            <div className="bg-white dark:bg-slate-900 p-3.5 sm:p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-3">
-                <div className="flex items-center gap-2.5">
-                    <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center border border-emerald-100 dark:border-emerald-900/50 shrink-0">
-                        <TrendingUp size={20} />
+            <div className="bg-white dark:bg-slate-900 p-2.5 sm:p-3 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between gap-2 w-full max-w-full">
+                <div className="flex items-center gap-2 sm:gap-2.5 min-w-0 flex-1">
+                    <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center border border-emerald-100 dark:border-emerald-900/50 shrink-0">
+                        <TrendingUp size={18} />
                     </div>
-                    <div>
-                        <div className="flex items-center gap-2 flex-wrap">
-                            <h2 className="text-sm sm:text-base font-black text-slate-900 dark:text-white">قسم مبيعات الكروت</h2>
-                            <span className="px-2.5 py-0.5 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 text-[11px] font-black font-mono rounded-lg">
-                                {totalInvoicesCount} فاتورة
-                            </span>
-                        </div>
-                        <p className="text-[10px] sm:text-[11px] font-bold text-slate-400 mt-0.5">
-                            سجل فواتير مبيعات كروت الشبكة، فلترة وتصدير التقارير، ومعاينة وطباعة الفواتير
-                        </p>
-                    </div>
-                </div>
-                
-                {/* Compact Icon Buttons Toolbar (Side-by-side) */}
-                <div className="flex items-center gap-1.5 self-end sm:self-auto shrink-0">
-                    {/* Filter Toggle Icon Button */}
-                    <button
-                        onClick={() => setShowFilters(!showFilters)}
-                        title="تصفية وفلترة الفواتير"
-                        aria-label="تصفية وفلترة"
-                        className={`w-9 h-9 sm:w-10 sm:h-10 rounded-xl relative flex items-center justify-center transition border ${
-                            showFilters || startDate || endDate || searchText
-                                ? 'bg-emerald-600 text-white border-emerald-500 shadow-sm'
-                                : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 border-slate-200 dark:border-slate-700'
-                        }`}
-                    >
-                        <Filter size={17} />
-                        {(startDate || endDate || searchText) && (
-                            <span className="w-2 h-2 rounded-full bg-amber-300 absolute top-1.5 right-1.5 border border-emerald-600"></span>
-                        )}
-                    </button>
+                    <div className="flex items-center gap-2 flex-wrap min-w-0">
+                        <h2 className="text-xs sm:text-sm font-black text-slate-900 dark:text-white whitespace-nowrap">مبيعات الكروت</h2>
+                        <span className="px-2 py-0.5 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 text-[10px] sm:text-[11px] font-black font-mono rounded-lg shrink-0">
+                            {totalInvoicesCount} فاتورة
+                        </span>
 
-                    {/* Export PDF Icon Button */}
-                    <button
-                        onClick={handleExportPDF}
-                        disabled={filteredInvoices.length === 0}
-                        title="طباعة وتصدير تقرير المبيعات PDF"
-                        aria-label="تصدير PDF"
-                        className="w-9 h-9 sm:w-10 sm:h-10 bg-slate-900 dark:bg-slate-800 hover:bg-slate-800 dark:hover:bg-slate-700 disabled:opacity-40 active:scale-95 text-white rounded-xl shadow-sm flex items-center justify-center transition border border-slate-700"
-                    >
-                        <Printer size={17} />
-                    </button>
+                        {/* Filter & Report Buttons placed directly next to invoice count */}
+                        <div className="flex items-center gap-1.5 shrink-0 mr-1">
+                            {/* Filter Toggle Button */}
+                            <button
+                                onClick={() => setShowFilters(!showFilters)}
+                                title="تصفية وفلترة الفواتير"
+                                aria-label="تصفية وفلترة"
+                                className={`h-7 sm:h-8 px-2 sm:px-2.5 rounded-lg relative flex items-center gap-1 text-xs font-bold transition border cursor-pointer ${
+                                    showFilters || startDate || endDate || searchText
+                                        ? 'bg-emerald-600 text-white border-emerald-500 shadow-2xs'
+                                        : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 border-slate-200 dark:border-slate-700'
+                                }`}
+                            >
+                                <Filter size={13} />
+                                <span className="text-[10px] sm:text-[11px] hidden xs:inline">فلترة</span>
+                                {(startDate || endDate || searchText) && (
+                                    <span className="w-2 h-2 rounded-full bg-amber-300 absolute -top-0.5 -right-0.5 border border-emerald-600"></span>
+                                )}
+                            </button>
+
+                            {/* Export / Report PDF Button */}
+                            <button
+                                onClick={handleExportPDF}
+                                disabled={filteredInvoices.length === 0}
+                                title="طباعة وتصدير تقرير المبيعات PDF"
+                                aria-label="تقرير PDF"
+                                className="h-7 sm:h-8 px-2 sm:px-2.5 bg-slate-900 dark:bg-slate-800 hover:bg-slate-800 dark:hover:bg-slate-700 disabled:opacity-40 active:scale-95 text-white rounded-lg shadow-2xs flex items-center gap-1 text-xs font-bold transition border border-slate-700 cursor-pointer"
+                            >
+                                <Printer size={13} />
+                                <span className="text-[10px] sm:text-[11px] hidden xs:inline">التقرير</span>
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -407,8 +404,8 @@ export const CardSalesSection: React.FC<CardSalesSectionProps> = ({
 
                                 {/* Structured Items Table (Collapsible) */}
                                 {isExpanded && (
-                                    <div className="p-4 animate-in fade-in duration-200">
-                                        <table className="w-full text-right text-xs">
+                                    <div className="p-3 sm:p-4 animate-in fade-in duration-200 overflow-x-auto w-full max-w-full">
+                                        <table className="w-full text-right text-xs min-w-[320px]">
                                             <thead>
                                                 <tr className="border-b border-slate-100 dark:border-slate-800 text-slate-400 text-[11px] font-bold">
                                                     <th className="pb-2 font-black">الصنف (فئة الكرت)</th>

@@ -188,7 +188,8 @@ export interface InvoicePdfItem {
 export interface InvoicePdfInput {
     id: string;
     invoiceNumber: string;
-    type: 'sale' | 'purchase';
+    type: 'sale' | 'purchase' | 'purchase_return' | 'sale_return';
+    isReturn?: boolean;
     categoryName?: string;
     quantity?: number;
     unitPrice?: number;
@@ -208,8 +209,17 @@ export const generateInvoicePdf = async (
     invoice: InvoicePdfInput
 ): Promise<{ blob: Blob; filename: string; dataUrl: string }> => {
     const settings = useSettingsStore.getState().settings;
-    const title = invoice.type === 'sale' ? 'فاتورة مبيعات كروت' : 'فاتورة مشتريات كروت';
-    const partyLabel = invoice.type === 'sale' ? 'الموزع' : 'المورد';
+    const isReturn = invoice.isReturn || invoice.type === 'purchase_return' || invoice.type === 'sale_return';
+    const isSale = invoice.type === 'sale' || invoice.type === 'sale_return';
+    
+    let title = 'فاتورة مشتريات كروت';
+    if (isSale) {
+        title = isReturn ? 'فاتورة مردودات مبيعات كروت' : 'فاتورة مبيعات كروت';
+    } else {
+        title = isReturn ? 'فاتورة مردودات مشتريات للمورد' : 'فاتورة مشتريات كروت';
+    }
+
+    const partyLabel = isSale ? 'الموزع / العميل' : 'المورد';
     const filename = `${invoice.type}_invoice_${invoice.invoiceNumber}.pdf`;
 
     // Create a temporary container

@@ -4,7 +4,7 @@ import {
     FileText, Calendar, DollarSign, Receipt, Printer, CheckCircle2, 
     X, Sparkles, TrendingUp, Wallet, ArrowUpRight, ArrowDownLeft, Search, UserCheck,
     Share2, MessageSquare, Send, Truck, ChevronDown, ChevronUp, ShoppingBag, RefreshCw,
-    Scale, Eye, Filter, BarChart3
+    Scale, Eye, Filter, BarChart3, RotateCcw
 } from 'lucide-react';
 import { collection, query, where, onSnapshot, doc, getDoc, addDoc as firestoreAddDoc, updateDoc as firestoreUpdateDoc, deleteDoc as firestoreDeleteDoc, runTransaction , getDocs, writeBatch, increment } from 'firebase/firestore';
 
@@ -37,6 +37,7 @@ import { CardInvoiceActionModal } from '../components/CardInvoiceActionModal';
 import { InvoicePdfInput } from '../lib/pdfHelper';
 import { CardSalesSection } from '../components/CardSalesSection';
 import { CardPurchasesSection } from '../components/CardPurchasesSection';
+import { CardReturnsSection } from '../components/CardReturnsSection';
 import { CardCashboxSection } from '../components/CardCashboxSection';
 import { CardReconciliationSection } from '../components/CardReconciliationSection';
 import { CardStockLogsSection } from '../components/CardStockLogsSection';
@@ -194,6 +195,7 @@ export default function CardsManagement() {
 
     const [isVoucherModalOpen, setIsVoucherModalOpen] = useState(false);
     const [isCardPurchaseModalOpen, setIsCardPurchaseModalOpen] = useState(false);
+    const [purchaseModalIsReturnOnly, setPurchaseModalIsReturnOnly] = useState(false);
     const [isCardExchangeModalOpen, setIsCardExchangeModalOpen] = useState(false);
     const [voucherType, setVoucherType] = useState<'receipt' | 'payment'>('receipt');
     const [voucherDistributorId, setVoucherDistributorId] = useState('');
@@ -1136,7 +1138,8 @@ export default function CardsManagement() {
                     categoryId: cat.id,
                     categoryName: catSnap.data().name,
                     quantity: saleIsReturn ? -qty : qty,
-                    saleType: 'distributor',
+                    saleType: saleIsReturn ? 'distributor_return' : 'distributor',
+                    isReturn: saleIsReturn,
                     paymentType: salePaymentMethod,
                     distributorId: dist.id,
                     distributorName: distSnap.data().name,
@@ -1150,6 +1153,7 @@ export default function CardsManagement() {
                     dateTime: `${dateStr} ${timeStr}`,
                     userName: appUser?.name || appUser?.email || 'المدير',
                     status: 'completed',
+                    notes: saleIsReturn ? `مرتجع مبيعات كروت للموزع (${distSnap.data().name})` : `مبيعات كروت للموزع (${distSnap.data().name})`,
                     createdAt: Date.now()
                 });
 
@@ -1201,7 +1205,8 @@ export default function CardsManagement() {
             setActionModalInvoice({
                 id: saleRef.id,
                 invoiceNumber: invRef,
-                type: 'sale',
+                type: saleIsReturn ? 'sale_return' : 'sale',
+                isReturn: saleIsReturn,
                 categoryName: cat.name,
                 quantity: saleIsReturn ? -qty : qty,
                 unitPrice,
@@ -1209,7 +1214,13 @@ export default function CardsManagement() {
                 paymentType: salePaymentMethod,
                 partyName: dist.name,
                 dateTime: `${dateStr} ${timeStr}`,
-                userName: appUser?.name || appUser?.email || 'المدير'
+                userName: appUser?.name || appUser?.email || 'المدير',
+                items: [{
+                    categoryName: cat.name,
+                    quantity: qty,
+                    unitPrice,
+                    totalAmount: netTotal
+                }]
             });
             setActionModalOpen(true);
 
@@ -1339,12 +1350,15 @@ export default function CardsManagement() {
                 }
 
                 // Writes
+                const invRefId = purchaseRef.id.slice(-6).toUpperCase();
                 transaction.set(purchaseRef, {
                     tenantId,
+                    invoiceNumber: invRefId,
                     categoryId: cat.id,
                     categoryName: catSnap.data().name,
                     quantity: purchaseIsReturn ? -qty : qty,
-                    purchaseType: 'supplier',
+                    purchaseType: purchaseIsReturn ? 'supplier_return' : 'supplier',
+                    isReturn: purchaseIsReturn,
                     paymentType: purchasePaymentMethod,
                     supplierId: supp.id,
                     supplierName: suppSnap.data().name,
@@ -1355,6 +1369,7 @@ export default function CardsManagement() {
                     dateTime: `${dateStr} ${timeStr}`,
                     userName: appUser?.name || appUser?.email || 'المدير',
                     status: 'completed',
+                    notes: purchaseIsReturn ? `مردودات مشتريات للمورد (${suppSnap.data().name})` : `فاتورة مشتريات من المورد (${suppSnap.data().name})`,
                     createdAt: Date.now()
                 });
 
@@ -1373,7 +1388,7 @@ export default function CardsManagement() {
                     userName: appUser?.name || appUser?.email || 'المدير',
                     additionDate: `${dateStr} ${timeStr}`,
                     availableCountAfter: newStock,
-                    notes: purchaseIsReturn ? `مرتجع مشتريات #${purchaseRef.id.slice(-6).toUpperCase()}` : `فاتورة مشتريات #${purchaseRef.id.slice(-6).toUpperCase()}`,
+                    notes: purchaseIsReturn ? `مرتجع مشتريات #${invRefId}` : `فاتورة مشتريات #${invRefId}`,
                     createdAt: Date.now()
                 });
 
@@ -1383,7 +1398,7 @@ export default function CardsManagement() {
                         tenantId,
                         type: purchaseIsReturn ? 'supplier_return_cash' : 'supplier_purchase_cash',
                         title: purchaseIsReturn 
-                            ? `مسترد نقدي من المورد: ${suppSnap.data().name} (مرتجع)`
+                            ? `مسترد نقدي من المورد: ${suppSnap.data().name} (مردودات مشتريات)`
                             : `مدفوع نقدي للمورد: ${suppSnap.data().name} (مشتريات)`,
                         amount: totalAmount,
                         isIncome: purchaseIsReturn,
@@ -1406,7 +1421,8 @@ export default function CardsManagement() {
             setActionModalInvoice({
                 id: purchaseRef.id,
                 invoiceNumber: invRef,
-                type: 'purchase',
+                type: purchaseIsReturn ? 'purchase_return' : 'purchase',
+                isReturn: purchaseIsReturn,
                 categoryName: cat.name,
                 quantity: purchaseIsReturn ? -qty : qty,
                 unitPrice: unitCost,
@@ -1414,7 +1430,13 @@ export default function CardsManagement() {
                 paymentType: purchasePaymentMethod,
                 partyName: supp.name,
                 dateTime: `${dateStr} ${timeStr}`,
-                userName: appUser?.name || appUser?.email || 'المدير'
+                userName: appUser?.name || appUser?.email || 'المدير',
+                items: [{
+                    categoryName: cat.name,
+                    quantity: qty,
+                    unitPrice: unitCost,
+                    totalAmount: totalAmount
+                }]
             });
             setActionModalOpen(true);
 
@@ -1424,6 +1446,133 @@ export default function CardsManagement() {
         } catch (error: any) {
             alert(error.message || 'حدث خطأ أثناء حفظ الفاتورة');
         }
+    };
+
+    const handleSaveQuickPurchaseReturn = async (data: {
+        supplierId: string;
+        categoryId: string;
+        quantity: number;
+        costPrice: number;
+        paymentMethod: 'cash' | 'credit';
+        notes: string;
+    }) => {
+        const { supplierId, categoryId, quantity, costPrice, paymentMethod, notes } = data;
+        const cat = categories.find(c => c.id === categoryId);
+        const supp = suppliers.find(s => s.id === supplierId);
+        if (!cat || !supp) {
+            throw new Error('الصنف أو المورد غير موجود');
+        }
+        const totalAmount = quantity * costPrice;
+        const dateStr = new Date().toISOString().split('T')[0];
+        const timeStr = new Date().toLocaleTimeString('ar-SA', { hour12: false });
+        const isCash = paymentMethod === 'cash';
+
+        const purchaseRef = doc(collection(db, 'card_purchases'));
+        const catRef = doc(db, 'card_categories', cat.id);
+        const suppRef = doc(db, 'card_suppliers', supp.id);
+
+        await runTransaction(db, async (transaction) => {
+            const catSnap = await transaction.get(catRef);
+            const suppSnap = await transaction.get(suppRef);
+
+            if (!catSnap.exists()) throw new Error('فئة الكروت غير موجودة');
+            if (!suppSnap.exists()) throw new Error('المورد غير موجود');
+
+            const currentAvailableCount = Number(catSnap.data().availableCount) || 0;
+            const currentBalance = Number(suppSnap.data().balance) || 0;
+
+            if (currentAvailableCount < quantity) {
+                throw new Error(`الكمية المتاحة في المخزن (${currentAvailableCount}) أقل من الكمية المراد استرجاعها (${quantity})`);
+            }
+
+            const invRefId = purchaseRef.id.slice(-6).toUpperCase();
+            transaction.set(purchaseRef, {
+                tenantId,
+                invoiceNumber: invRefId,
+                categoryId: cat.id,
+                categoryName: catSnap.data().name,
+                quantity: -quantity,
+                purchaseType: 'supplier_return',
+                isReturn: true,
+                paymentType: paymentMethod,
+                supplierId: supp.id,
+                supplierName: suppSnap.data().name,
+                unitPrice: costPrice,
+                totalAmount: -totalAmount,
+                month: dateStr.substring(0, 7),
+                date: dateStr,
+                dateTime: `${dateStr} ${timeStr}`,
+                userName: appUser?.name || appUser?.email || 'المدير',
+                status: 'completed',
+                notes: notes ? `مردودات مشتريات: ${notes}` : `مردودات مشتريات للمورد (${suppSnap.data().name})`,
+                createdAt: Date.now()
+            });
+
+            const newStock = currentAvailableCount - quantity;
+            transaction.update(catRef, {
+                availableCount: newStock,
+                updatedAt: Date.now()
+            });
+
+            const stockLogRef = doc(collection(db, 'card_stock_logs'));
+            transaction.set(stockLogRef, {
+                tenantId,
+                categoryId: cat.id,
+                categoryName: catSnap.data().name,
+                quantityAdded: -quantity,
+                userName: appUser?.name || appUser?.email || 'المدير',
+                additionDate: `${dateStr} ${timeStr}`,
+                availableCountAfter: newStock,
+                notes: `مردودات مشتريات كروت للمورد (${suppSnap.data().name}) - فاتورة #${invRefId}`,
+                createdAt: Date.now()
+            });
+
+            if (isCash) {
+                const cashboxRef = doc(collection(db, 'card_cashbox'));
+                transaction.set(cashboxRef, {
+                    tenantId,
+                    type: 'supplier_return_cash',
+                    title: `مسترد نقدي من المورد: ${suppSnap.data().name} (مردودات مشتريات)`,
+                    amount: totalAmount,
+                    isIncome: true,
+                    referenceId: purchaseRef.id,
+                    date: dateStr,
+                    dateTime: `${dateStr} ${timeStr}`,
+                    userName: appUser?.name || appUser?.email || 'المدير',
+                    createdAt: Date.now()
+                });
+            } else {
+                const newBalance = currentBalance - totalAmount;
+                transaction.update(suppRef, {
+                    balance: newBalance,
+                    updatedAt: Date.now()
+                });
+            }
+        });
+
+        const invRef = purchaseRef.id.slice(-6).toUpperCase();
+        setActionModalInvoice({
+            id: purchaseRef.id,
+            invoiceNumber: invRef,
+            type: 'purchase_return',
+            isReturn: true,
+            categoryName: cat.name,
+            quantity: -quantity,
+            unitPrice: costPrice,
+            totalAmount: totalAmount,
+            paymentType: paymentMethod,
+            partyName: supp.name,
+            dateTime: `${dateStr} ${timeStr}`,
+            userName: appUser?.name || appUser?.email || 'المدير',
+            notes: notes || `مردودات مشتريات كروت للمورد: ${supp.name}`,
+            items: [{
+                categoryName: cat.name,
+                quantity: quantity,
+                unitPrice: costPrice,
+                totalAmount: totalAmount
+            }]
+        });
+        setActionModalOpen(true);
     };
 
     const handleSavePurchaseVoucher = async (e: React.FormEvent) => {
@@ -1763,17 +1912,6 @@ export default function CardsManagement() {
     // Card Sections definition for the Main Squares Grid
     const sections = [
         {
-            id: 'add_stock',
-            title: 'إضافة كروت',
-            subtitle: 'تزويد ورصيد المخزون',
-            icon: Plus,
-            color: 'bg-indigo-600',
-            lightBg: 'bg-indigo-50 dark:bg-indigo-950/60',
-            textColor: 'text-indigo-600 dark:text-indigo-400',
-            borderColor: 'border-indigo-100 dark:border-indigo-900/50',
-            visible: getSecPermission('cards_stock', 'view')
-        },
-        {
             id: 'card_sales_section',
             title: 'المبيعات',
             subtitle: 'عرض فواتير المبيعات الفردية والـ PDF',
@@ -1787,7 +1925,7 @@ export default function CardsManagement() {
         {
             id: 'card_purchases_section',
             title: 'المشتريات',
-            subtitle: 'عرض فواتير المشتريات الفردية والـ PDF',
+            subtitle: 'إضافة كروت وفواتير المشتريات والـ PDF',
             icon: ShoppingBag,
             color: 'bg-blue-600',
             lightBg: 'bg-blue-50 dark:bg-blue-950/60',
@@ -1968,13 +2106,12 @@ export default function CardsManagement() {
                             </div>
                         </div>
                     ) : (
-                        (purchaseSubSection === 'invoices' || purchaseSubSection === 'list') ? (
+                        purchaseSubSection === 'list' ? (
                             <div className="bg-white dark:bg-slate-900 p-4 sm:p-5 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between gap-3 animate-in fade-in duration-200">
                                 <div className="flex items-center gap-3">
                                     <div>
                                         <h2 className="text-base sm:text-lg font-black text-slate-900 dark:text-white">
-                                            {purchaseSubSection === 'invoices' && 'عرض وطباعة فواتير الشراء للموردين'}
-                                            {purchaseSubSection === 'list' && 'عرض وتعديل بيانات الموردين'}
+                                            عرض وتعديل بيانات الموردين
                                         </h2>
                                     </div>
                                 </div>
@@ -2007,7 +2144,7 @@ export default function CardsManagement() {
                         );
                     })()}
 
-                    {/* MAIN SUB-SECTION MENU: 6 Cards (أقسام الموردين) */}
+                    {/* MAIN SUB-SECTION MENU: 7 Cards (أقسام الموردين) */}
                     {purchaseSubSection === null && (() => {
                         const suppSections = [
                             {
@@ -2029,13 +2166,22 @@ export default function CardsManagement() {
                                 borderColor: 'border-emerald-100 dark:border-emerald-900/50'
                             },
                             {
+                                id: 'returns',
+                                title: 'مردودات كروت الموردين',
+                                subtitle: 'قسم مستقل لإدارة وتصفية وطباعة مردودات المشتريات',
+                                icon: RotateCcw,
+                                lightBg: 'bg-rose-50 dark:bg-rose-950/60',
+                                textColor: 'text-rose-600 dark:text-rose-400',
+                                borderColor: 'border-rose-100 dark:border-rose-900/50'
+                            },
+                            {
                                 id: 'alerts',
                                 title: 'تنبيهات ديون الموردين',
                                 subtitle: 'نظام التنبيهات اليومي لتجاوز حدود الديون',
                                 icon: Sparkles,
-                                lightBg: 'bg-rose-50 dark:bg-rose-950/60',
-                                textColor: 'text-rose-600 dark:text-rose-400',
-                                borderColor: 'border-rose-100 dark:border-rose-900/50'
+                                lightBg: 'bg-amber-50 dark:bg-amber-950/60',
+                                textColor: 'text-amber-600 dark:text-amber-400',
+                                borderColor: 'border-amber-100 dark:border-amber-900/50'
                             },
                             {
                                 id: 'list',
@@ -2046,15 +2192,6 @@ export default function CardsManagement() {
                                 textColor: 'text-teal-600 dark:text-teal-400',
                                 borderColor: 'border-teal-100 dark:border-teal-900/50'
                             },
-                            ...(canAdd ? [{
-                                id: 'sales',
-                                title: 'فواتير ومردودات الموردين',
-                                subtitle: 'إصدار فواتير مشتريات من الموردين أو استرجاع كروت',
-                                icon: FileText,
-                                lightBg: 'bg-orange-50 dark:bg-orange-950/60',
-                                textColor: 'text-orange-600 dark:text-orange-400',
-                                borderColor: 'border-orange-100 dark:border-orange-900/50'
-                            }] : []),
                             ...(canAdd ? [{
                                 id: 'add',
                                 title: 'إضافة مورد جديد',
@@ -2440,8 +2577,37 @@ export default function CardsManagement() {
                             }}
                             onEditInvoice={getSecPermission('cards_stock', 'edit') ? handleEditPurchaseInvoice : undefined}
                             onCancelInvoice={getSecPermission('cards_stock', 'delete') ? handleCancelPurchaseInvoice : undefined}
+                            onOpenAddStock={canAdd ? () => setIsCardPurchaseModalOpen(true) : undefined}
+                            onOpenExchangeStock={() => {
+                                if (!getSecPermission('cards_exchanges', 'view') && !getSecPermission('cards_exchanges', 'add')) {
+                                    alert('عذراً، ليس لديك صلاحية استبدال الكروت.');
+                                    return;
+                                }
+                                setIsCardExchangeModalOpen(true);
+                            }}
                             onBack={() => setPurchaseSubSection(null)}
                             appUser={appUser}
+                        />
+                    )}
+
+                    {/* Sub-Section 1.6: Dedicated Purchase Returns Section */}
+                    {purchaseSubSection === 'returns' && (
+                        <CardReturnsSection
+                            purchases={purchases}
+                            categories={categories}
+                            suppliers={suppliers}
+                            onViewInvoice={(invoice) => {
+                                setActionModalInvoice(invoice);
+                                setActionModalOpen(true);
+                            }}
+                            onOpenMultiReturnModal={() => {
+                                setPurchaseModalIsReturnOnly(true);
+                                setIsCardPurchaseModalOpen(true);
+                            }}
+                            onSaveQuickReturn={handleSaveQuickPurchaseReturn}
+                            onBack={() => setPurchaseSubSection(null)}
+                            appUser={appUser}
+                            canAdd={canAdd}
                         />
                     )}
 
@@ -2675,158 +2841,6 @@ export default function CardsManagement() {
                     )}
 
                     
-                    {/* Sub-Section 4: Sales & Returns */}
-                    {purchaseSubSection === 'sales' && (
-                        <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm max-w-2xl mx-auto animate-in zoom-in-95 duration-200 text-right" dir="rtl">
-                            <h3 className="text-base font-black text-slate-900 dark:text-white mb-6 pb-3 border-b border-slate-100 dark:border-slate-800 flex items-center justify-center gap-2 w-full text-center">
-                                <FileText className="text-orange-600 dark:text-orange-400" size={20} />
-                                <span>إصدار فاتورة مشتريات / استرجاع لمورد</span>
-                            </h3>
-
-                            {/* Type Toggle */}
-                            <div className="flex bg-slate-100 dark:bg-slate-800 p-1 rounded-2xl mb-6 relative w-full sm:w-2/3 mx-auto">
-                                <button
-                                    onClick={() => setPurchaseIsReturn(false)}
-                                    className={`flex-1 py-2 text-xs font-black rounded-xl transition-all z-10 flex items-center justify-center gap-2 ${!purchaseIsReturn ? 'text-white' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'}`}
-                                >
-                                    فاتورة مبيعات
-                                </button>
-                                <button
-                                    onClick={() => setPurchaseIsReturn(true)}
-                                    className={`flex-1 py-2 text-xs font-black rounded-xl transition-all z-10 flex items-center justify-center gap-2 ${purchaseIsReturn ? 'text-white' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'}`}
-                                >
-                                    فاتورة مرتجع
-                                </button>
-                                <div
-                                    className="absolute top-1 bottom-1 w-[calc(50%-4px)] bg-slate-900 dark:bg-slate-700 rounded-xl transition-all duration-300 shadow-md"
-                                    style={{ right: !purchaseIsReturn ? '4px' : 'calc(50%)' }}
-                                />
-                            </div>
-
-                            <form onSubmit={handleSavePurchaseInvoice} className="space-y-5">
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                    <div>
-                                        <label className="block text-xs font-black text-slate-700 dark:text-slate-300 mb-2">المورد <span className="text-rose-500">*</span></label>
-                                        <SearchableSelect
-                                            required
-                                            value={purchaseSupplierId}
-                                            onChange={setPurchaseSupplierId}
-                                            placeholder="اختر المورد..."
-                                            options={suppliers.map(d => ({ id: d.id, label: d.name, subLabel: d.phone }))}
-                                        />
-                                    </div>
-                                    
-                                    <div>
-                                        <label className="block text-xs font-black text-slate-700 dark:text-slate-300 mb-2">الفئة (نوع الكروت) <span className="text-rose-500">*</span></label>
-                                        <SearchableSelect
-                                            required
-                                            value={purchaseCategoryId}
-                                            onChange={setPurchaseCategoryId}
-                                            placeholder="اختر الفئة..."
-                                            options={categories.map(c => ({ id: c.id, label: c.name, subLabel: `متوفر: ${c.availableCount}` }))}
-                                        />
-                                    </div>
-                                </div>
-
-                                <div>
-                                    <label className="block text-xs font-black text-slate-700 dark:text-slate-300 mb-2">الكمية <span className="text-rose-500">*</span></label>
-                                    <input
-                                        type="number"
-                                        required
-                                        min="1"
-                                        placeholder="عدد الكروت..."
-                                        value={purchaseQuantity}
-                                        onChange={(e) => setPurchaseQuantity(e.target.value)}
-                                        onFocus={(e) => {
-                                            setPurchaseQuantity('');
-                                            e.target.select();
-                                        }}
-                                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-3 text-xs font-bold outline-none focus:border-orange-500 text-slate-900 dark:text-white"
-                                    />
-                                </div>
-
-                                <div>
-                                    <label className="block text-xs font-black text-slate-700 dark:text-slate-300 mb-2">سعر تكلفة الكارت الواحد (ريال يمني) <span className="text-rose-500">*</span></label>
-                                    <input
-                                        type="number"
-                                        required
-                                        min="0"
-                                        step="any"
-                                        placeholder="سعر التكلفة..."
-                                        value={purchaseCostPrice}
-                                        onChange={(e) => setPurchaseCostPrice(e.target.value)}
-                                        onFocus={(e) => {
-                                            setPurchaseCostPrice('');
-                                            e.target.select();
-                                        }}
-                                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-3 text-xs font-bold outline-none focus:border-orange-500 text-slate-900 dark:text-white"
-                                    />
-                                </div>
-
-
-                                {/* Payment Method Toggle */}
-                                <div>
-                                    <label className="block text-xs font-black text-slate-700 dark:text-slate-300 mb-2">طريقة الدفع والتسديد <span className="text-rose-500">*</span></label>
-                                    <div className="flex gap-2">
-                                        <button
-                                            type="button"
-                                            onClick={() => setPurchasePaymentMethod('cash')}
-                                            className={`flex-1 py-3 text-xs font-black rounded-xl transition-all border flex items-center justify-center gap-2 ${purchasePaymentMethod === 'cash' ? 'bg-orange-600 text-white border-orange-600 shadow-md shadow-orange-600/20' : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700'}`}
-                                        >
-                                            <Wallet size={16} />
-                                            <span>مدفوع نقدي</span>
-                                        </button>
-                                        <button
-                                            type="button"
-                                            onClick={() => setPurchasePaymentMethod('credit')}
-                                            className={`flex-1 py-3 text-xs font-black rounded-xl transition-all border flex items-center justify-center gap-2 ${purchasePaymentMethod === 'credit' ? 'bg-orange-600 text-white border-orange-600 shadow-md shadow-orange-600/20' : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700'}`}
-                                        >
-                                            <Receipt size={16} />
-                                            <span>تسجيل كدين (آجل)</span>
-                                        </button>
-                                    </div>
-                                </div>
-
-                                {purchaseCategoryId && purchaseSupplierId && purchaseQuantity && (() => {
-                                    const cat = categories.find(c => c.id === purchaseCategoryId);
-                                    const dist = suppliers.find(d => d.id === purchaseSupplierId);
-                                    const qty = parseInt(purchaseQuantity) || 0;
-                                    if (cat && dist && qty > 0) {
-                                        const unitPrice = parseFloat(purchaseCostPrice) || 0;
-                                        const total = unitPrice * qty;
-                                        return (
-                                            <div className="bg-orange-50 dark:bg-orange-900/20 p-4 rounded-2xl border border-orange-100 dark:border-orange-800/30 space-y-3">
-                                                <div className="flex justify-between items-center text-xs">
-                                                    <span className="text-slate-500 dark:text-slate-400">الإجمالي:</span>
-                                                    <span className="font-bold text-slate-700 dark:text-slate-300">{total.toLocaleString()} ريال يمني</span>
-                                                </div>
-                                                <div className="pt-2 border-t border-orange-200/50 dark:border-orange-800/50 flex justify-between items-center">
-                                                    <span className="font-black text-slate-800 dark:text-slate-200 text-sm">المبلغ المطلوب ({purchasePaymentMethod === 'cash' ? 'يخصم من الصندوق' : 'يسجل كدين'}):</span>
-                                                    <span className="font-black text-orange-600 dark:text-orange-400 text-sm">{total.toLocaleString()} ريال يمني</span>
-                                                </div>
-                                            </div>
-                                        );
-                                    }
-                                    return null;
-                                })()}
-
-                                <div className="pt-4 border-t border-slate-100 dark:border-slate-800">
-                                    <button
-                                        type="submit"
-                                        className={`w-full py-3.5 rounded-2xl font-black text-white text-sm transition-all shadow-lg active:scale-95 flex items-center justify-center gap-2 ${
-                                            purchaseIsReturn 
-                                            ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-600/30' 
-                                            : 'bg-orange-600 hover:bg-orange-700 shadow-orange-600/30'
-                                        }`}
-                                    >
-                                        <CheckCircle2 size={18} />
-                                        <span>{purchaseIsReturn ? 'تأكيد المرتجع' : 'تأكيد الفاتورة وإضافة للمخزون'}</span>
-                                    </button>
-                                </div>
-                            </form>
-                        </div>
-                    )}
-
                     {/* Sub-Section 3: Add Supplier */}
                     {purchaseSubSection === 'add' && (
                         <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm max-w-xl mx-auto animate-in zoom-in-95 duration-200">
@@ -5304,6 +5318,14 @@ export default function CardsManagement() {
                     }}
                     onEditInvoice={getSecPermission('cards_stock', 'edit') ? handleEditPurchaseInvoice : undefined}
                     onCancelInvoice={getSecPermission('cards_stock', 'delete') ? handleCancelPurchaseInvoice : undefined}
+                    onOpenAddStock={canAdd ? () => setIsCardPurchaseModalOpen(true) : undefined}
+                    onOpenExchangeStock={() => {
+                        if (!getSecPermission('cards_exchanges', 'view') && !getSecPermission('cards_exchanges', 'add')) {
+                            alert('عذراً، ليس لديك صلاحية استبدال الكروت.');
+                            return;
+                        }
+                        setIsCardExchangeModalOpen(true);
+                    }}
                     appUser={appUser}
                 />
             )}
@@ -5905,9 +5927,15 @@ export default function CardsManagement() {
                 prefetchedCategories={categories}
                 prefetchedSuppliers={suppliers}
                 isOpen={isCardPurchaseModalOpen}
+                isReturnOnly={purchaseModalIsReturnOnly}
+                initialIsReturn={purchaseModalIsReturnOnly}
                 editingInvoice={editingCardPurchase}
                 onReverseInvoice={editingCardPurchase ? () => reverseCardInvoice(editingCardPurchase, 'purchase', true) : undefined}
-                onClose={() => { setIsCardPurchaseModalOpen(false); setEditingCardPurchase(null); }}
+                onClose={() => { 
+                    setIsCardPurchaseModalOpen(false); 
+                    setEditingCardPurchase(null); 
+                    setPurchaseModalIsReturnOnly(false);
+                }}
                 onInvoiceCreated={(invoice) => {
                     setActionModalInvoice(invoice);
                     setActionModalOpen(true);

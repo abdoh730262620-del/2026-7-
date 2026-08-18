@@ -287,23 +287,23 @@ export const InvoicePreviewModal = ({
                     </div>
                 </div>
                 
-                {/* Scrollable Preview Area */}
-                <div className="flex-1 overflow-auto bg-slate-300/80 dark:bg-slate-950 p-2 sm:p-4 flex justify-center items-start w-full">
+                {/* Preview Area (بدون سكرول أفقي وتناسب كامل مع الشاشة) */}
+                <div className="flex-1 overflow-y-auto overflow-x-hidden bg-slate-200/80 dark:bg-slate-950 p-2 sm:p-4 flex justify-center items-start w-full">
                     <div 
-                        className={`transition-all duration-200 flex justify-center ${
-                            paperSize === 'A4' ? 'w-auto min-w-[820px]' : 'w-full max-w-[340px]'
+                        className={`transition-all duration-200 flex justify-center w-full ${
+                            paperSize === 'A4' ? 'max-w-[680px]' : paperSize === 'Thermal80' ? 'max-w-[380px]' : 'max-w-[320px]'
                         }`} 
                     >
                         {html ? (
                             <iframe 
                                 srcDoc={html} 
                                 title="Invoice Preview"
-                                className={`border-0 rounded-xl transition-all shadow-xl ${
-                                    paperSize === 'A4' ? 'w-[820px] h-[1160px]' : 'w-full h-[550px]'
+                                className={`border-0 rounded-2xl transition-all shadow-xl bg-white w-full ${
+                                    paperSize === 'A4' ? 'h-[75vh] max-h-[860px] min-h-[520px]' : 'h-[70vh] max-h-[600px] min-h-[440px]'
                                 }`}
                             />
                         ) : (
-                            <div className="flex items-center justify-center h-[400px] text-slate-400 font-bold text-xs bg-white rounded-xl">
+                            <div className="flex items-center justify-center h-[400px] text-slate-400 font-bold text-xs bg-white rounded-2xl w-full">
                                 جاري تجهيز الفاتورة...
                             </div>
                         )}

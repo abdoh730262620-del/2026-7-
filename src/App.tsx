@@ -13,6 +13,7 @@ import Dashboard from './pages/Dashboard';
 import Products from './pages/Products';
 import Sales from './pages/Sales';
 import Users from './pages/Users';
+import Employees from './pages/Employees';
 import Logs from './pages/Logs';
 import PlaceholderPage from './pages/PlaceholderPage';
 import SettingsLayout from './pages/SettingsLayout';
@@ -69,12 +70,11 @@ export default function App() {
          console.log('App resumed');
       });
 
-      CapacitorApp.addListener('backButton', ({ canGoBack }) => {
-        if (canGoBack) {
+      CapacitorApp.addListener('backButton', () => {
+        if (typeof (window as any).triggerAppBackButton === 'function') {
+          (window as any).triggerAppBackButton();
+        } else if (window.history.length > 1) {
           window.history.back();
-        } else {
-          // Stay on app home page rather than exiting instantly
-          console.log('Already at root page, ignoring back button exit');
         }
       });
 
@@ -374,6 +374,7 @@ export default function App() {
           
           <Route path="purchases" element={<Purchases />} />
           <Route path="customers" element={<Customers />} />
+          <Route path="employees" element={<Employees />} />
           <Route path="suppliers" element={<Suppliers />} />
           <Route path="cash" element={<Cash />} />
           <Route path="vouchers" element={<Vouchers />} />

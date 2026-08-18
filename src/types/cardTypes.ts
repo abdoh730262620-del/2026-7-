@@ -99,7 +99,7 @@ export interface CardPurchase {
     categoryName: string;
     categoryId: string;
     quantity: number;
-    purchaseType: 'supplier';
+    purchaseType: 'supplier' | 'supplier_return' | string;
     paymentType: 'cash' | 'credit'; 
     supplierId?: string;
     supplierName?: string;
@@ -114,6 +114,8 @@ export interface CardPurchase {
     status?: 'draft' | 'completed' | 'cancelled';
     cancelledBy?: string;
     cancelledAt?: number;
+    isReturn?: boolean;
+    notes?: string;
 }
 
 export interface CardPurchaseVoucher {

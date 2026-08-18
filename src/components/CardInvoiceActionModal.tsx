@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Printer, Share2, X, CheckCircle2, Loader2, FileText, ShoppingBag, TrendingUp, Eye } from 'lucide-react';
+import { Printer, Share2, X, CheckCircle2, Loader2, FileText, ShoppingBag, TrendingUp, Eye, RotateCcw } from 'lucide-react';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { Share as CapacitorShare } from '@capacitor/share';
 import { generateInvoicePdf, InvoicePdfInput } from '../lib/pdfHelper';
@@ -21,6 +21,9 @@ export const CardInvoiceActionModal: React.FC<CardInvoiceActionModalProps> = ({
     const [showHtmlPreview, setShowHtmlPreview] = useState(false);
 
     if (!isOpen || !invoice) return null;
+
+    const isReturn = !!(invoice.isReturn || invoice.type === 'purchase_return' || invoice.type === 'sale_return');
+    const isSale = invoice.type === 'sale' || invoice.type === 'sale_return';
 
     const getBlob = async (): Promise<{ blob: Blob; filename: string }> => {
         const { blob, filename } = await generateInvoicePdf(invoice);
@@ -78,7 +81,7 @@ export const CardInvoiceActionModal: React.FC<CardInvoiceActionModalProps> = ({
 
                         await CapacitorShare.share({
                             title: 'مشاركة الفاتورة',
-                            text: `فاتورة كروت رقم #${invoice.invoiceNumber}`,
+                            text: `${isReturn ? 'فاتورة مردودات كروت' : 'فاتورة كروت'} رقم #${invoice.invoiceNumber}`,
                             url: uri.uri,
                             dialogTitle: 'مشاركة الفاتورة كـ PDF',
                         });
@@ -93,7 +96,7 @@ export const CardInvoiceActionModal: React.FC<CardInvoiceActionModalProps> = ({
                     await navigator.share({
                         files: [file],
                         title: 'مشاركة الفاتورة',
-                        text: `فاتورة كروت رقم #${invoice.invoiceNumber}`,
+                        text: `${isReturn ? 'فاتورة مردودات كروت' : 'فاتورة كروت'} رقم #${invoice.invoiceNumber}`,
                     });
                 } else {
                     const fileURL = URL.createObjectURL(blob);
@@ -113,8 +116,6 @@ export const CardInvoiceActionModal: React.FC<CardInvoiceActionModalProps> = ({
             setIsLoading(false);
         }
     };
-
-    const isSale = invoice.type === 'sale';
 
     return (
         <AnimatePresence>
@@ -138,18 +139,29 @@ export const CardInvoiceActionModal: React.FC<CardInvoiceActionModalProps> = ({
                     <div className="flex items-center justify-between pb-4 mb-4 border-b border-slate-100 dark:border-slate-800">
                         <div className="flex items-center gap-3">
                             <div className={`w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 ${
-                                isSale ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/60 dark:text-emerald-400' : 'bg-blue-50 text-blue-600 dark:bg-blue-950/60 dark:text-blue-400'
+                                isReturn
+                                    ? 'bg-rose-50 text-rose-600 dark:bg-rose-950/60 dark:text-rose-400 border border-rose-100 dark:border-rose-900/50'
+                                    : isSale 
+                                        ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/60 dark:text-emerald-400' 
+                                        : 'bg-blue-50 text-blue-600 dark:bg-blue-950/60 dark:text-blue-400'
                             }`}>
-                                {isSale ? <TrendingUp size={20} /> : <ShoppingBag size={20} />}
+                                {isReturn ? <RotateCcw size={20} /> : isSale ? <TrendingUp size={20} /> : <ShoppingBag size={20} />}
                             </div>
                             <div>
                                 <h3 className="text-sm font-black text-slate-900 dark:text-white mb-1">
-                                    {isSale ? 'فاتورة مبيعات كروت' : 'فاتورة مشتريات كروت'}
+                                    {isReturn
+                                        ? (isSale ? 'فاتورة مردودات مبيعات كروت' : 'فاتورة مردودات مشتريات كروت')
+                                        : (isSale ? 'فاتورة مبيعات كروت' : 'فاتورة مشتريات كروت')}
                                 </h3>
                                 <div className="flex items-center flex-wrap gap-1.5 text-[10px] font-bold">
                                     <span className="font-mono text-indigo-600 dark:text-indigo-400 text-[11px]">
                                         #{invoice.invoiceNumber}
                                     </span>
+                                    {isReturn && (
+                                        <span className="px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300 font-black">
+                                            مرتجع
+                                        </span>
+                                    )}
                                     <span className={`px-2 py-0.5 rounded-full ${
                                         invoice.paymentType === 'cash' ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300' : 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
                                     }`}>

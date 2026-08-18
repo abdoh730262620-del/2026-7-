@@ -2,12 +2,13 @@ import React, { useEffect, useState } from 'react';
 import { useAuthStore } from '../store/authStore';
 import { useInvoiceStore } from '../store/invoiceStore';
 import { Link } from 'react-router-dom';
-import { ShoppingCart, Truck, Users, DollarSign, Receipt, Package, RefreshCw, Clock, Sparkles, Loader2, X, ShieldCheck, FileSpreadsheet, Printer, BrainCircuit, ArrowRight, ClipboardCheck, Gift, FileSignature, Coins, Wifi, Layers } from 'lucide-react';
+import { ShoppingCart, Truck, Users, DollarSign, Receipt, Package, RefreshCw, Clock, Sparkles, Loader2, X, ShieldCheck, FileSpreadsheet, Printer, BrainCircuit, ArrowRight, ClipboardCheck, Gift, FileSignature, Coins, Wifi, Layers, Briefcase, Search } from 'lucide-react';
 import { collection, query, onSnapshot, getDocs, where } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { useSettingsStore } from '../store/settingsStore';
 import { printReport } from '../lib/printHelper';
 import { getDaysSinceLastSync } from '../lib/syncTracker';
+import { useUIStore } from '../store/uiStore';
 import SyncProgressIndicator from '../components/SyncProgressIndicator';
 
 interface Product {
@@ -30,11 +31,142 @@ export default function Dashboard() {
     const { settings } = useSettingsStore();
     const { salesCart, purchasesCart, salesMinimized, purchasesMinimized, setSalesActiveTab, setPurchasesActiveTab, setQuotationsActiveTab } = useInvoiceStore();
     
+    const [mainCash, setMainCash] = useState(0);
+    const [mainCredit, setMainCredit] = useState(0);
+    const [cardCash, setCardCash] = useState(0);
+    const [cardCredit, setCardCredit] = useState(0);
+
+    useEffect(() => {
+        if (!appUser?.uid) return;
+        const tenantId = appUser?.tenantId || 'single_store';
+        const isAdmin = appUser?.role === 'admin';
+
+        // Calculate the beginning of the current calendar month
+        const startOfMonth = new Date();
+        startOfMonth.setDate(1);
+        startOfMonth.setHours(0, 0, 0, 0);
+        const startOfMonthMs = startOfMonth.getTime();
+
+        // 1. Subscribe to main cashbox (cash collection)
+        const qMain = query(collection(db, 'cash'), where('tenantId', '==', tenantId));
+        const unsubMain = onSnapshot(qMain, (snapshot) => {
+            let bal = 0;
+            snapshot.forEach(d => {
+                const data = d.data();
+                if (data.affectsCash === false) return;
+
+                // Restrict to current calendar month
+                const docTime = data.createdAt || (typeof data.date === 'number' ? data.date : (data.date ? new Date(data.date).getTime() : 0));
+                if (docTime < startOfMonthMs) return;
+
+                const isUserDoc = data.createdBy === appUser.uid;
+                if (isAdmin || isUserDoc) {
+                    if (data.type === 'in') {
+                        bal += (data.amount || 0);
+                    } else if (data.type === 'out') {
+                        bal -= (data.amount || 0);
+                    }
+                }
+            });
+            setMainCash(bal);
+        }, (err) => handleFirestoreError(err, OperationType.GET, 'cash'));
+
+        // 2. Subscribe to main sales for main credit (sales collection)
+        const qSales = query(collection(db, 'sales'), where('tenantId', '==', tenantId));
+        const unsubSales = onSnapshot(qSales, (snapshot) => {
+            let bal = 0;
+            snapshot.forEach(d => {
+                const data = d.data();
+
+                // Restrict to current calendar month
+                const docTime = data.createdAt || (typeof data.date === 'number' ? data.date : (data.date ? new Date(data.date).getTime() : 0));
+                if (docTime < startOfMonthMs) return;
+
+                const isUserDoc = data.createdBy === appUser.uid;
+                if (isAdmin || isUserDoc) {
+                    if (data.paymentType === 'credit' && data.status !== 'returned' && data.status !== 'cancelled') {
+                        const outstanding = (data.total || 0) - (data.paidAmount || 0);
+                        if (outstanding > 0) {
+                            bal += outstanding;
+                        }
+                    }
+                }
+            });
+            setMainCredit(bal);
+        }, (err) => handleFirestoreError(err, OperationType.GET, 'sales'));
+
+        // 3. Subscribe to card cashbox (card_cashbox collection)
+        const qCard = query(collection(db, 'card_cashbox'), where('tenantId', '==', tenantId));
+        const unsubCard = onSnapshot(qCard, (snapshot) => {
+            let bal = 0;
+            snapshot.forEach(d => {
+                const data = d.data();
+
+                // Restrict to current calendar month
+                const docTime = data.createdAt || (typeof data.date === 'number' ? data.date : (data.date ? new Date(data.date).getTime() : 0));
+                if (docTime < startOfMonthMs) return;
+
+                const isUserDoc = data.createdBy === appUser.uid || data.userName === appUser.name;
+                if (isAdmin || isUserDoc) {
+                    if (data.isIncome) {
+                        bal += (data.amount || 0);
+                    } else {
+                        bal -= (data.amount || 0);
+                    }
+                }
+            });
+            setCardCash(bal);
+        }, (err) => handleFirestoreError(err, OperationType.GET, 'card_cashbox'));
+
+        // 4. Subscribe to card sales for card credit (card_sales collection)
+        const qCardSales = query(collection(db, 'card_sales'), where('tenantId', '==', tenantId));
+        const unsubCardSales = onSnapshot(qCardSales, (snapshot) => {
+            let bal = 0;
+            snapshot.forEach(d => {
+                const data = d.data();
+
+                // Restrict to current calendar month
+                const docTime = data.createdAt || (typeof data.date === 'number' ? data.date : (data.date ? new Date(data.date).getTime() : 0));
+                if (docTime < startOfMonthMs) return;
+
+                const isUserDoc = data.createdBy === appUser.uid || data.userName === appUser.name || data.sellerName === appUser.name || data.createdByName === appUser.name;
+                if (isAdmin || isUserDoc) {
+                    if (data.paymentType === 'credit' && data.status === 'completed') {
+                        bal += (data.totalAmount || 0);
+                    }
+                }
+            });
+            setCardCredit(bal);
+        }, (err) => handleFirestoreError(err, OperationType.GET, 'card_sales'));
+
+        return () => {
+            unsubMain();
+            unsubSales();
+            unsubCard();
+            unsubCardSales();
+        };
+    }, [appUser]);
+    
     // Interactive Statement Flow
     const [aiQuery, setAiQuery] = useState('');
     const [isThinking, setIsThinking] = useState(false);
     const [aiResult, setAiResult] = useState<{ title: string, data: any[], type: 'sales' | 'products' | 'customers' | 'suppliers' | 'none' } | null>(null);
     const [suggestions, setSuggestions] = useState<string[]>([]);
+
+    // Zustand UI Store bindings and 30s auto-hide timer for search bar
+    const showDashboardSearch = useUIStore((s) => s.showDashboardSearch);
+    const setShowDashboardSearch = useUIStore((s) => s.setShowDashboardSearch);
+
+    useEffect(() => {
+        if (!showDashboardSearch) return;
+        if (aiQuery.trim() !== '') return;
+
+        const timer = setTimeout(() => {
+            setShowDashboardSearch(false);
+        }, 30000);
+
+        return () => clearTimeout(timer);
+    }, [showDashboardSearch, aiQuery, setShowDashboardSearch]);
 
     // Interactive Statement Flow
     const [interactiveStep, setInteractiveStep] = useState<'none' | 'select_entity' | 'select_options'>('none');
@@ -267,10 +399,11 @@ export default function Dashboard() {
         { title: 'الجرد الميداني', path: '/inventory-audit', icon: ClipboardCheck, roles: ['admin', 'inventory'], bgColor: 'bg-white', textColor: 'text-orange-600', borderColor: 'border-orange-100' },
         { title: 'برنامج الولاء', path: '/loyalty', icon: Gift, roles: ['admin', 'cashier'], bgColor: 'bg-white', textColor: 'text-yellow-600', borderColor: 'border-yellow-100', enabled: settings.isLoyaltyEnabled },
         { title: 'الصندوق', path: '/cash', icon: DollarSign, roles: ['admin', 'cashier'], bgColor: 'bg-white', textColor: 'text-emerald-600', borderColor: 'border-emerald-100' },
-        { title: 'سندات قبض وصرف', path: '/vouchers', icon: Receipt, roles: ['admin', 'cashier', 'salesman'], bgColor: 'bg-white', textColor: 'text-red-600', borderColor: 'border-red-100' },
+        { title: 'سندات قبض وصرف', path: '/vouchers', icon: Receipt, roles: ['admin', 'cashier', 'salesman', 'network_worker'], bgColor: 'bg-white', textColor: 'text-red-600', borderColor: 'border-red-100' },
         { title: 'المصروفات', path: '/expenses', icon: Coins, roles: ['admin', 'cashier'], bgColor: 'bg-white', textColor: 'text-pink-600', borderColor: 'border-pink-100' },
-        { title: 'كروت الشبكة', path: '/network-cards', icon: Wifi, roles: ['admin', 'cashier', 'salesman', 'inventory'], bgColor: 'bg-white', textColor: 'text-indigo-600', borderColor: 'border-indigo-100' },
-        { title: 'إدارة الكروت', path: '/cards-management', icon: Layers, roles: ['admin', 'cashier', 'inventory'], bgColor: 'bg-white', textColor: 'text-purple-600', borderColor: 'border-purple-100' }
+        { title: 'كروت الشبكة', path: '/network-cards', icon: Wifi, roles: ['admin', 'cashier', 'salesman', 'inventory', 'network_worker'], bgColor: 'bg-white', textColor: 'text-indigo-600', borderColor: 'border-indigo-100' },
+        { title: 'إدارة الكروت', path: '/cards-management', icon: Layers, roles: ['admin', 'cashier', 'inventory', 'network_worker'], bgColor: 'bg-white', textColor: 'text-purple-600', borderColor: 'border-purple-100' },
+        { title: 'قسم الموظفين', path: '/employees', icon: Briefcase, roles: ['admin'], bgColor: 'bg-white', textColor: 'text-indigo-600', borderColor: 'border-indigo-100' }
     ];
 
     const accessibleCards = cards.filter(card => {
@@ -285,80 +418,129 @@ export default function Dashboard() {
             {/* Intelligent Assistant Section - Hero Search */}
             <div className="mb-3 md:mb-4 shrink-0">
                 <div className="relative group max-w-2xl mx-auto">
-                    <div className="bg-card-bg backdrop-blur-md p-1 sm:p-1.5 rounded-2xl border-2 border-slate-950 dark:border-slate-100 shadow-[0_10px_40px_rgba(0,0,0,0.04)] flex flex-col sm:flex-row items-center gap-1.5 group-focus-within:border-purple-600 group-focus-within:ring-4 group-focus-within:ring-purple-50 dark:group-focus-within:ring-purple-950/50 transition-all duration-300">
-                        <div className="hidden sm:flex p-1.5 bg-white rounded-xl text-purple-600 shrink-0">
-                            <BrainCircuit size={16} />
-                        </div>
-                        <div className="flex-1 w-full relative">
-                            <input 
-                                type="text"
-                                value={aiQuery}
-                                onChange={(e) => setAiQuery(e.target.value)}
-                                onKeyDown={(e) => {
-                                    if (e.key === 'Enter') {
-                                        handleAISearch();
-                                    }
-                                }}
-                                placeholder="بماذا يمكنني مساعدك اليوم؟ ابحث عن تقارير، عملاء، أو مبيعات..."
-                                className="w-full bg-transparent border-none outline-none text-text-main font-black placeholder:text-text-main/40 py-2 px-3 sm:px-1 text-xs"
-                            />
+                    {showDashboardSearch && (
+                        <div className="bg-card-bg backdrop-blur-md p-1 sm:p-1.5 rounded-2xl border-2 border-slate-950 dark:border-slate-100 shadow-[0_10px_40px_rgba(0,0,0,0.04)] flex flex-col sm:flex-row items-center gap-1.5 group-focus-within:border-purple-600 group-focus-within:ring-4 group-focus-within:ring-purple-50 dark:group-focus-within:ring-purple-950/50 transition-all duration-300 animate-in fade-in slide-in-from-top-2 duration-300 mb-4">
+                            <div className="hidden sm:flex p-1.5 bg-white rounded-xl text-purple-600 shrink-0">
+                                <BrainCircuit size={16} />
+                            </div>
+                            <div className="flex-1 w-full relative">
+                                <input 
+                                    type="text"
+                                    value={aiQuery}
+                                    onChange={(e) => setAiQuery(e.target.value)}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                            handleAISearch();
+                                        }
+                                    }}
+                                    placeholder="بماذا يمكنني مساعدك اليوم؟ ابحث عن تقارير، عملاء، أو مبيعات..."
+                                    className="w-full bg-transparent border-none outline-none text-text-main font-black placeholder:text-text-main/40 py-2 px-3 sm:px-1 text-xs"
+                                />
 
-                            {/* Suggestions Dropdown */}
-                            {suggestions.length > 0 && !aiResult && !isThinking && (
-                                <div className="absolute top-full left-0 right-0 mt-2 bg-card-bg border border-border-main rounded-2xl shadow-2xl z-50 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-300">
-                                    <div className="p-2 border-b border-border-main bg-bg-main flex items-center gap-2">
-                                        <Sparkles size={10} className="text-purple-500 animate-pulse" />
-                                        <span className="text-[9px] font-black text-text-main uppercase tracking-widest">مقترحات ذكية</span>
+                                {/* Suggestions Dropdown */}
+                                {suggestions.length > 0 && !aiResult && !isThinking && (
+                                    <div className="absolute top-full left-0 right-0 mt-2 bg-card-bg border border-border-main rounded-2xl shadow-2xl z-50 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-300">
+                                        <div className="p-2 border-b border-border-main bg-bg-main flex items-center gap-2">
+                                            <Sparkles size={10} className="text-purple-500 animate-pulse" />
+                                            <span className="text-[9px] font-black text-text-main uppercase tracking-widest">مقترحات ذكية</span>
+                                        </div>
+                                        <div className="max-h-48 overflow-y-auto modern-scrollbar">
+                                            {suggestions.map((s, i) => (
+                                                <button 
+                                                    key={`${s}-${i}`}
+                                                    onClick={() => {
+                                                        setAiQuery(s);
+                                                        setSuggestions([]);
+                                                        handleAISearch(s);
+                                                    }}
+                                                    className="w-full text-right px-4 py-2.5 text-[10px] font-black text-text-main hover:bg-white hover:text-purple-600 transition-colors flex items-center justify-between group border-b last:border-0 border-border-main"
+                                                >
+                                                    <span className="truncate">{s}</span>
+                                                    <ArrowRight size={10} className="opacity-0 group-hover:opacity-100 transition-all -rotate-180 translate-x-2 group-hover:translate-x-0" />
+                                                </button>
+                                            ))}
+                                        </div>
                                     </div>
-                                    <div className="max-h-48 overflow-y-auto modern-scrollbar">
-                                        {suggestions.map((s, i) => (
-                                            <button 
-                                                key={`${s}-${i}`}
-                                                onClick={() => {
-                                                    setAiQuery(s);
-                                                    setSuggestions([]);
-                                                    handleAISearch(s);
-                                                }}
-                                                className="w-full text-right px-4 py-2.5 text-[10px] font-black text-text-main hover:bg-white hover:text-purple-600 transition-colors flex items-center justify-between group border-b last:border-0 border-border-main"
-                                            >
-                                                <span className="truncate">{s}</span>
-                                                <ArrowRight size={10} className="opacity-0 group-hover:opacity-100 transition-all -rotate-180 translate-x-2 group-hover:translate-x-0" />
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-                        <button 
-                            onClick={() => handleAISearch()}
-                            disabled={isThinking || !aiQuery.trim()}
-                            className="w-full sm:w-auto bg-purple-600 text-white px-4 py-2 rounded-xl font-black text-[10px] hover:bg-purple-700 active:scale-95 transition-all flex items-center justify-center gap-2 shrink-0 disabled:opacity-50 shadow-lg shadow-purple-200"
-                        >
-                            {isThinking ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
-                            <span>بحث</span>
-                        </button>
-                    </div>
-
-                    {/* Quick Chips - One line scrollable */}
-                    <div className="flex items-center gap-2 mt-3 px-1 overflow-x-auto no-scrollbar pb-2">
-                        <span className="text-[9px] font-black text-text-main/30 uppercase shrink-0">شائع:</span>
-                        {[
-                            { label: 'كشف حساب عميل', query: 'أريد كشف حساب عميل محدد' },
-                            { label: 'نقص المخزون', query: 'تقرير الأصناف منخفضة الكمية' },
-                            { label: 'مبيعات اليوم', query: 'تقرير مبيعات اليوم' },
-                            { label: 'ديون الموردين', query: 'كشف مديونية الموردين' }
-                        ].map((btn, i) => (
+                                )}
+                            </div>
                             <button 
-                                key={btn.label}
-                                onClick={() => {
-                                    setAiQuery(btn.query);
-                                    handleAISearch(btn.query);
-                                }}
-                                className="text-[9px] font-black px-3 py-1 bg-card-bg text-text-main/60 rounded-full hover:bg-purple-600 hover:text-white hover:border-purple-600 transition-all border border-border-main shadow-sm whitespace-nowrap"
+                                onClick={() => handleAISearch()}
+                                disabled={isThinking || !aiQuery.trim()}
+                                className="w-full sm:w-auto bg-purple-600 text-white px-4 py-2 rounded-xl font-black text-[10px] hover:bg-purple-700 active:scale-95 transition-all flex items-center justify-center gap-2 shrink-0 disabled:opacity-50 shadow-lg shadow-purple-200"
                             >
-                                {btn.label}
+                                {isThinking ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                                <span>بحث</span>
                             </button>
-                        ))}
+                        </div>
+                    )}
+
+                    {/* Real-time Cashbox Balances */}
+                    <div className="grid grid-cols-2 gap-3 mt-4 w-full">
+                        {/* Main Cashbox Balance Card */}
+                        <div className="bg-card-bg dark:bg-slate-900 border border-border-main dark:border-slate-800 p-3 rounded-xl flex flex-col gap-2 shadow-xs relative overflow-hidden">
+                            <div className="flex items-center justify-between">
+                                <span className="text-[10px] font-black text-text-main/80 flex items-center gap-1.5 flex-wrap">
+                                    صندوق المحل
+                                    <span className={`text-[8px] px-1 py-0.5 rounded font-black ${appUser?.role === 'admin' ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400' : 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400'}`}>
+                                        {appUser?.role === 'admin' ? 'عام' : 'خاص بك'}
+                                    </span>
+                                    <span className="text-[8px] text-emerald-600 dark:text-emerald-400 font-bold">
+                                        (يتصفّر شهرياً 🔄)
+                                    </span>
+                                </span>
+                                <div className="w-7 h-7 rounded-full bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                                    <DollarSign size={14} />
+                                </div>
+                            </div>
+                            <div className="border-t border-dashed border-border-main dark:border-slate-800/60 my-0.5"></div>
+                            <div className="space-y-1.5">
+                                <div className="flex items-center justify-between text-[11px]">
+                                    <span className="text-text-main/50 font-bold">النقدي (الشهر):</span>
+                                    <span className="font-black text-emerald-600 dark:text-emerald-400 font-mono" dir="ltr">
+                                        {mainCash.toLocaleString()} ر.س
+                                    </span>
+                                </div>
+                                <div className="flex items-center justify-between text-[11px]">
+                                    <span className="text-text-main/50 font-bold">الآجل (الشهر):</span>
+                                    <span className="font-black text-amber-600 dark:text-amber-400 font-mono" dir="ltr">
+                                        {mainCredit.toLocaleString()} ر.س
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Cards Cashbox Balance Card */}
+                        <div className="bg-card-bg dark:bg-slate-900 border border-border-main dark:border-slate-800 p-3 rounded-xl flex flex-col gap-2 shadow-xs relative overflow-hidden">
+                            <div className="flex items-center justify-between">
+                                <span className="text-[10px] font-black text-text-main/80 flex items-center gap-1.5 flex-wrap">
+                                    صندوق الكروت
+                                    <span className={`text-[8px] px-1 py-0.5 rounded font-black ${appUser?.role === 'admin' ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400' : 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400'}`}>
+                                        {appUser?.role === 'admin' ? 'عام' : 'خاص بك'}
+                                    </span>
+                                    <span className="text-[8px] text-indigo-600 dark:text-indigo-400 font-bold">
+                                        (يتصفّر شهرياً 🔄)
+                                    </span>
+                                </span>
+                                <div className="w-7 h-7 rounded-full bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
+                                    <Wifi size={14} />
+                                </div>
+                            </div>
+                            <div className="border-t border-dashed border-border-main dark:border-slate-800/60 my-0.5"></div>
+                            <div className="space-y-1.5">
+                                <div className="flex items-center justify-between text-[11px]">
+                                    <span className="text-text-main/50 font-bold">النقدي (الشهر):</span>
+                                    <span className="font-black text-indigo-600 dark:text-indigo-400 font-mono" dir="ltr">
+                                        {cardCash.toLocaleString()} ر.ي
+                                    </span>
+                                </div>
+                                <div className="flex items-center justify-between text-[11px]">
+                                    <span className="text-text-main/50 font-bold">الآجل (الشهر):</span>
+                                    <span className="font-black text-amber-600 dark:text-amber-400 font-mono" dir="ltr">
+                                        {cardCredit.toLocaleString()} ر.ي
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>

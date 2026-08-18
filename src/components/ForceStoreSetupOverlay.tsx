@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuthStore } from '../store/authStore';
 import { useSettingsStore } from '../store/settingsStore';
-import { Store, MapPin, Phone, Upload, Image, ShieldCheck, Save, Loader2, AlertCircle, Trash2, Sparkles, Building2 } from 'lucide-react';
+import { Store, MapPin, Phone, Upload, Image, ShieldCheck, Save, Loader2, AlertCircle, Trash2, Sparkles, Building2, X } from 'lucide-react';
 
 export default function ForceStoreSetupOverlay() {
     const { appUser } = useAuthStore();
@@ -14,6 +14,9 @@ export default function ForceStoreSetupOverlay() {
 
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [isDismissed, setIsDismissed] = useState(false);
+
+    const tenantId = appUser?.tenantId || 'single_store';
 
     // Sync state with settings if they exist
     useEffect(() => {
@@ -25,7 +28,11 @@ export default function ForceStoreSetupOverlay() {
         }
     }, [settings]);
 
-    if (!appUser || !initialized) return null;
+    if (!appUser || !initialized || isDismissed) return null;
+
+    // Check if dismissed in localStorage for this tenant
+    const isDismissedInLocal = localStorage.getItem(`store_setup_dismissed_${tenantId}`) === 'true';
+    if (isDismissedInLocal) return null;
 
     // Only administrators (owners) configure the store settings
     if (appUser.role !== 'admin') return null;
@@ -35,15 +42,22 @@ export default function ForceStoreSetupOverlay() {
     const isDefaultPassword = !appUser.password || ['admin', 'admin123', 'admin_initial', 'password'].includes(currentPass);
     if (isDefaultPassword) return null;
 
-    // Determine if the store is not configured yet
-    const isNotConfigured = !settings.isStoreConfigured && (
-        !settings.businessAddress || 
-        !settings.businessPhone || 
-        !settings.businessName || 
-        settings.businessName === 'محل بريق للمبيعات'
+    // Determine if the store is configured:
+    // If settings.isStoreConfigured is true OR if a valid custom business name is already recorded
+    const hasCustomBusinessName = Boolean(
+        settings.businessName && 
+        settings.businessName.trim() !== '' && 
+        settings.businessName !== 'محل بريق للمبيعات'
     );
 
-    if (!isNotConfigured) return null;
+    if (settings.isStoreConfigured || hasCustomBusinessName) return null;
+
+    const handleDismiss = () => {
+        try {
+            localStorage.setItem(`store_setup_dismissed_${tenantId}`, 'true');
+        } catch (e) {}
+        setIsDismissed(true);
+    };
 
     const handleSaveStoreInfo = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -61,14 +75,6 @@ export default function ForceStoreSetupOverlay() {
             return setError('يرجى اختيار اسم تجاري مميز تملكه بدلاً من الاسم الافتراضي المؤقت.');
         }
 
-        if (!addressTrimmed) {
-            return setError('من فضلك، حدد عنوان المتجر أو المدينة لينطبع بشكل صحيح في الفواتير الصادرة.');
-        }
-
-        if (!phoneTrimmed) {
-            return setError('رقم الهاتف إلزامي للتواصل ويرتبط به ترويسة جميع التقارير اليومية.');
-        }
-
         setIsSaving(true);
         try {
             await updateSettings({
@@ -78,6 +84,10 @@ export default function ForceStoreSetupOverlay() {
                 businessLogoUrl: businessLogoUrl,
                 isStoreConfigured: true
             });
+            try {
+                localStorage.setItem(`store_setup_dismissed_${tenantId}`, 'true');
+            } catch (e) {}
+            setIsDismissed(true);
         } catch (err: any) {
             console.error('Error saving store initial info:', err);
             setError('فشل حفظ معلومات المتجر سحابياً، تحقق من اتصالك بشبكة الإنترنت وحاول مجدداً.');
@@ -90,8 +100,18 @@ export default function ForceStoreSetupOverlay() {
         <div className="fixed inset-0 bg-slate-950/80 dark:bg-slate-950/90 backdrop-blur-md z-[200] flex items-center justify-center p-3 sm:p-4 overflow-y-auto" dir="rtl">
             
             {/* Main Dialog Panel */}
-            <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-[28px] shadow-2xl border border-indigo-50/80 dark:border-slate-800/80 overflow-hidden transform transition-all duration-300 my-auto flex flex-col justify-between">
+            <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-[28px] shadow-2xl border border-indigo-50/80 dark:border-slate-800/80 overflow-hidden transform transition-all duration-300 my-auto flex flex-col justify-between relative">
                 
+                {/* Dismiss Close Button */}
+                <button
+                    type="button"
+                    onClick={handleDismiss}
+                    className="absolute top-4 left-4 p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 bg-slate-100 dark:bg-slate-800 rounded-full transition z-10"
+                    title="تخطي وحفظ لاحقاً"
+                >
+                    <X size={18} />
+                </button>
+
                 {/* Visual Top Decorative Gradient */}
                 <div className="h-2 w-full bg-gradient-to-r from-indigo-500 via-purple-500 to-indigo-600"></div>
 
@@ -145,7 +165,7 @@ export default function ForceStoreSetupOverlay() {
                         <div className="space-y-1">
                             <label className="block text-slate-700 dark:text-slate-300 font-extrabold mr-1 text-xs sm:text-[13px] flex items-center gap-1">
                                 <MapPin className="w-3.5 h-3.5 text-indigo-500" />
-                                موقع أو عنوان المتجر بالتفصيل <span className="text-red-500 font-black">*</span>
+                                موقع أو عنوان المتجر بالتفصيل
                             </label>
                             <input 
                                 type="text" 
@@ -153,7 +173,6 @@ export default function ForceStoreSetupOverlay() {
                                 value={businessAddress}
                                 onChange={e => setBusinessAddress(e.target.value)}
                                 placeholder="مثال: الرياض - شارع الملك سلمان، حي النرجس"
-                                required
                             />
                         </div>
 
@@ -161,7 +180,7 @@ export default function ForceStoreSetupOverlay() {
                         <div className="space-y-1">
                             <label className="block text-slate-700 dark:text-slate-300 font-extrabold mr-1 text-xs sm:text-[13px] flex items-center gap-1">
                                 <Phone className="w-3.5 h-3.5 text-indigo-500" />
-                                رقم الهاتف والاتصال للمتجر <span className="text-red-500 font-black">*</span>
+                                رقم الهاتف والاتصال للمتجر
                             </label>
                             <input 
                                 type="tel" 
@@ -170,7 +189,6 @@ export default function ForceStoreSetupOverlay() {
                                 onChange={e => setBusinessPhone(e.target.value)}
                                 placeholder="مثال: 0501234567"
                                 dir="ltr"
-                                required
                             />
                         </div>
 

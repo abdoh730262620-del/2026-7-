@@ -4,7 +4,7 @@ import { useSettingsStore } from '../store/settingsStore';
 
 export const getInvoiceHtml = async (
     invoice: any, 
-    type: 'sale' | 'purchase' | 'quotation' | 'card_sale' | 'card_purchase', 
+    type: 'sale' | 'purchase' | 'quotation' | 'card_sale' | 'card_purchase' | 'card_purchase_return' | 'card_sale_return', 
     items: any[], 
     omitButtons: boolean = false, 
     currency: string = 'ر.س',
@@ -56,6 +56,12 @@ export const getInvoiceHtml = async (
     } else if (type === 'card_purchase') {
         title = 'فاتورة مشتريات كروت شبكة';
         partyTitle = 'المـورد';
+    } else if (type === 'card_purchase_return') {
+        title = 'فاتورة مردودات مشتريات كروت';
+        partyTitle = 'المـورد';
+    } else if (type === 'card_sale_return') {
+        title = 'فاتورة مردودات مبيعات كروت';
+        partyTitle = 'الموزع / العميل';
     }
 
     if (!partyName) {
@@ -166,55 +172,120 @@ export const getInvoiceHtml = async (
                 <style>
                     @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800;900&display=swap');
                     * { box-sizing: border-box; }
-                    html {
-                        background-color: #94a3b8;
+                    html, body {
+                        background-color: #ffffff;
                         margin: 0;
                         padding: 0;
                         width: 100%;
-                    }
-                    body { 
-                        font-family: 'Tajawal', sans-serif; 
-                        color: #0f172a; 
-                        background: #94a3b8; 
-                        margin: 0; 
-                        padding: 8px 4px; 
-                        line-height: 1.3; 
-                        display: flex;
-                        justify-content: center;
-                        align-items: flex-start;
-                        width: 100%;
-                        box-sizing: border-box;
+                        font-family: 'Tajawal', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                        color: #0f172a;
+                        line-height: 1.25;
+                        -webkit-print-color-adjust: exact;
+                        print-color-adjust: exact;
                     }
                     .a4-page { 
-                        width: 210mm; 
-                        min-height: 297mm; 
-                        padding: 8mm 10mm; 
+                        width: 100%;
+                        max-width: 100%;
+                        padding: 10px 14px; 
                         background: #ffffff; 
-                        box-shadow: 0 8px 25px rgba(0,0,0,0.2); 
-                        border-radius: 2px;
                         margin: 0 auto;
                         display: flex;
                         flex-direction: column;
                         justify-content: space-between;
                         box-sizing: border-box;
                     }
-                    .header-table { width: 100%; border-collapse: collapse; margin-bottom: 8px; border-bottom: 2px solid #cbd5e1; padding-bottom: 6px; }
-                    .invoice-badge { display:inline-block; padding: 3px 12px; background: #0f172a; color: #ffffff; border-radius: 5px; font-weight: 800; font-size: 0.9em; }
-                    .details-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px 10px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 6px 10px; margin-bottom: 8px; font-size: 0.82em; }
-                    .details-item { display: flex; align-items: center; justify-content: space-between; }
-                    .details-label { color: #64748b; font-weight: 700; }
-                    .details-val { font-weight: 800; color: #0f172a; }
-                    table.items-table { border-collapse: collapse; width: 100%; margin-bottom: 8px; font-size: 0.82em; }
-                    table.items-table th { background-color: #f1f5f9; padding: 5px 6px; border-top: 1px solid #e2e8f0; border-bottom: 2px solid #cbd5e1; font-weight: 800; color: #334155; font-size: 11px; }
-                    table.items-table td { padding: 4px 6px; font-size: 11px; border-bottom: 1px solid #f1f5f9; }
-                    .total-box { background: #f8fafc; border: 1.5px solid #e2e8f0; border-radius: 6px; padding: 8px 12px; margin-top: 6px; }
-                    .total-row { display: flex; justify-content: space-between; align-items: center; font-size: 1.1em; font-weight: 900; color: #0f172a; }
-                    .footer { text-align: center; font-size: 0.78em; color: #64748b; margin-top: 10px; border-top: 1px solid #e2e8f0; padding-top: 6px; font-weight: 600; }
+                    .header-table { 
+                        width: 100%; 
+                        border-collapse: collapse; 
+                        margin-bottom: 6px; 
+                        border-bottom: 1.5px solid #cbd5e1; 
+                        padding-bottom: 4px; 
+                    }
+                    .invoice-badge { 
+                        display: inline-block; 
+                        padding: 2px 10px; 
+                        background: #0f172a; 
+                        color: #ffffff; 
+                        border-radius: 4px; 
+                        font-weight: 800; 
+                        font-size: 11px; 
+                    }
+                    .details-grid { 
+                        display: grid; 
+                        grid-template-columns: repeat(2, 1fr); 
+                        gap: 3px 10px; 
+                        background: #f8fafc; 
+                        border: 1px solid #e2e8f0; 
+                        border-radius: 6px; 
+                        padding: 4px 8px; 
+                        margin-bottom: 6px; 
+                        font-size: 11px; 
+                    }
+                    .details-item { 
+                        display: flex; 
+                        align-items: center; 
+                        justify-content: space-between; 
+                    }
+                    .details-label { 
+                        color: #64748b; 
+                        font-weight: 700; 
+                        font-size: 10.5px;
+                    }
+                    .details-val { 
+                        font-weight: 800; 
+                        color: #0f172a; 
+                        font-size: 11px;
+                    }
+                    table.items-table { 
+                        border-collapse: collapse; 
+                        width: 100%; 
+                        margin-bottom: 6px; 
+                        font-size: 11px; 
+                    }
+                    table.items-table th { 
+                        background-color: #f1f5f9; 
+                        padding: 3.5px 6px; 
+                        border-top: 1px solid #cbd5e1; 
+                        border-bottom: 1.5px solid #94a3b8; 
+                        font-weight: 800; 
+                        color: #1e293b; 
+                        font-size: 10.5px; 
+                    }
+                    table.items-table td { 
+                        padding: 3px 6px; 
+                        font-size: 11px; 
+                        border-bottom: 1px solid #f1f5f9; 
+                        line-height: 1.2;
+                    }
+                    .total-box { 
+                        background: #f8fafc; 
+                        border: 1px solid #cbd5e1; 
+                        border-radius: 6px; 
+                        padding: 6px 10px; 
+                        margin-top: 4px; 
+                    }
+                    .total-row { 
+                        display: flex; 
+                        justify-content: space-between; 
+                        align-items: center; 
+                        font-size: 12px; 
+                        font-weight: 900; 
+                        color: #0f172a; 
+                    }
+                    .footer { 
+                        text-align: center; 
+                        font-size: 10px; 
+                        color: #64748b; 
+                        margin-top: 6px; 
+                        border-top: 1px solid #e2e8f0; 
+                        padding-top: 4px; 
+                        font-weight: 600; 
+                    }
                     @media print {
-                        @page { size: A4 portrait; margin: 4mm 6mm; }
-                        body { background: #ffffff !important; padding: 0 !important; display: block; }
+                        @page { size: A4 portrait; margin: 5mm 8mm; }
+                        body { background: #ffffff !important; padding: 0 !important; }
                         .no-print { display: none !important; }
-                        .a4-page { width: 100% !important; min-height: auto !important; padding: 0 !important; margin: 0 !important; box-shadow: none !important; border-radius: 0 !important; }
+                        .a4-page { width: 100% !important; max-width: 100% !important; min-height: 285mm !important; padding: 0 !important; margin: 0 !important; box-shadow: none !important; }
                     }
                 </style>
             </head>
@@ -223,15 +294,15 @@ export const getInvoiceHtml = async (
                     <div>
                         <table class="header-table">
                             <tr>
-                                <td style="text-align: ${textAlign}; vertical-align: top;">
-                                    ${settings.businessLogoUrl ? `<img src="${settings.businessLogoUrl}" alt="Logo" style="max-height: 55px; max-width: 130px; margin-bottom: 4px; object-fit: contain;">` : ''}
-                                    ${settings.businessName ? `<h2 style="margin: 0; font-size: 18px; font-weight: 900; color: #0f172a;">${settings.businessName}</h2>` : `<h2 style="margin: 0; font-size: 18px; font-weight: 900; color: #0f172a;">${title}</h2>`}
-                                    ${settings.businessAddress ? `<p style="margin: 2px 0 0; font-size: 11px; color: #64748b; font-weight: 600;">${settings.businessAddress}</p>` : ''}
-                                    ${settings.businessPhone ? `<p style="margin: 2px 0 0; font-size: 11px; color: #64748b; font-weight: 700;" dir="ltr">${settings.businessPhone}</p>` : ''}
+                                <td style="text-align: ${textAlign}; vertical-align: middle;">
+                                    ${settings.businessLogoUrl ? `<img src="${settings.businessLogoUrl}" alt="Logo" style="max-height: 40px; max-width: 110px; margin-bottom: 2px; object-fit: contain; vertical-align: middle;">` : ''}
+                                    ${settings.businessName ? `<h2 style="margin: 0; font-size: 15px; font-weight: 900; color: #0f172a; display: inline-block; vertical-align: middle;">${settings.businessName}</h2>` : `<h2 style="margin: 0; font-size: 15px; font-weight: 900; color: #0f172a;">${title}</h2>`}
+                                    ${settings.businessAddress ? `<span style="margin-right: 8px; font-size: 10px; color: #64748b; font-weight: 600;">| ${settings.businessAddress}</span>` : ''}
+                                    ${settings.businessPhone ? `<span style="margin-right: 8px; font-size: 10px; color: #64748b; font-weight: 700;" dir="ltr">| هاتف: ${settings.businessPhone}</span>` : ''}
                                 </td>
-                                <td style="text-align: left; vertical-align: top;">
+                                <td style="text-align: left; vertical-align: middle; white-space: nowrap;">
                                     <div class="invoice-badge">${title}</div>
-                                    <p style="margin: 6px 0 0; font-size: 0.9em; color: #64748b; font-weight: 700;">رقم الفاتورة: <strong style="color: #2563eb; font-family: monospace; font-size: 1.1em;">#${invoice.invoiceNumber || '---'}</strong></p>
+                                    <span style="margin-right: 6px; font-size: 11px; color: #64748b; font-weight: 700;">رقم: <strong style="color: #2563eb; font-family: monospace; font-size: 12px;">#${invoice.invoiceNumber || '---'}</strong></span>
                                 </td>
                             </tr>
                         </table>
@@ -273,10 +344,10 @@ export const getInvoiceHtml = async (
                         <div class="total-box">
                             <div class="total-row">
                                 <span>الإجمالي الصافي:</span>
-                                <span dir="ltr" style="color: #059669;">${finalInvoiceTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} <span style="font-size: 0.6em; color: #64748b; font-weight: 700;">${currency}</span></span>
+                                <span dir="ltr" style="color: #059669; font-size: 13px;">${finalInvoiceTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} <span style="font-size: 10px; color: #64748b; font-weight: 700;">${currency}</span></span>
                             </div>
                             ${invoice.paidAmount !== undefined && invoice.paymentType === 'credit' ? `
-                                <div style="display: flex; justify-content: space-between; margin-top: 6px; font-size: 0.95em; color: #2563eb; font-weight: 800; padding-top: 6px; border-top: 1px dashed #cbd5e1;">
+                                <div style="display: flex; justify-content: space-between; margin-top: 4px; font-size: 11px; color: #2563eb; font-weight: 800; padding-top: 4px; border-top: 1px dashed #cbd5e1;">
                                     <span>المدفوع نقداً:</span>
                                     <span dir="ltr">${parseFloat(invoice.paidAmount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${currency}</span>
                                 </div>
@@ -285,14 +356,14 @@ export const getInvoiceHtml = async (
                         </div>
 
                         ${(invoice.notes || invoice.note) ? `
-                            <div style="margin-top: 10px; padding: 8px 12px; background: #fffbe0; border: 1px solid #fef08a; border-radius: 6px; font-size: 11px; color: #713f12;">
-                                <strong>ملاحظات الفاتورة:</strong> ${invoice.notes || invoice.note}
+                            <div style="margin-top: 6px; padding: 4px 8px; background: #fffbe0; border: 1px solid #fef08a; border-radius: 4px; font-size: 10px; color: #713f12;">
+                                <strong>ملاحظات:</strong> ${invoice.notes || invoice.note}
                             </div>
                         ` : ''}
                     </div>
 
                     <div class="footer">
-                        <p style="margin:0;">شكراً لتعاملكم معنا، ونتمنى لكم يوماً سعيداً 🌸</p>
+                        <p style="margin:0;">شكراً لتعاملكم معنا 🌸</p>
                     </div>
                 </div>
             </body>
@@ -423,7 +494,7 @@ export const getInvoiceHtml = async (
 
 export const printInvoice = async (
     invoice: any, 
-    type: 'sale' | 'purchase' | 'quotation' | 'card_sale' | 'card_purchase', 
+    type: 'sale' | 'purchase' | 'quotation' | 'card_sale' | 'card_purchase' | 'card_purchase_return' | 'card_sale_return', 
     items: any[], 
     currency: string = 'ر.س',
     overridePaperSize?: 'A4' | 'Thermal80' | 'Thermal58'

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, ShoppingBag, Plus, Trash2, CheckCircle2, User, Phone, Search, CreditCard, DollarSign, Wifi, AlertTriangle } from 'lucide-react';
+import { X, ShoppingBag, Plus, Trash2, CheckCircle2, User, Phone, Search, CreditCard, DollarSign, Wifi, AlertTriangle, Edit3, Minus } from 'lucide-react';
 import { collection, query, where, onSnapshot, addDoc, doc, updateDoc, runTransaction, getDocs } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { useAuthStore } from '../store/authStore';
@@ -70,6 +70,12 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
 
     // Cart items
     const [cartItems, setCartItems] = useState<CartItem[]>([]);
+
+    // Item Action & Edit State (عند الضغط على الصنف في الجدول)
+    const [selectedCartItemForActions, setSelectedCartItemForActions] = useState<CartItem | null>(null);
+    const [isEditingCartItem, setIsEditingCartItem] = useState<boolean>(false);
+    const [editItemQty, setEditItemQty] = useState<string>('1');
+    const [editItemUnitPrice, setEditItemUnitPrice] = useState<number>(0);
 
     // Payment Drawer / Modal
     const [showPaymentModal, setShowPaymentModal] = useState<boolean>(false);
@@ -318,6 +324,42 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
 
     const handleRemoveFromCart = (id: string) => {
         setCartItems(prev => prev.filter(item => item.id !== id));
+    };
+
+    // Open Action / Edit Modal directly on row click
+    const handleOpenItemActions = (item: CartItem) => {
+        setSelectedCartItemForActions(item);
+        setEditItemQty(item.quantity.toString());
+        setEditItemUnitPrice(item.unitPrice);
+    };
+
+    // Save edited quantity or unit price
+    const handleSaveEditedCartItem = () => {
+        if (!selectedCartItemForActions) return;
+        const qtyNum = parseInt(editItemQty, 10);
+        if (isNaN(qtyNum) || qtyNum <= 0) {
+            alert('يرجى كتابة كمية صحيحة أكبر من صفر');
+            return;
+        }
+        const priceNum = Number(editItemUnitPrice);
+        if (isNaN(priceNum) || priceNum < 0) {
+            alert('يرجى كتابة سعر صحيح');
+            return;
+        }
+
+        setCartItems(prev => prev.map(it => {
+            if (it.id === selectedCartItemForActions.id) {
+                return {
+                    ...it,
+                    quantity: qtyNum,
+                    unitPrice: priceNum,
+                    totalAmount: qtyNum * priceNum
+                };
+            }
+            return it;
+        }));
+
+        setSelectedCartItemForActions(null);
     };
 
     // Distributor Selection
@@ -719,8 +761,8 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
     if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 z-50 bg-black/20  flex items-stretch justify-center p-0 animate-in fade-in duration-200 dir-rtl overflow-hidden" dir="rtl">
-            <div className="bg-white dark:bg-slate-900 w-full h-full max-w-full p-4 sm:p-6 shadow-none flex flex-col justify-between overflow-hidden space-y-4">
+        <div className="fixed inset-0 z-50 bg-black/20 flex items-stretch justify-center p-0 animate-in fade-in duration-200 dir-rtl overflow-hidden w-full max-w-full" dir="rtl">
+            <div className="bg-white dark:bg-slate-900 w-full h-full max-w-full pt-1.5 p-3 sm:pt-2 sm:p-5 shadow-none flex flex-col justify-between overflow-hidden space-y-2.5">
                 {/* Header */}
                 <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2 shrink-0">
                     <div className="flex items-center gap-3">
@@ -747,9 +789,9 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                     </button>
                 </div>
 
-                <div className="overflow-y-auto space-y-3 pr-1 pl-1 custom-scrollbar flex-1">
-                    {/* TOP SECTION: 4-Column Categories Grid (فئات الكروت المربعة) */}
-                    <div>
+                <div className="overflow-y-auto overflow-x-hidden space-y-3 pr-1 pl-1 custom-scrollbar flex-1 w-full max-w-full">
+                    {/* TOP SECTION: 3-Column Categories Grid (فئات الكروت: 3 فئات بجانب بعض) */}
+                    <div className="w-full max-w-full">
                         <div className="flex items-center justify-between mb-2">
                             <label className="text-xs font-black text-slate-700 dark:text-slate-300">
                                 اختر فئة الكارت
@@ -760,7 +802,7 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                                 </span>
                             )}
                         </div>
-                        <div className="grid grid-cols-4 gap-2 sm:gap-2.5">
+                        <div className="grid grid-cols-3 gap-2 sm:gap-2.5 w-full max-w-full">
                             {displayCategories.map((cat, catIdx) => {
                                 const isSelected = selectedCategoryName.trim() === cat.name.trim();
                                 return (
@@ -768,27 +810,16 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                                         key={`${cat.id || cat.name || 'cat'}-${catIdx}`}
                                         type="button"
                                         onClick={() => handleSelectCategory(cat.name, saleType)}
-                                        className={`p-2.5 sm:p-3 rounded-2xl border-2 text-center transition flex flex-col items-center justify-center relative cursor-pointer ${
+                                        className={`py-2 px-2.5 rounded-xl border-2 text-center transition flex flex-row items-center justify-center gap-2 relative cursor-pointer h-10 sm:h-11 ${
                                             isSelected
                                                 ? 'bg-indigo-50/90 dark:bg-indigo-950/80 border-indigo-600 shadow-md shadow-indigo-600/10 text-slate-900 dark:text-white'
                                                 : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-indigo-300'
                                         }`}
                                     >
-                                        <div className={`w-8 h-8 rounded-full flex items-center justify-center mb-1 ${
-                                            isSelected ? 'bg-indigo-100 dark:bg-indigo-900/60 text-indigo-600 dark:text-indigo-400' : 'bg-slate-100 dark:bg-slate-700 text-slate-500'
-                                        }`}>
-                                            <Wifi size={18} />
+                                        <Wifi size={13} className={isSelected ? 'text-indigo-600 dark:text-indigo-400 shrink-0' : 'text-slate-500 shrink-0'} />
+                                        <div className="font-black text-xs leading-none text-slate-900 dark:text-white whitespace-nowrap overflow-hidden text-ellipsis">
+                                            {cat.name} ({cat.availableCount})
                                         </div>
-                                        <div className="font-black text-xs sm:text-sm leading-tight text-slate-900 dark:text-white">
-                                            {cat.name}
-                                        </div>
-                                        <span className={`text-[10px] font-black mt-1 px-2 py-0.5 rounded-full ${
-                                            cat.availableCount > 0 
-                                                ? 'bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300'
-                                                : 'bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300'
-                                        }`}>
-                                            المتوفر: {cat.availableCount}
-                                        </span>
                                     </button>
                                 );
                             })}
@@ -796,42 +827,42 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                     </div>
 
                     {/* SALE TYPE & INPUTS SECTION */}
-                    <div className="bg-slate-50 dark:bg-slate-800/50 p-4 rounded-2xl border border-slate-200 dark:border-slate-700/60 space-y-3">
-                        {/* Sale Type Selector (نوع البيع: جملة / تجزئة / موزع) */}
-                        <div>
-                            <label className="block text-xs font-black text-slate-700 dark:text-slate-300 mb-1.5">
-                                نوع البيع
+                    <div className="bg-slate-50 dark:bg-slate-800/50 p-3 sm:p-4 rounded-2xl border border-slate-200 dark:border-slate-700/60 space-y-2.5 w-full max-w-full">
+                        {/* Sale Type Selector (نوع البيع بجانب خياراته بنفس السطر وبارتفاع 35px) */}
+                        <div className="flex items-center gap-2 w-full max-w-full">
+                            <label className="text-xs font-black text-slate-700 dark:text-slate-300 whitespace-nowrap shrink-0">
+                                نوع البيع:
                             </label>
-                            <div className="grid grid-cols-3 gap-2">
+                            <div className="grid grid-cols-3 gap-1.5 flex-1">
                                 <button
                                     type="button"
                                     onClick={() => handleSaleTypeChange('retail')}
-                                    className={`py-2 px-3 rounded-xl text-xs font-black transition border ${
+                                    className={`h-[35px] px-2 rounded-xl text-[10px] sm:text-xs font-black transition border flex items-center justify-center whitespace-nowrap overflow-hidden text-ellipsis ${
                                         saleType === 'retail'
                                             ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
-                                            : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700'
+                                            : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-indigo-300'
                                     }`}
                                 >
-                                    تجزئة ({activeCatObj?.retailPrice || 0} ريال يمني)
+                                    تجزئة ({activeCatObj?.retailPrice || 0} ر.ي)
                                 </button>
                                 <button
                                     type="button"
                                     onClick={() => handleSaleTypeChange('wholesale')}
-                                    className={`py-2 px-3 rounded-xl text-xs font-black transition border ${
+                                    className={`h-[35px] px-2 rounded-xl text-[10px] sm:text-xs font-black transition border flex items-center justify-center whitespace-nowrap overflow-hidden text-ellipsis ${
                                         saleType === 'wholesale'
                                             ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
-                                            : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700'
+                                            : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-indigo-300'
                                     }`}
                                 >
-                                    جملة ({activeCatObj?.wholesalePrice || 0} ريال يمني)
+                                    جملة ({activeCatObj?.wholesalePrice || 0} ر.ي)
                                 </button>
                                 <button
                                     type="button"
                                     onClick={() => handleSaleTypeChange('distributor')}
-                                    className={`py-2 px-3 rounded-xl text-xs font-black transition border ${
+                                    className={`h-[35px] px-2 rounded-xl text-[10px] sm:text-xs font-black transition border flex items-center justify-center whitespace-nowrap overflow-hidden text-ellipsis ${
                                         saleType === 'distributor'
                                             ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
-                                            : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700'
+                                            : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-indigo-300'
                                     }`}
                                 >
                                     موزع {selectedDistributorForAdding ? `(${selectedDistributorForAdding.commission}%)` : ''}
@@ -841,10 +872,17 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
 
                         {/* Distributor Selector in Addition Stage */}
                         {saleType === 'distributor' && (
-                            <div className="mt-3 bg-white dark:bg-slate-900 p-3 rounded-2xl border border-indigo-100 dark:border-indigo-950 space-y-2 animate-in slide-in-from-top-1 duration-150">
-                                <label className="block text-xs font-black text-indigo-600 dark:text-indigo-400">
-                                    اختر الموزع للبيع
-                                </label>
+                            <div className="bg-white dark:bg-slate-900 p-2.5 rounded-xl border border-indigo-100 dark:border-indigo-950 space-y-1.5 animate-in slide-in-from-top-1 duration-150 w-full max-w-full">
+                                <div className="flex items-center justify-between">
+                                    <label className="text-xs font-black text-indigo-600 dark:text-indigo-400 whitespace-nowrap">
+                                        اختر الموزع للبيع:
+                                    </label>
+                                    {selectedDistributorForAdding && (
+                                        <span className="text-[10px] font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 rounded-lg whitespace-nowrap">
+                                            نسبة العمولة: %{selectedDistributorForAdding.commission || 0}
+                                        </span>
+                                    )}
+                                </div>
                                 <select
                                     value={selectedDistributorForAdding?.id || ''}
                                     onChange={(e) => {
@@ -853,7 +891,7 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                                             handleSelectDistributorForAdding(dist);
                                         }
                                     }}
-                                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-2 text-xs font-black text-slate-900 dark:text-white outline-none focus:border-indigo-600"
+                                    className="w-full h-[35px] bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 text-xs font-black text-slate-900 dark:text-white outline-none focus:border-indigo-600"
                                 >
                                     <option value="" disabled>-- اختر موزعاً من القائمة --</option>
                                     {distributors.map((dist, distIdx) => (
@@ -862,19 +900,13 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                                         </option>
                                     ))}
                                 </select>
-                                {selectedDistributorForAdding && (
-                                    <div className="p-2 bg-indigo-50/50 dark:bg-indigo-950/40 rounded-xl flex items-center justify-between text-[11px] font-bold text-indigo-700 dark:text-indigo-300">
-                                        <span>الموزع المحدد: <strong className="text-slate-950 dark:text-white">{selectedDistributorForAdding.name}</strong></span>
-                                        <span>نسبة العمولة: <strong className="text-slate-950 dark:text-white">% {selectedDistributorForAdding.commission || 0}</strong></span>
-                                    </div>
-                                )}
                             </div>
                         )}
 
-                        {/* Price, Quantity & Add Button Row (حقول السعر والكمية وزر الإضافة بجانب بعض لتوفير المساحة) */}
-                        <div className="grid grid-cols-12 gap-2.5 items-end">
+                        {/* Price, Quantity & Add Button Row (ارتفاع موحد بدقة 35px) */}
+                        <div className="grid grid-cols-12 gap-2 sm:gap-2.5 items-end w-full max-w-full">
                             <div className="col-span-4">
-                                <label className="block text-xs font-black text-slate-700 dark:text-slate-300 mb-1.5 text-center">
+                                <label className="block text-xs font-black text-slate-700 dark:text-slate-300 mb-1 text-center whitespace-nowrap">
                                     سعر الكرت
                                 </label>
                                 <input
@@ -889,12 +921,12 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                                             handleSelectCategory(selectedCategoryName, saleType);
                                         }
                                     }}
-                                    className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-2.5 text-xs font-black text-slate-900 dark:text-white outline-none focus:border-indigo-600 text-center"
+                                    className="w-full h-[35px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-2 text-xs font-black text-slate-900 dark:text-white outline-none focus:border-indigo-600 text-center font-mono"
                                 />
                             </div>
 
                             <div className="col-span-4">
-                                <label className="block text-xs font-black text-slate-700 dark:text-slate-300 mb-1.5 text-center">
+                                <label className="block text-xs font-black text-slate-700 dark:text-slate-300 mb-1 text-center whitespace-nowrap">
                                     كمية الكروت
                                 </label>
                                 <input
@@ -909,7 +941,7 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                                             setQuantity('1');
                                         }
                                     }}
-                                    className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-2.5 text-xs font-black text-slate-900 dark:text-white outline-none focus:border-indigo-600 text-center"
+                                    className="w-full h-[35px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-2 text-xs font-black text-slate-900 dark:text-white outline-none focus:border-indigo-600 text-center font-mono"
                                 />
                             </div>
 
@@ -917,7 +949,7 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                                 <button
                                     type="button"
                                     onClick={handleAddToCart}
-                                    className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white font-black text-xs rounded-xl shadow-md shadow-indigo-600/20 flex items-center justify-center gap-1.5 transition h-[38px] whitespace-nowrap"
+                                    className="w-full h-[35px] bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white font-black text-xs rounded-xl shadow-md shadow-indigo-600/20 flex items-center justify-center gap-1.5 transition whitespace-nowrap"
                                 >
                                     <Plus size={16} />
                                     <span>إضافة (+)</span>
@@ -927,39 +959,53 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                     </div>
 
                     {/* ITEMS TABLE (جدول الأصناف المضافة اسفل الشاشة) */}
-                    <div>
-                        <div className="flex items-center justify-between mb-2">
-                            <h3 className="text-xs font-black text-slate-800 dark:text-slate-200">
+                    <div className="w-full max-w-full">
+                        <div className="flex items-center justify-between mb-1.5">
+                            <h3 className="text-xs font-black text-slate-800 dark:text-slate-200 whitespace-nowrap">
                                 جدول الأصناف والفئات المضافة للفاتورة ({cartItems.length})
                             </h3>
+                            {cartItems.length > 0 && (
+                                <span className="text-[10px] text-indigo-600 dark:text-indigo-400 font-bold whitespace-nowrap">
+                                    💡 اضغط على أي صنف لتعديل العدد أو السعر أو حذفه
+                                </span>
+                            )}
                         </div>
 
-                        <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
-                            <div className="overflow-x-auto max-h-48">
+                        <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm w-full max-w-full">
+                            <div className="w-full overflow-x-auto max-h-80 md:max-h-[350px]">
                                 <table className="w-full text-right text-xs">
                                     <thead className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-black sticky top-0 border-b border-slate-200 dark:border-slate-700">
                                         <tr>
-                                            <th className="p-3">اسم الفئة</th>
-                                            <th className="p-3">نوع البيع</th>
-                                            <th className="p-3">السعر</th>
-                                            <th className="p-3">الكمية</th>
-                                            <th className="p-3">الإجمالي</th>
-                                            <th className="p-3 text-center">إجراء</th>
+                                            <th className="p-2.5 sm:p-3 whitespace-nowrap">اسم الفئة</th>
+                                            <th className="p-2.5 sm:p-3 whitespace-nowrap">نوع البيع</th>
+                                            <th className="p-2.5 sm:p-3 whitespace-nowrap">السعر</th>
+                                            <th className="p-2.5 sm:p-3 whitespace-nowrap">الكمية</th>
+                                            <th className="p-2.5 sm:p-3 whitespace-nowrap">الإجمالي</th>
                                         </tr>
                                     </thead>
                                     <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-bold text-slate-800 dark:text-slate-200">
                                         {cartItems.length === 0 ? (
                                             <tr>
-                                                <td colSpan={6} className="p-6 text-center text-slate-400 font-bold">
+                                                <td colSpan={5} className="p-6 text-center text-slate-400 font-bold whitespace-nowrap">
                                                     لم يتم إضافة أي كروت للفاتورة بعد. اختر فئة واضغط زر "إضافة".
                                                 </td>
                                             </tr>
                                         ) : (
                                             cartItems.map((item, idx) => (
-                                                <tr key={`${item.id}-${idx}`} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                                                    <td className="p-3 font-black text-slate-900 dark:text-white">{item.categoryName}</td>
-                                                    <td className="p-3">
-                                                        <span className={`px-2 py-0.5 rounded text-[10px] font-black ${
+                                                <tr 
+                                                    key={`${item.id}-${idx}`} 
+                                                    onClick={() => handleOpenItemActions(item)}
+                                                    className="hover:bg-indigo-50/80 dark:hover:bg-indigo-950/50 cursor-pointer transition select-none group"
+                                                    title="اضغط لتعديل الكمية أو السعر أو حذف الصنف"
+                                                >
+                                                    <td className="p-2.5 sm:p-3 font-black text-slate-900 dark:text-white whitespace-nowrap">
+                                                        <div className="flex items-center gap-1.5 whitespace-nowrap">
+                                                            <Wifi size={13} className="text-indigo-600 dark:text-indigo-400 shrink-0 group-hover:scale-110 transition-transform" />
+                                                            <span>{item.categoryName}</span>
+                                                        </div>
+                                                    </td>
+                                                    <td className="p-2.5 sm:p-3 whitespace-nowrap">
+                                                        <span className={`px-2 py-0.5 rounded text-[10px] font-black whitespace-nowrap ${
                                                             item.saleType === 'wholesale' 
                                                                 ? 'bg-purple-50 text-purple-700 dark:bg-purple-950 dark:text-purple-300' 
                                                                 : item.saleType === 'distributor'
@@ -969,18 +1015,9 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                                                             {item.saleType === 'wholesale' ? 'جملة' : item.saleType === 'distributor' ? 'موزع' : 'تجزئة'}
                                                         </span>
                                                     </td>
-                                                    <td className="p-3">{item.unitPrice} ريال يمني</td>
-                                                    <td className="p-3 font-black text-indigo-600 dark:text-indigo-400">{item.quantity} كارت</td>
-                                                    <td className="p-3 font-black text-emerald-600 dark:text-emerald-400">{item.totalAmount} ريال يمني</td>
-                                                    <td className="p-3 text-center">
-                                                        <button
-                                                            onClick={() => handleRemoveFromCart(item.id)}
-                                                            className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950 rounded-lg transition"
-                                                            title="حذف الصنف"
-                                                        >
-                                                            <Trash2 size={15} />
-                                                        </button>
-                                                    </td>
+                                                    <td className="p-2.5 sm:p-3 whitespace-nowrap font-mono">{item.unitPrice}</td>
+                                                    <td className="p-2.5 sm:p-3 font-black text-indigo-600 dark:text-indigo-400 whitespace-nowrap">{item.quantity} كارت</td>
+                                                    <td className="p-2.5 sm:p-3 font-black text-emerald-600 dark:text-emerald-400 whitespace-nowrap font-mono">{item.totalAmount}</td>
                                                 </tr>
                                             ))
                                         )}
@@ -990,13 +1027,13 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
 
                             {/* Table Summary Footer */}
                             {cartItems.length > 0 && (
-                                <div className="p-3 bg-indigo-50/60 dark:bg-indigo-950/40 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between text-xs font-black">
-                                    <span className="text-slate-600 dark:text-slate-300">
+                                <div className="p-2.5 sm:p-3 bg-indigo-50/60 dark:bg-indigo-950/40 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between text-xs font-black">
+                                    <span className="text-slate-600 dark:text-slate-300 whitespace-nowrap">
                                         عدد الكروت في الفاتورة: <strong className="text-indigo-600 dark:text-indigo-400">{totalCardsQty} كارت</strong>
                                     </span>
-                                    <div className="flex items-center gap-2">
-                                        <span className="text-slate-600 dark:text-slate-400">إجمالي الأصناف:</span>
-                                        <span className="text-sm font-black text-emerald-600 dark:text-emerald-400">{invoiceTotal} ريال يمني</span>
+                                    <div className="flex items-center gap-2 whitespace-nowrap">
+                                        <span className="text-slate-600 dark:text-slate-400 whitespace-nowrap">إجمالي الأصناف:</span>
+                                        <span className="text-sm font-black text-emerald-600 dark:text-emerald-400 whitespace-nowrap font-mono">{invoiceTotal}</span>
                                     </div>
                                 </div>
                             )}
@@ -1022,10 +1059,10 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                             setShowPaymentModal(true);
                         }}
                         disabled={cartItems.length === 0}
-                        className="flex-1 py-3.5 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-black text-sm rounded-2xl shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2 transition disabled:opacity-40 disabled:pointer-events-none"
+                        className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-black rounded-xl shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2 transition disabled:opacity-40 disabled:pointer-events-none min-h-[42px]"
                     >
-                        <ShoppingBag size={20} />
-                        <span>بيع (إتمام وتسديد الفاتورة) - الإجمالي: {invoiceTotal} ريال يمني</span>
+                        <ShoppingBag size={16} className="shrink-0" />
+                        <span className="text-[11px] sm:text-xs md:text-sm whitespace-nowrap">بيع (إتمام وتسديد الفاتورة) - الإجمالي: {invoiceTotal} ريال يمني</span>
                     </button>
                     <button
                         type="button"
@@ -1296,6 +1333,136 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                                 type="button"
                                 onClick={() => setNegativeStockWarning(null)}
                                 className="px-5 py-3 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-bold text-xs rounded-2xl transition"
+                            >
+                                إلغاء
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {/* ITEM EDIT & ACTION MODAL (نافذة تعديل الصنف المباشرة مع زري الحفظ والحذف بجانب بعض) */}
+            {selectedCartItemForActions && (
+                <div className="fixed inset-0 z-[65] bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150 dir-rtl" dir="rtl">
+                    <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-sm w-full p-4 sm:p-5 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4 my-auto">
+                        <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
+                            <div className="flex items-center gap-2">
+                                <div className="w-8 h-8 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
+                                    <Edit3 size={16} />
+                                </div>
+                                <div>
+                                    <h3 className="font-black text-sm text-slate-900 dark:text-white whitespace-nowrap">
+                                        تعديل: {selectedCartItemForActions.categoryName}
+                                    </h3>
+                                    <div className="flex items-center gap-1.5 mt-0.5">
+                                        <span className={`px-2 py-0.5 rounded text-[10px] font-black whitespace-nowrap ${
+                                            selectedCartItemForActions.saleType === 'wholesale' 
+                                                ? 'bg-purple-50 text-purple-700 dark:bg-purple-950 dark:text-purple-300' 
+                                                : selectedCartItemForActions.saleType === 'distributor'
+                                                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
+                                                : 'bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300'
+                                        }`}>
+                                            {selectedCartItemForActions.saleType === 'wholesale' ? 'بيع جملة' : selectedCartItemForActions.saleType === 'distributor' ? 'بيع لموزع' : 'بيع تجزئة'}
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setSelectedCartItemForActions(null)}
+                                className="w-7 h-7 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 flex items-center justify-center transition"
+                            >
+                                <X size={16} />
+                            </button>
+                        </div>
+
+                        <div className="space-y-3">
+                            {/* عدد الكروت / الكمية */}
+                            <div>
+                                <label className="block text-xs font-black text-slate-700 dark:text-slate-300 mb-1.5 whitespace-nowrap">
+                                    الكمية (عدد الكروت)
+                                </label>
+                                <div className="flex items-center gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            const curr = parseInt(editItemQty, 10) || 1;
+                                            setEditItemQty(Math.max(1, curr - 1).toString());
+                                        }}
+                                        className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-black text-base flex items-center justify-center transition shrink-0"
+                                    >
+                                        <Minus size={16} />
+                                    </button>
+                                    <input
+                                        type="number"
+                                        min="1"
+                                        value={editItemQty}
+                                        onChange={(e) => setEditItemQty(e.target.value)}
+                                        className="flex-1 h-10 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-center text-sm font-black text-indigo-600 dark:text-indigo-400 outline-none focus:border-indigo-500 font-mono"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            const curr = parseInt(editItemQty, 10) || 1;
+                                            setEditItemQty((curr + 1).toString());
+                                        }}
+                                        className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-black text-base flex items-center justify-center transition shrink-0"
+                                    >
+                                        <Plus size={16} />
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* سعر الوحدة */}
+                            <div>
+                                <label className="block text-xs font-black text-slate-700 dark:text-slate-300 mb-1.5 whitespace-nowrap">
+                                    سعر الكارت الواحد
+                                </label>
+                                <input
+                                    type="number"
+                                    min="0"
+                                    value={editItemUnitPrice}
+                                    onChange={(e) => setEditItemUnitPrice(parseFloat(e.target.value) || 0)}
+                                    className="w-full h-10 px-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm font-black text-slate-800 dark:text-slate-200 outline-none focus:border-indigo-500 font-mono text-center"
+                                />
+                            </div>
+
+                            {/* الإجمالي المحسوب الجديد */}
+                            <div className="p-2.5 bg-indigo-50/70 dark:bg-indigo-950/50 rounded-xl border border-indigo-100 dark:border-indigo-900/60 flex items-center justify-between text-xs whitespace-nowrap">
+                                <span className="text-slate-600 dark:text-slate-300 font-black whitespace-nowrap">الإجمالي المحسوب:</span>
+                                <span className="font-black text-emerald-600 dark:text-emerald-400 text-sm font-mono whitespace-nowrap" dir="ltr">
+                                    {((parseInt(editItemQty, 10) || 0) * (Number(editItemUnitPrice) || 0)).toLocaleString()}
+                                </span>
+                            </div>
+                        </div>
+
+                        {/* Action Buttons: Save & Delete side-by-side */}
+                        <div className="flex items-center gap-2 pt-2">
+                            <button
+                                type="button"
+                                onClick={handleSaveEditedCartItem}
+                                className="flex-1 py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-black text-xs rounded-xl shadow-sm shadow-emerald-600/20 flex items-center justify-center gap-1.5 transition whitespace-nowrap"
+                            >
+                                <CheckCircle2 size={16} />
+                                <span>حفظ التعديل</span>
+                            </button>
+
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    handleRemoveFromCart(selectedCartItemForActions.id);
+                                    setSelectedCartItemForActions(null);
+                                }}
+                                className="py-2.5 px-3 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/50 text-rose-600 dark:text-rose-400 font-black text-xs rounded-xl border border-rose-200 dark:border-rose-900/60 flex items-center justify-center gap-1.5 transition active:scale-98 whitespace-nowrap"
+                                title="حذف الصنف من الفاتورة"
+                            >
+                                <Trash2 size={16} />
+                                <span>حذف</span>
+                            </button>
+
+                            <button
+                                type="button"
+                                onClick={() => setSelectedCartItemForActions(null)}
+                                className="py-2.5 px-3 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-bold text-xs rounded-xl transition whitespace-nowrap"
                             >
                                 إلغاء
                             </button>

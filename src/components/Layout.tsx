@@ -1,13 +1,14 @@
-import React from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
-import { Home, Package, ShoppingCart, Users, Truck, DollarSign, FileText, Settings, LogOut, Menu, X, RefreshCw, Sparkles, Database, BrainCircuit, Wrench, Moon, Sun, ClipboardCheck, Gift, FileSignature, ArrowRight, Wifi, WifiOff, Cloud, CloudOff, CreditCard, Layers } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { Home, Package, ShoppingCart, Users, Truck, DollarSign, FileText, Settings, LogOut, Menu, X, RefreshCw, Sparkles, Database, BrainCircuit, Wrench, Moon, Sun, ClipboardCheck, Gift, FileSignature, ArrowRight, Wifi, WifiOff, Cloud, CloudOff, CreditCard, Layers, Briefcase, Search } from 'lucide-react';
 import { useInvoiceStore } from '../store/invoiceStore';
 import { useTheme } from '../context/ThemeContext';
 import { useSettingsStore } from '../store/settingsStore';
 import ForcePasswordChangeOverlay from './ForcePasswordChangeOverlay';
 import ForceStoreSetupOverlay from './ForceStoreSetupOverlay';
+import { useUIStore } from '../store/uiStore';
+import { AppExitConfirmModal } from './AppExitConfirmModal';
 
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { db } from '../lib/firebase';
@@ -22,10 +23,98 @@ export default function Layout() {
     const location = useLocation();
     const navigate = useNavigate();
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+    const [isExitModalOpen, setIsExitModalOpen] = useState(false);
     const [isOnline, setIsOnline] = useState(window.navigator.onLine);
     const [daysNoSync, setDaysNoSync] = useState(getDaysSinceLastSync());
     const { isSyncing, syncProgress, triggerSync } = useSyncStore();
     const { isSalesFocusMode } = useInvoiceStore();
+    const showDashboardSearch = useUIStore((s) => s.showDashboardSearch);
+    const setShowDashboardSearch = useUIStore((s) => s.setShowDashboardSearch);
+
+    // Unified Back Action: handles hardware back button, browser back, and header back button
+    const handleUnifiedBack = useCallback(() => {
+        // 1. If Exit Modal is open -> close it
+        if (isExitModalOpen) {
+            setIsExitModalOpen(false);
+            return true;
+        }
+
+        // 2. If mobile drawer menu is open -> close it
+        if (isMobileMenuOpen) {
+            setIsMobileMenuOpen(false);
+            return true;
+        }
+
+        // 3. If any sub-modal or sub-view registered an onHeaderBack hook (e.g. employee details, customer account statement, card batch)
+        if (typeof (window as any).onHeaderBack === 'function') {
+            try {
+                const handled = (window as any).onHeaderBack();
+                if (handled !== false) {
+                    return true;
+                }
+            } catch (err) {
+                console.warn('Error in onHeaderBack handler:', err);
+            }
+        }
+
+        // 4. If on a sub-route (not on home page '/')
+        if (location.pathname !== '/') {
+            if (location.pathname === '/sales') useInvoiceStore.getState().setSalesMinimized(true);
+            if (location.pathname === '/purchases') useInvoiceStore.getState().setPurchasesMinimized(true);
+            
+            if (location.pathname.startsWith('/settings/') && location.pathname !== '/settings') {
+                navigate('/settings');
+            } else {
+                navigate('/');
+            }
+            return true;
+        }
+
+        // 5. If we are on the Main Home Screen ('/'), show the Exit Confirmation Modal!
+        setIsExitModalOpen(true);
+        return true;
+    }, [isExitModalOpen, isMobileMenuOpen, location.pathname, navigate]);
+
+    // Register unified back handler globally so hardware back button & window events trigger it
+    useEffect(() => {
+        (window as any).triggerAppBackButton = handleUnifiedBack;
+        return () => {
+            if ((window as any).triggerAppBackButton === handleUnifiedBack) {
+                (window as any).triggerAppBackButton = null;
+            }
+        };
+    }, [handleUnifiedBack]);
+
+    // Handle browser popstate / back button on mobile web
+    useEffect(() => {
+        const handlePopState = () => {
+            handleUnifiedBack();
+        };
+        window.addEventListener('popstate', handlePopState);
+        return () => {
+            window.removeEventListener('popstate', handlePopState);
+        };
+    }, [handleUnifiedBack]);
+
+    const handleConfirmAppExit = async () => {
+        setIsExitModalOpen(false);
+        try {
+            const { App: CapacitorApp } = await import('@capacitor/app');
+            if (CapacitorApp && typeof CapacitorApp.exitApp === 'function') {
+                await CapacitorApp.exitApp();
+                return;
+            }
+        } catch (e) {
+            console.log('Capacitor exitApp not available:', e);
+        }
+
+        try {
+            window.close();
+        } catch (e) {}
+
+        // In web browsers where window.close() is prevented:
+        window.location.replace('about:blank');
+    };
 
     useEffect(() => {
         const handleOnline = () => {
@@ -55,19 +144,20 @@ export default function Layout() {
     }, [location.pathname, isSalesFocusMode]);
 
     const navItems = [
-        { path: '/', label: 'الرئيسية', icon: Home, roles: ['admin', 'cashier', 'inventory', 'salesman'] },
+        { path: '/', label: 'الرئيسية', icon: Home, roles: ['admin', 'cashier', 'inventory', 'salesman', 'network_worker'] },
         { path: '/sales', label: 'المبيعات', icon: ShoppingCart, roles: ['admin', 'cashier', 'salesman'], onClick: () => useInvoiceStore.getState().setSalesActiveTab('add') },
         { path: '/quotations', label: 'عروض الأسعار', icon: FileSignature, roles: ['admin', 'cashier'], onClick: () => useInvoiceStore.getState().setQuotationsActiveTab('add') },
         { path: '/products', label: 'المنتجات', icon: Package, roles: ['admin', 'inventory', 'cashier'] },
         { path: '/purchases', label: 'المشتريات', icon: Truck, roles: ['admin', 'inventory'], onClick: () => useInvoiceStore.getState().setPurchasesActiveTab('add') },
         { path: '/customers', label: 'العملاء', icon: Users, roles: ['admin', 'cashier', 'salesman'] },
+        { path: '/employees', label: 'الموظفين', icon: Briefcase, roles: ['admin'] },
         { path: '/loyalty', label: 'برنامج الولاء', icon: Gift, roles: ['admin', 'cashier'] },
         { path: '/suppliers', label: 'الموردين', icon: Users, roles: ['admin', 'inventory'] },
         { path: '/cash', label: 'الصندوق', icon: DollarSign, roles: ['admin', 'cashier'] },
-        { path: '/vouchers', label: 'قبض وصرف', icon: DollarSign, roles: ['admin', 'cashier', 'salesman'] },
+        { path: '/vouchers', label: 'قبض وصرف', icon: DollarSign, roles: ['admin', 'cashier', 'salesman', 'network_worker'] },
         { path: '/expenses', label: 'المصروفات', icon: DollarSign, roles: ['admin', 'cashier'] },
-        { path: '/network-cards', label: 'كروت الشبكة', icon: CreditCard, roles: ['admin', 'cashier', 'inventory', 'salesman'] },
-        { path: '/cards-management', label: 'إدارة الكروت', icon: Layers, roles: ['admin', 'cashier', 'inventory'] },
+        { path: '/network-cards', label: 'كروت الشبكة', icon: CreditCard, roles: ['admin', 'cashier', 'inventory', 'salesman', 'network_worker'] },
+        { path: '/cards-management', label: 'إدارة الكروت', icon: Layers, roles: ['admin', 'cashier', 'inventory', 'network_worker'] },
         { path: '/reports', label: 'التقارير', icon: FileText, roles: ['admin'] },
         { path: '/ai', label: 'الذكاء الاصطناعي', icon: BrainCircuit, roles: ['admin'] },
         { path: '/logs', label: 'سجل العمليات', icon: FileText, roles: ['admin'] },
@@ -222,26 +312,28 @@ export default function Layout() {
                             }`} />
                         </button>
 
+                        {isHome && (
+                            <button
+                                onClick={() => {
+                                    setShowDashboardSearch(!showDashboardSearch);
+                                }}
+                                className={`p-2 rounded-xl border shadow-sm transition-all duration-300 relative group flex items-center justify-center cursor-pointer ${
+                                    showDashboardSearch
+                                        ? 'border-purple-200 dark:border-purple-950/30 text-purple-600 dark:text-purple-400 bg-purple-50/20'
+                                        : 'bg-white dark:bg-slate-800 border-gray-100 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:scale-105'
+                                }`}
+                                title="البحث الذكي"
+                            >
+                                <Search size={20} />
+                            </button>
+                        )}
+
                         <NotificationsMenu />
 
                         {!isHome && (
                             <button 
-                                onClick={() => {
-                                    if (typeof (window as any).onHeaderBack === 'function') {
-                                        const handled = (window as any).onHeaderBack();
-                                        if (handled) return;
-                                    }
-
-                                    if (location.pathname === '/sales') useInvoiceStore.getState().setSalesMinimized(true);
-                                    if (location.pathname === '/purchases') useInvoiceStore.getState().setPurchasesMinimized(true);
-                                    
-                                    if (location.pathname.startsWith('/settings/') && location.pathname !== '/settings') {
-                                        navigate('/settings');
-                                    } else {
-                                        navigate('/');
-                                    }
-                                }}
-                                className="p-2 min-w-[40px] px-3 justify-center bg-white dark:bg-slate-800 text-black dark:text-gray-200 dark:text-gray-300 rounded-lg hover:bg-white dark:hover:bg-slate-700 transition font-bold flex items-center gap-2" 
+                                onClick={handleUnifiedBack}
+                                className="p-2 min-w-[40px] px-3 justify-center bg-white dark:bg-slate-800 text-black dark:text-gray-200 dark:text-gray-300 rounded-lg hover:bg-white dark:hover:bg-slate-700 transition font-bold flex items-center gap-2 cursor-pointer" 
                                 title="رجوع / خروج"
                             >
                                 <ArrowRight size={20} className="md:hidden" />
@@ -329,6 +421,13 @@ export default function Layout() {
             <main className={`flex-1 flex flex-col min-h-0 overflow-y-auto bg-[var(--bg-main)] w-full relative ${isSalesFocusMode ? 'p-0' : 'p-2 md:p-6'}`}>
                 <Outlet />
             </main>
+
+            {/* Exit Confirmation Modal for Phone Back Button & Main Screen Exit */}
+            <AppExitConfirmModal
+                isOpen={isExitModalOpen}
+                onClose={() => setIsExitModalOpen(false)}
+                onConfirmExit={handleConfirmAppExit}
+            />
         </div>
     );
 }

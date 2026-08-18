@@ -506,6 +506,31 @@ export default function ExtraFeatures() {
                     />
                 </section>
 
+                {/* Yemeni Exchange Rate */}
+                <section className="p-5 rounded-2xl border transition-all duration-300 flex flex-col gap-4 bg-white dark:bg-slate-900 border-gray-200 dark:border-slate-800 hover:border-gray-300 md:col-span-2">
+                    <div className="flex items-center justify-between gap-3 flex-wrap sm:flex-nowrap">
+                        <div className="flex items-center gap-3">
+                            <div className="p-2.5 rounded-xl shrink-0 border bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 border-indigo-100 dark:border-indigo-900">
+                                <Coins size={22} />
+                            </div>
+                            <div>
+                                <h3 className="text-sm font-bold text-black dark:text-gray-100">سعر تحويل العملة (الريال اليمني مقابل السعودي)</h3>
+                                <p className="text-[10px] text-gray-500 dark:text-gray-400">تحديد سعر الصرف المعتمد لتحويل المسحوبات والرواتب من الريال اليمني إلى السعودي تلقائياً في حسابات الصندوق</p>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-2 self-end sm:self-auto">
+                            <span className="text-xs text-slate-500 dark:text-slate-400">1 ر.س =</span>
+                            <input 
+                                type="number" 
+                                value={localSettings.yemeniExchangeRate ?? 140}
+                                onChange={(e) => setLocalSettings(prev => ({ ...prev, yemeniExchangeRate: parseFloat(e.target.value) || 0 }))}
+                                className="w-24 bg-slate-50 dark:bg-slate-950 text-black dark:text-white border border-gray-300 dark:border-slate-700 font-bold text-center px-2 py-1 rounded-md text-sm outline-none focus:border-indigo-500"
+                            />
+                            <span className="font-bold text-xs text-slate-600 dark:text-slate-300">ريال يمني</span>
+                        </div>
+                    </div>
+                </section>
+
                 {/* AI & Advanced */}
                 <section className={`p-5 rounded-2xl border transition-all duration-300 flex items-center justify-between gap-4 md:col-span-2 ${
                     localSettings.isAiEnabled 

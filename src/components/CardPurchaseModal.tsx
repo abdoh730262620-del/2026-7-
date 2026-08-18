@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, ShoppingBag, Plus, Trash2, CheckCircle2, User, Phone, Search, CreditCard, DollarSign, Wifi, Star } from 'lucide-react';
+import { X, ShoppingBag, Plus, Trash2, CheckCircle2, User, Phone, Search, CreditCard, DollarSign, Wifi, Star, RotateCcw, ArrowDownRight, ArrowUpRight } from 'lucide-react';
 import { collection, query, where, onSnapshot, addDoc, doc, updateDoc, runTransaction, getDocs } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { useAuthStore } from '../store/authStore';
@@ -19,6 +19,8 @@ interface CardPurchaseModalProps {
     onReverseInvoice?: () => Promise<boolean>;
     prefetchedCategories?: CardCategory[];
     prefetchedSuppliers?: CardSupplier[];
+    initialIsReturn?: boolean;
+    isReturnOnly?: boolean;
 }
 
 interface CartItem {
@@ -32,7 +34,7 @@ interface CartItem {
 }
 
 
-export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuccess, onInvoiceCreated, editingInvoice, onReverseInvoice, prefetchedCategories, prefetchedSuppliers }: CardPurchaseModalProps) {
+export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuccess, onInvoiceCreated, editingInvoice, onReverseInvoice, prefetchedCategories, prefetchedSuppliers, initialIsReturn, isReturnOnly }: CardPurchaseModalProps) {
     const { appUser } = useAuthStore();
     const { registerModal, unregisterModal } = useUIStore();
 
@@ -49,6 +51,9 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
 
     const [categories, setCategories] = useState<CardCategory[]>([]);
     const [suppliers, setSuppliers] = useState<CardSupplier[]>([]);
+
+    // Invoice Mode: Standard Purchase vs Purchase Return (مردودات مشتريات)
+    const [isReturnInvoice, setIsReturnInvoice] = useState<boolean>(Boolean(isReturnOnly || initialIsReturn));
 
     // Selected category & row inputs
     const [selectedCategoryName, setSelectedCategoryName] = useState<string>('');
@@ -81,6 +86,7 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
     // Pre-fill if editingInvoice is provided
     useEffect(() => {
         if (isOpen && editingInvoice) {
+            setIsReturnInvoice(Boolean(isReturnOnly || editingInvoice.isReturn || editingInvoice.purchaseType === 'supplier_return'));
             setPaymentType(editingInvoice.paymentType || 'cash');
             if (editingInvoice.supplierId) {
                 setSelectedSupplierId(editingInvoice.supplierId);
@@ -94,19 +100,20 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                     id: Math.random().toString(36).substr(2, 9),
                     categoryName: it.categoryName,
                     unitPrice: it.unitPrice || 0,
-                    quantity: it.quantity || 1,
-                    totalAmount: (it.unitPrice || 0) * (it.quantity || 1),
+                    quantity: Math.abs(it.quantity || 1),
+                    totalAmount: Math.abs((it.unitPrice || 0) * (it.quantity || 1)),
                     availableStock: 99999
                 }));
                 setCartItems(initialCart);
             }
         } else if (isOpen && !editingInvoice) {
+            setIsReturnInvoice(Boolean(isReturnOnly || initialIsReturn));
             setCartItems([]);
             setPaymentType('cash');
             setSelectedSupplierId('');
             setNotes('');
         }
-    }, [isOpen, editingInvoice]);
+    }, [isOpen, editingInvoice, initialIsReturn, isReturnOnly]);
 
 
     // Fetch Categories & Suppliers
@@ -253,7 +260,7 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
     const invoiceTotal = cartItems.reduce((sum, item) => sum + item.totalAmount, 0);
     const totalCardsQty = cartItems.reduce((sum, item) => sum + item.quantity, 0);
 
-    // Execute Purchase Transaction
+    // Execute Purchase Transaction (Purchase or Purchase Return)
     const handleConfirmCheckout = async () => {
         if (saving) return;
         if (cartItems.length === 0) {
@@ -262,7 +269,7 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
         }
 
         if (paymentType === 'credit' && !selectedSupplierId) {
-            alert('في حالة الشراء الآجل، يجب اختيار المورد.');
+            alert(isReturnInvoice ? 'في حالة المردودات الآجلة، يجب اختيار المورد لخصم المبلغ من حسابه.' : 'في حالة الشراء الآجل، يجب اختيار المورد.');
             return;
         }
 
@@ -304,6 +311,7 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                 const oldItems = [];
                 const oldDocsToDelete = [];
                 let oldCreatedAt = Date.now();
+                let oldWasReturn = false;
                 
                 if (editingInvoice && editingInvoice.docIds) {
                     for (const docId of editingInvoice.docIds) {
@@ -313,9 +321,13 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                             const data = oldDocSnap.data();
                             oldDocsToDelete.push(oldDocRef);
                             oldItems.push(data);
-                            oldInvoiceTotal += (data.totalAmount || 0);
+                            const itemTotal = Math.abs(data.totalAmount || 0);
+                            oldInvoiceTotal += itemTotal;
                             oldPaymentType = data.paymentType;
                             oldSupplierId = data.supplierId || '';
+                            if (data.isReturn || data.purchaseType === 'supplier_return') {
+                                oldWasReturn = true;
+                            }
                             if (data.createdAt) oldCreatedAt = data.createdAt;
                         }
                     }
@@ -350,6 +362,7 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                 });
 
                 const stockDeltas: Record<string, number> = {};
+                // Rollback old items: if old was purchase (+qty), rollback is -qty. If old was return (-qty), rollback is +qty.
                 for (const old of oldItems) {
                     let oldCatId = old.categoryId;
                     if (!oldCatId && old.categoryName) {
@@ -361,30 +374,50 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                         if (matched) oldCatId = matched.id;
                     }
                     if (oldCatId) {
-                        stockDeltas[oldCatId] = (stockDeltas[oldCatId] || 0) - (old.quantity || 0);
+                        const oldQty = Math.abs(old.quantity || 0);
+                        const rollbackDelta = (old.isReturn || old.purchaseType === 'supplier_return') ? +oldQty : -oldQty;
+                        stockDeltas[oldCatId] = (stockDeltas[oldCatId] || 0) + rollbackDelta;
                     }
                 }
                 
+                // Apply new items stock delta: standard purchase adds stock (+qty), return subtracts stock (-qty)
                 if (invoiceStatus === 'completed') {
                     for (const item of newItemsWithCats) {
-                        stockDeltas[item.catId] = (stockDeltas[item.catId] || 0) + (item.quantity || 0);
+                        const itemQty = Math.abs(item.quantity || 0);
+                        const applyDelta = isReturnInvoice ? -itemQty : +itemQty;
+                        stockDeltas[item.catId] = (stockDeltas[item.catId] || 0) + applyDelta;
                     }
                 }
 
-                const supplierDeltas = {};
+                // Supplier balance deltas
+                const supplierDeltas: Record<string, number> = {};
                 if (oldPaymentType === 'credit' && oldSupplierId) {
-                    supplierDeltas[oldSupplierId] = (supplierDeltas[oldSupplierId] || 0) - oldInvoiceTotal;
+                    // Rollback old credit purchase (+debt) => -oldTotal. Rollback old credit return (-debt) => +oldTotal.
+                    const rollbackSupp = oldWasReturn ? +oldInvoiceTotal : -oldInvoiceTotal;
+                    supplierDeltas[oldSupplierId] = (supplierDeltas[oldSupplierId] || 0) + rollbackSupp;
                 }
                 if (invoiceStatus === 'completed' && paymentType === 'credit' && selectedSupplierId) {
-                    supplierDeltas[selectedSupplierId] = (supplierDeltas[selectedSupplierId] || 0) + invoiceTotal;
+                    // Standard credit purchase increases debt to supplier (+invoiceTotal)
+                    // Credit return decreases debt to supplier (-invoiceTotal)
+                    const applySupp = isReturnInvoice ? -invoiceTotal : +invoiceTotal;
+                    supplierDeltas[selectedSupplierId] = (supplierDeltas[selectedSupplierId] || 0) + applySupp;
                 }
 
-                let netCashboxOutflow = 0;
-                if (oldPaymentType === 'cash') netCashboxOutflow -= oldInvoiceTotal;
-                if (invoiceStatus === 'completed' && paymentType === 'cash') netCashboxOutflow += invoiceTotal;
+                // Cashbox deltas:
+                // Standard cash purchase pays cash out of cashbox (-invoiceTotal)
+                // Cash return brings refund cash into cashbox (+invoiceTotal)
+                let netCashboxOutflow = 0; // Positive = cash leaving box (expense), Negative = cash entering box (income)
+                if (oldPaymentType === 'cash') {
+                    // Rollback old: if old was purchase (outflow +total), rollback is -total.
+                    // If old was return (inflow -total), rollback is +total.
+                    netCashboxOutflow += oldWasReturn ? +oldInvoiceTotal : -oldInvoiceTotal;
+                }
+                if (invoiceStatus === 'completed' && paymentType === 'cash') {
+                    netCashboxOutflow += isReturnInvoice ? -invoiceTotal : +invoiceTotal;
+                }
 
                 // --- PHASE 2: ALL READS ---
-                const categorySnaps = {};
+                const categorySnaps: Record<string, { ref: any; snap: any }> = {};
                 for (const item of newItemsWithCats) {
                     if (!item.isNewCat) {
                         const ref = doc(db, 'card_categories', item.catId);
@@ -398,7 +431,7 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                     }
                 }
 
-                const supplierSnaps = {};
+                const supplierSnaps: Record<string, { ref: any; snap: any }> = {};
                 for (const suppId of Object.keys(supplierDeltas)) {
                     if (supplierDeltas[suppId] !== 0) {
                         const ref = doc(db, 'card_suppliers', suppId);
@@ -411,17 +444,18 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                 for (const ref of oldDocsToDelete) transaction.delete(ref);
 
                 // 2. Map new categories to their actual Firestore IDs before saving
-                const newCatRefs = {};
+                const newCatRefs: Record<string, string> = {};
                 if (invoiceStatus === 'completed') {
                     for (const item of newItemsWithCats) {
                         if (item.isNewCat && !newCatRefs[item.catId]) {
                             const newCatRef = doc(collection(db, 'card_categories'));
+                            const initCount = isReturnInvoice ? 0 : item.quantity;
                             transaction.set(newCatRef, {
                                 tenantId,
                                 name: item.categoryName,
                                 wholesalePrice: item.unitPrice,
                                 retailPrice: item.unitPrice * 1.05,
-                                availableCount: item.quantity,
+                                availableCount: initCount,
                                 createdAt: Date.now()
                             });
                             newCatRefs[item.catId] = newCatRef.id;
@@ -431,11 +465,13 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                                 tenantId,
                                 categoryId: newCatRef.id,
                                 categoryName: item.categoryName,
-                                quantityAdded: item.quantity,
+                                quantityAdded: isReturnInvoice ? -item.quantity : item.quantity,
                                 userName: staffName,
                                 additionDate: `${dateStr} ${timeStr}`,
-                                availableCountAfter: item.quantity,
-                                notes: `إنشاء صنف جديد - فاتورة مشتريات #${nextInvoiceNumber}`,
+                                availableCountAfter: initCount,
+                                notes: isReturnInvoice 
+                                    ? `مردودات مشتريات (مرتجع للمورد) - فاتورة #${nextInvoiceNumber}` 
+                                    : `إنشاء صنف جديد - فاتورة مشتريات #${nextInvoiceNumber}`,
                                 createdAt: Date.now()
                             });
                         }
@@ -446,17 +482,23 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                 for (const item of newItemsWithCats) {
                     const finalCatId = item.isNewCat ? newCatRefs[item.catId] : item.catId;
                     const purchaseRef = doc(collection(db, 'card_purchases'));
+                    const cleanNotes = notes.trim();
+                    const finalNotes = isReturnInvoice 
+                        ? (cleanNotes ? `مردودات مشتريات: ${cleanNotes}` : 'مردودات مشتريات (مرتجع للمورد)') 
+                        : cleanNotes;
+
                     transaction.set(purchaseRef, {
                         tenantId,
                         categoryId: finalCatId || '',
                         categoryName: item.categoryName,
-                        quantity: item.quantity,
-                        purchaseType: 'supplier',
+                        quantity: isReturnInvoice ? -Math.abs(item.quantity) : Math.abs(item.quantity),
+                        purchaseType: isReturnInvoice ? 'supplier_return' : 'supplier',
+                        isReturn: isReturnInvoice,
                         paymentType,
                         supplierId: selectedSupplierId || '',
                         supplierName: selectedSupplier ? selectedSupplier.name : 'مورد نقدي عام',
                         unitPrice: item.unitPrice,
-                        totalAmount: item.totalAmount,
+                        totalAmount: isReturnInvoice ? -Math.abs(item.totalAmount) : Math.abs(item.totalAmount),
                         month: yearMonth,
                         date: dateStr,
                         dateTime: `${dateStr} ${timeStr}`,
@@ -465,7 +507,7 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                         createdByName: staffName,
                         invoiceNumber: nextInvoiceNumber,
                         status: invoiceStatus,
-                        notes: notes.trim(),
+                        notes: finalNotes,
                         createdAt: oldDocsToDelete.length > 0 ? oldCreatedAt : Date.now()
                     });
                 }
@@ -479,12 +521,12 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                         if (delta !== 0 && categorySnaps[catId] && categorySnaps[catId].snap.exists()) {
                             const catRef = categorySnaps[catId].ref;
                             const catData = categorySnaps[catId].snap.data();
-                            const currentStock = catData.availableCount || 0;
+                            const currentStock = Number(catData.availableCount) || 0;
                             const newStock = currentStock + delta;
                             
                             const catUpdate: any = { availableCount: newStock, updatedAt: Date.now() };
                             const matchingItem = newItemsWithCats.find(i => i.catId === catId);
-                            if (matchingItem && autoUpdateCostPrice && matchingItem.unitPrice > 0) {
+                            if (matchingItem && autoUpdateCostPrice && matchingItem.unitPrice > 0 && !isReturnInvoice) {
                                 catUpdate.wholesalePrice = matchingItem.unitPrice;
                             }
                             transaction.update(catRef, catUpdate);
@@ -498,7 +540,9 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                                 userName: staffName,
                                 additionDate: `${dateStr} ${timeStr}`,
                                 availableCountAfter: newStock,
-                                notes: oldDocsToDelete.length > 0 ? `تسوية كمية (تعديل فاتورة مشتريات #${nextInvoiceNumber})` : `فاتورة مشتريات #${nextInvoiceNumber}`,
+                                notes: isReturnInvoice
+                                    ? `مردودات مشتريات (مرتجع للمورد) - فاتورة #${nextInvoiceNumber}`
+                                    : (oldDocsToDelete.length > 0 ? `تسوية كمية (تعديل فاتورة مشتريات #${nextInvoiceNumber})` : `فاتورة مشتريات #${nextInvoiceNumber}`),
                                 createdAt: Date.now()
                             });
                         }
@@ -509,7 +553,7 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                         const delta = supplierDeltas[suppId];
                         if (delta !== 0 && supplierSnaps[suppId] && supplierSnaps[suppId].snap.exists()) {
                             const suppRef = supplierSnaps[suppId].ref;
-                            const currentBalance = supplierSnaps[suppId].snap.data().balance || 0;
+                            const currentBalance = Number(supplierSnaps[suppId].snap.data().balance) || 0;
                             transaction.update(suppRef, {
                                 balance: currentBalance + delta,
                                 updatedAt: Date.now()
@@ -520,13 +564,15 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                     // 6. Apply cashbox diff
                     if (netCashboxOutflow !== 0) {
                         const cashboxRef = doc(collection(db, 'card_cashbox'));
-                        const isIncome = netCashboxOutflow < 0; 
+                        const isIncome = netCashboxOutflow < 0; // Inflow / return money into box
                         const absAmount = Math.abs(netCashboxOutflow);
                         
                         transaction.set(cashboxRef, {
                             tenantId,
-                            type: isIncome ? 'manual_in' : 'supplier_purchase_cash',
-                            title: oldDocsToDelete.length > 0 ? `تسوية تعديل فاتورة مشتريات #${nextInvoiceNumber} (فارق السعر)` : `فاتورة شراء كروت نقدية (${totalCardsQty} كارت)`,
+                            type: isReturnInvoice ? 'supplier_return_cash' : (isIncome ? 'manual_in' : 'supplier_purchase_cash'),
+                            title: isReturnInvoice 
+                                ? `مردودات مشتريات كروت نقدية - استرداد من المورد (${totalCardsQty} كارت) - فاتورة #${nextInvoiceNumber}`
+                                : (oldDocsToDelete.length > 0 ? `تسوية تعديل فاتورة مشتريات #${nextInvoiceNumber} (فارق السعر)` : `فاتورة شراء كروت نقدية (${totalCardsQty} كارت)`),
                             amount: absAmount,
                             isIncome: isIncome,
                             date: dateStr,
@@ -542,7 +588,7 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                         transaction.set(notifRef, {
                             tenantId,
                             type: 'invoice_created',
-                            invoiceType: 'card_purchase',
+                            invoiceType: isReturnInvoice ? 'card_purchase_return' : 'card_purchase',
                             invoiceNumber: String(nextInvoiceNumber),
                             amount: invoiceTotal,
                             createdById: appUser?.uid || '',
@@ -551,24 +597,30 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                             recipientRole: 'admin',
                             createdAt: Date.now(),
                             read: false,
-                            title: `🧾 فاتورة شراء كروت جديدة #${nextInvoiceNumber}`,
-                            body: `قام المستخدم (${staffName}) بإنشاء فاتورة شراء كروت بمبلغ ${invoiceTotal.toLocaleString('ar-SA')} ريال يمني`
+                            title: isReturnInvoice 
+                                ? `↩️ فاتورة مردودات مشتريات كروت #${nextInvoiceNumber}` 
+                                : `🧾 فاتورة شراء كروت جديدة #${nextInvoiceNumber}`,
+                            body: isReturnInvoice
+                                ? `قام المستخدم (${staffName}) بإنشاء فاتورة مردودات مشتريات كروت بمبلغ ${invoiceTotal.toLocaleString('ar-SA')} ريال يمني`
+                                : `قام المستخدم (${staffName}) بإنشاء فاتورة شراء كروت بمبلغ ${invoiceTotal.toLocaleString('ar-SA')} ريال يمني`
                         });
                     }
                 }
             });
+
             // Trigger action modal with full compiled invoice
             if (onInvoiceCreated) {
                 onInvoiceCreated({
                     id: nextInvoiceNumber,
                     invoiceNumber: nextInvoiceNumber,
-                    type: 'purchase',
+                    type: isReturnInvoice ? 'purchase_return' : 'purchase',
+                    isReturn: isReturnInvoice,
                     totalAmount: invoiceTotal,
                     paymentType,
                     partyName: selectedSupplier ? selectedSupplier.name : 'مورد نقدي عام',
                     dateTime: `${dateStr} ${timeStr}`,
                     userName: staffName,
-                    notes: notes.trim(),
+                    notes: isReturnInvoice ? (notes.trim() ? `مردودات مشتريات: ${notes.trim()}` : 'مردودات مشتريات (مرتجع للمورد)') : notes.trim(),
                     items: cartItems.map(item => ({
                         categoryName: item.categoryName,
                         quantity: item.quantity,
@@ -591,32 +643,52 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
     if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 z-50 bg-black/20  flex items-stretch justify-center p-0 animate-in fade-in duration-200 dir-rtl overflow-hidden" dir="rtl">
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-stretch justify-center p-0 animate-in fade-in duration-200 dir-rtl overflow-hidden" dir="rtl">
             <div className="bg-white dark:bg-slate-900 w-full h-full max-w-full p-4 sm:p-6 shadow-none flex flex-col justify-between overflow-hidden space-y-4">
                 {/* Header */}
-                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2 shrink-0">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2.5 gap-2 shrink-0">
                     <div className="flex items-center gap-3">
-                        <div className="p-2.5 bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 rounded-2xl border border-indigo-100 dark:border-indigo-900/50">
-                            <ShoppingBag size={22} />
+                        <div className={`p-2.5 rounded-2xl border ${
+                            isReturnInvoice
+                                ? 'bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 border-amber-100 dark:border-amber-900/50'
+                                : 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border-indigo-100 dark:border-indigo-900/50'
+                        }`}>
+                            {isReturnInvoice ? <RotateCcw size={22} /> : <ShoppingBag size={22} />}
                         </div>
                         <div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex flex-wrap items-center gap-2">
                                 <h2 className="font-black text-lg sm:text-xl text-slate-900 dark:text-white">
-                                    شراء الكروت (تزويد رصيد المخزون)
+                                    {isReturnInvoice ? 'مردودات مشتريات الكروت (إرجاع للمورد / خصم المخزون)' : 'شراء الكروت (تزويد رصيد المخزون)'}
                                 </h2>
                                 <span className="text-xs font-bold text-slate-500 bg-slate-100 dark:bg-slate-800 px-3 py-1 rounded-full border border-slate-200 dark:border-slate-700 flex items-center gap-1.5">
-                                    <User size={13} className="text-indigo-600 dark:text-indigo-400" />
+                                    <User size={13} className={isReturnInvoice ? 'text-amber-600' : 'text-indigo-600 dark:text-indigo-400'} />
                                     المستخدم: <strong className="text-slate-900 dark:text-white">{staffName}</strong>
                                 </span>
                             </div>
                         </div>
                     </div>
-                    <button
-                        onClick={onClose}
-                        className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition"
-                    >
-                        <X size={20} />
-                    </button>
+
+                    {/* Mode Badge */}
+                    <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end">
+                        {isReturnOnly ? (
+                            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-50 dark:bg-amber-950/60 border border-amber-200 dark:border-amber-900/50 text-amber-700 dark:text-amber-300 text-xs font-black">
+                                <RotateCcw size={14} className="text-amber-600" />
+                                <span>فاتورة مردودات مشتريات (مرتجع للمورد)</span>
+                            </div>
+                        ) : (
+                            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-900/50 text-indigo-700 dark:text-indigo-300 text-xs font-black">
+                                <ShoppingBag size={14} className="text-indigo-600 dark:text-indigo-400" />
+                                <span>فاتورة شراء وتزويد رصيد المخزون</span>
+                            </div>
+                        )}
+
+                        <button
+                            onClick={onClose}
+                            className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition shrink-0"
+                        >
+                            <X size={20} />
+                        </button>
+                    </div>
                 </div>
 
                 <div className="overflow-y-auto space-y-3 pr-1 pl-1 custom-scrollbar flex-1">
@@ -624,7 +696,7 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                     <div>
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2.5">
                             <label className="text-xs font-black text-slate-700 dark:text-slate-300">
-                                اختر فئة الكارت لتزويدها بالرصيد
+                                {isReturnInvoice ? 'اختر فئة الكارت المراد إرجاعها للمورد' : 'اختر فئة الكارت لتزويدها بالرصيد'}
                             </label>
                             
                             {/* Filter Tabs for Favorites vs All */}
@@ -718,7 +790,7 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                         <div className="grid grid-cols-12 gap-2.5 items-end">
                             <div className="col-span-4">
                                 <label className="block text-xs font-black text-slate-700 dark:text-slate-300 mb-1.5 text-center">
-                                    سعر الشراء الفردي (ريال يمني)
+                                    {isReturnInvoice ? 'سعر تكلفة الكارت المرتجع (ريال)' : 'سعر الشراء الفردي (ريال يمني)'}
                                 </label>
                                 <input
                                     type="number"
@@ -738,7 +810,7 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
 
                             <div className="col-span-4">
                                 <label className="block text-xs font-black text-slate-700 dark:text-slate-300 mb-1.5 text-center">
-                                    الكمية المشتراة (عدد الكروت)
+                                    {isReturnInvoice ? 'الكمية المرتجعة (عدد الكروت)' : 'الكمية المشتراة (عدد الكروت)'}
                                 </label>
                                 <input
                                     type="number"
@@ -760,10 +832,14 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                                 <button
                                     type="button"
                                     onClick={handleAddToCart}
-                                    className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white font-black text-xs rounded-xl shadow-md shadow-indigo-600/20 flex items-center justify-center gap-1.5 transition h-[38px] whitespace-nowrap"
+                                    className={`w-full py-2.5 active:scale-95 text-white font-black text-xs rounded-xl shadow-md flex items-center justify-center gap-1.5 transition h-[38px] whitespace-nowrap ${
+                                        isReturnInvoice
+                                            ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-600/20'
+                                            : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-600/20'
+                                    }`}
                                 >
-                                    <Plus size={16} />
-                                    <span>إضافة للفاتورة (+)</span>
+                                    {isReturnInvoice ? <RotateCcw size={16} /> : <Plus size={16} />}
+                                    <span>{isReturnInvoice ? 'إضافة للمردودات (+)' : 'إضافة للفاتورة (+)'}</span>
                                 </button>
                             </div>
                         </div>
@@ -773,7 +849,7 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                     <div>
                         <div className="flex items-center justify-between mb-2">
                             <h3 className="text-xs font-black text-slate-800 dark:text-slate-200">
-                                كشف الأصناف المضافة لفاتورة الشراء ({cartItems.length})
+                                {isReturnInvoice ? 'كشف الأصناف المضافة لفاتورة مردودات المشتريات' : 'كشف الأصناف المضافة لفاتورة الشراء'} ({cartItems.length})
                             </h3>
                         </div>
 
@@ -783,7 +859,7 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                                     <thead className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-black sticky top-0 border-b border-slate-200 dark:border-slate-700">
                                         <tr>
                                             <th className="p-3">اسم الفئة</th>
-                                            <th className="p-3">سعر الشراء الموحد</th>
+                                            <th className="p-3">{isReturnInvoice ? 'سعر الإرجاع الموحد' : 'سعر الشراء الموحد'}</th>
                                             <th className="p-3">الكمية</th>
                                             <th className="p-3">الإجمالي الفرعي</th>
                                             <th className="p-3 text-center">إجراء</th>
@@ -793,7 +869,9 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                                         {cartItems.length === 0 ? (
                                             <tr>
                                                 <td colSpan={5} className="p-6 text-center text-slate-400 font-bold">
-                                                    لم يتم إضافة أي كروت للفاتورة بعد. اختر فئة واضغط زر "إضافة".
+                                                    {isReturnInvoice 
+                                                        ? 'لم يتم إضافة أي كروت للإرجاع بعد. اختر فئة واضغط زر "إضافة".' 
+                                                        : 'لم يتم إضافة أي كروت للفاتورة بعد. اختر فئة واضغط زر "إضافة".'}
                                                 </td>
                                             </tr>
                                         ) : (
@@ -801,7 +879,9 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                                                 <tr key={`${item.id}-${idx}`} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
                                                     <td className="p-3 font-black text-slate-900 dark:text-white">{item.categoryName}</td>
                                                     <td className="p-3">{item.unitPrice} ريال يمني</td>
-                                                    <td className="p-3 font-black text-indigo-600 dark:text-indigo-400">{item.quantity} كارت</td>
+                                                    <td className={`p-3 font-black ${isReturnInvoice ? 'text-amber-600 dark:text-amber-400' : 'text-indigo-600 dark:text-indigo-400'}`}>
+                                                        {item.quantity} كارت
+                                                    </td>
                                                     <td className="p-3 font-black text-emerald-600 dark:text-emerald-400">{item.totalAmount} ريال يمني</td>
                                                     <td className="p-3 text-center">
                                                         <button
@@ -821,12 +901,14 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
 
                             {/* Table Summary Footer */}
                             {cartItems.length > 0 && (
-                                <div className="p-3 bg-indigo-50/60 dark:bg-indigo-950/40 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between text-xs font-black">
+                                <div className={`p-3 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between text-xs font-black ${
+                                    isReturnInvoice ? 'bg-amber-50/60 dark:bg-amber-950/40' : 'bg-indigo-50/60 dark:bg-indigo-950/40'
+                                }`}>
                                     <span className="text-slate-600 dark:text-slate-300">
-                                        إجمالي عدد الكروت المضافة: <strong className="text-indigo-600 dark:text-indigo-400">{totalCardsQty} كارت</strong>
+                                        إجمالي عدد الكروت: <strong className={isReturnInvoice ? 'text-amber-600 dark:text-amber-400' : 'text-indigo-600 dark:text-indigo-400'}>{totalCardsQty} كارت</strong>
                                     </span>
                                     <div className="flex items-center gap-2">
-                                        <span className="text-slate-600 dark:text-slate-400">الإجمالي العام للفاتورة:</span>
+                                        <span className="text-slate-600 dark:text-slate-400">الإجمالي الصافي:</span>
                                         <span className="text-sm font-black text-emerald-600 dark:text-emerald-400">{invoiceTotal} ريال يمني</span>
                                     </div>
                                 </div>
@@ -841,10 +923,18 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                         type="button"
                         onClick={() => setShowPaymentModal(true)}
                         disabled={cartItems.length === 0}
-                        className="flex-1 py-3.5 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-black text-sm rounded-2xl shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2 transition disabled:opacity-40 disabled:pointer-events-none"
+                        className={`flex-1 py-3.5 active:scale-95 text-white font-black text-sm rounded-2xl shadow-lg flex items-center justify-center gap-2 transition disabled:opacity-40 disabled:pointer-events-none ${
+                            isReturnInvoice
+                                ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-600/20'
+                                : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20'
+                        }`}
                     >
-                        <ShoppingBag size={20} />
-                        <span>إتمام وحفظ فاتورة الشراء - الإجمالي: {invoiceTotal} ريال يمني</span>
+                        {isReturnInvoice ? <RotateCcw size={20} /> : <ShoppingBag size={20} />}
+                        <span>
+                            {isReturnInvoice 
+                                ? `إتمام وحفظ فاتورة المردودات (مرتجع للمورد) - الإجمالي: ${invoiceTotal} ريال يمني`
+                                : `إتمام وحفظ فاتورة الشراء - الإجمالي: ${invoiceTotal} ريال يمني`}
+                        </span>
                     </button>
                     <button
                         type="button"
@@ -858,19 +948,25 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
 
             {/* CHECKOUT PAYMENT MODAL */}
             {showPaymentModal && (
-                <div className="fixed inset-0 z-50 bg-black/20  flex items-center justify-center p-4 animate-in fade-in duration-200 dir-rtl" dir="rtl">
+                <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-200 dir-rtl" dir="rtl">
                     <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-5 my-auto">
                         <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
                             <div className="flex items-center gap-3">
-                                <div className="p-3 bg-emerald-50 dark:bg-emerald-950 text-emerald-600 rounded-2xl">
-                                    <CreditCard size={22} />
+                                <div className={`p-3 rounded-2xl ${
+                                    isReturnInvoice
+                                        ? 'bg-amber-50 dark:bg-amber-950 text-amber-600'
+                                        : 'bg-emerald-50 dark:bg-emerald-950 text-emerald-600'
+                                }`}>
+                                    {isReturnInvoice ? <RotateCcw size={22} /> : <CreditCard size={22} />}
                                 </div>
                                 <div>
                                     <h3 className="font-black text-lg text-slate-900 dark:text-white">
-                                        تسديد وتأكيد فاتورة الشراء
+                                        {isReturnInvoice ? 'تأكيد وتسديد فاتورة مردودات المشتريات' : 'تسديد وتأكيد فاتورة الشراء'}
                                     </h3>
                                     <p className="text-xs font-bold text-slate-400">
-                                        اختر طريقة الدفع والمورد المستهدف لإتمام العملية
+                                        {isReturnInvoice 
+                                            ? 'اختر طريقة تسوية المبلغ والمورد لتسجيل مرتجع الكروت'
+                                            : 'اختر طريقة الدفع والمورد المستهدف لإتمام العملية'}
                                     </p>
                                 </div>
                             </div>
@@ -886,7 +982,7 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                             {/* 1. طريقة التسديد بالأعلى */}
                             <div>
                                 <label className="block text-xs font-black text-slate-700 dark:text-slate-300 mb-1.5">
-                                    طريقة تسديد الفاتورة
+                                    {isReturnInvoice ? 'طريقة تسوية قيمة المردودات' : 'طريقة تسديد الفاتورة'}
                                 </label>
                                 <div className="grid grid-cols-2 gap-2">
                                     <button
@@ -894,11 +990,11 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                                         onClick={() => setPaymentType('cash')}
                                         className={`py-2.5 px-3 rounded-xl text-xs font-black transition border ${
                                             paymentType === 'cash'
-                                                ? 'bg-emerald-600 text-white border-emerald-600 shadow-md'
+                                                ? (isReturnInvoice ? 'bg-amber-600 text-white border-amber-600 shadow-md' : 'bg-emerald-600 text-white border-emerald-600 shadow-md')
                                                 : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700'
                                         }`}
                                     >
-                                        💵 نقدي (خصم من الصندوق)
+                                        {isReturnInvoice ? '💵 استرداد نقدي (إيداع بالصندوق)' : '💵 نقدي (خصم من الصندوق)'}
                                     </button>
                                     <button
                                         type="button"
@@ -909,7 +1005,7 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                                                 : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700'
                                         }`}
                                     >
-                                        💳 آجل (دين مسجل للمورد)
+                                        {isReturnInvoice ? '💳 خصم من حساب المورد (آجل)' : '💳 آجل (دين مسجل للمورد)'}
                                     </button>
                                 </div>
                             </div>
@@ -918,7 +1014,7 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                             <div className="space-y-3 bg-slate-50 dark:bg-slate-800/40 p-3 rounded-xl border border-slate-200 dark:border-slate-800">
                                 <div>
                                     <label className="block text-xs font-black text-slate-700 dark:text-slate-300 mb-1.5">
-                                        اختيار المورد {paymentType === 'credit' && <span className="text-rose-500">* (مطلوب للشراء الآجل)</span>}
+                                        اختيار المورد {paymentType === 'credit' && <span className="text-rose-500">* (مطلوب للعمليات الآجلة)</span>}
                                     </label>
                                     <SearchableSelect
                                         value={selectedSupplierId || ''}
@@ -931,11 +1027,11 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                                 {/* حقل الملاحظات تحت اسم المورد */}
                                 <div>
                                     <label className="block text-xs font-black mb-1.5 text-slate-700 dark:text-slate-300">
-                                        ملاحظات عملية الشراء (تظهر على الفاتورة)
+                                        ملاحظات العملية (تظهر على الفاتورة)
                                     </label>
                                     <textarea
                                         rows={2}
-                                        placeholder="أدخل أي ملاحظات على عملية الشراء..."
+                                        placeholder={isReturnInvoice ? "سبب الإرجاع أو أي ملاحظات إضافية..." : "أدخل أي ملاحظات على عملية الشراء..."}
                                         value={notes}
                                         onChange={e => setNotes(e.target.value)}
                                         className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-2.5 text-xs font-bold text-slate-900 dark:text-white outline-none focus:border-emerald-600 transition resize-none"
@@ -943,18 +1039,20 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                                 </div>
                             </div>
 
-                            {/* Auto Update Cost Price Option */}
-                            <label className="flex items-center gap-2.5 p-3 bg-indigo-50/60 dark:bg-indigo-950/40 rounded-2xl border border-indigo-100 dark:border-indigo-900/50 cursor-pointer">
-                                <input
-                                    type="checkbox"
-                                    checked={autoUpdateCostPrice}
-                                    onChange={(e) => setAutoUpdateCostPrice(e.target.checked)}
-                                    className="w-4 h-4 text-indigo-600 rounded accent-indigo-600 cursor-pointer"
-                                />
-                                <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                                    تحديث سعر الشراء/التكلفة للفئة تلقائياً بناءً على السعر الجديد
-                                </span>
-                            </label>
+                            {/* Auto Update Cost Price Option (Only for standard purchases) */}
+                            {!isReturnInvoice && (
+                                <label className="flex items-center gap-2.5 p-3 bg-indigo-50/60 dark:bg-indigo-950/40 rounded-2xl border border-indigo-100 dark:border-indigo-900/50 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={autoUpdateCostPrice}
+                                        onChange={(e) => setAutoUpdateCostPrice(e.target.checked)}
+                                        className="w-4 h-4 text-indigo-600 rounded accent-indigo-600 cursor-pointer"
+                                    />
+                                    <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                                        تحديث سعر الشراء/التكلفة للفئة تلقائياً بناءً على السعر الجديد
+                                    </span>
+                                </label>
+                            )}
 
                             {/* Workflow Status Selector */}
                             <div>
@@ -1007,8 +1105,12 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                                             {totalCardsQty} كارت
                                         </span>
                                     </div>
-                                    <div className="bg-emerald-600 text-white p-2 rounded-xl flex flex-col justify-center shadow-sm">
-                                        <span className="text-[10px] font-bold text-emerald-100 mb-0.5">الإجمالي الصافي للمبلغ</span>
+                                    <div className={`text-white p-2 rounded-xl flex flex-col justify-center shadow-sm ${
+                                        isReturnInvoice ? 'bg-amber-600' : 'bg-emerald-600'
+                                    }`}>
+                                        <span className="text-[10px] font-bold text-white/90 mb-0.5">
+                                            {isReturnInvoice ? 'إجمالي مبلغ المردودات' : 'الإجمالي الصافي للمبلغ'}
+                                        </span>
                                         <span className="text-xs font-black truncate" dir="ltr">
                                             {invoiceTotal} ريال يمني
                                         </span>
@@ -1021,10 +1123,18 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                                     type="button"
                                     onClick={handleConfirmCheckout}
                                     disabled={saving}
-                                    className="flex-1 py-3.5 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-black text-xs rounded-2xl shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2 transition disabled:opacity-50"
+                                    className={`flex-1 py-3.5 active:scale-95 text-white font-black text-xs rounded-2xl shadow-lg flex items-center justify-center gap-2 transition disabled:opacity-50 ${
+                                        isReturnInvoice
+                                            ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-600/20'
+                                            : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20'
+                                    }`}
                                 >
                                     <CheckCircle2 size={18} />
-                                    <span>{saving ? 'جاري الحفظ والتسجيل...' : 'تأكيد وإتمام الشراء وطباعة الفاتورة'}</span>
+                                    <span>
+                                        {saving 
+                                            ? 'جاري الحفظ والتسجيل...' 
+                                            : (isReturnInvoice ? 'تأكيد وإتمام المردودات وطباعة الفاتورة' : 'تأكيد وإتمام الشراء وطباعة الفاتورة')}
+                                    </span>
                                 </button>
                                 <button
                                     type="button"

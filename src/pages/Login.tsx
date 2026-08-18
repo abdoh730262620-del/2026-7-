@@ -605,7 +605,7 @@ export default function Login() {
                         />
                         <Store className="w-10 h-10 text-indigo-600 dark:text-indigo-400" />
                     </div>
-                    <h1 className="text-2xl font-black text-indigo-600 dark:text-indigo-400 tracking-tight">نظام بريق للمبيعات السحابي</h1>
+                    <h1 className="text-2xl font-black text-indigo-600 dark:text-indigo-400 tracking-tight">نظام السعيده للمبيعات</h1>
                     <p className="text-gray-500 dark:text-gray-400 text-xs mt-1.5 leading-relaxed">
                         {isRegistering 
                             ? 'بوابة تأسيس وإعداد المتجر لأول مرة' 

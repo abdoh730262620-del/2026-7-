@@ -5,6 +5,8 @@ interface UIState {
     registerModal: (id: string) => void;
     unregisterModal: (id: string) => void;
     hasActiveModal: () => boolean;
+    showDashboardSearch: boolean;
+    setShowDashboardSearch: (val: boolean) => void;
 }
 
 export const useUIStore = create<UIState>((set, get) => ({
@@ -16,4 +18,6 @@ export const useUIStore = create<UIState>((set, get) => ({
         activeModals: state.activeModals.filter(m => m !== id) 
     })),
     hasActiveModal: () => get().activeModals.length > 0,
+    showDashboardSearch: false,
+    setShowDashboardSearch: (val) => set({ showDashboardSearch: val }),
 }));

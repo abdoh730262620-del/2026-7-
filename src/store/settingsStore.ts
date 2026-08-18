@@ -36,6 +36,7 @@ interface AppSettings {
   cashIncludeSales?: boolean;
   cashIncludePurchases?: boolean;
   cashIncludeExpenses?: boolean;
+  yemeniExchangeRate?: number;
 }
 
 interface SettingsState {
@@ -82,7 +83,8 @@ const defaultSettings: AppSettings = {
   headerTextAlignment: 'center',
   cashIncludeSales: true,
   cashIncludePurchases: true,
-  cashIncludeExpenses: true
+  cashIncludeExpenses: true,
+  yemeniExchangeRate: 140
 };
 
 export const useSettingsStore = create<SettingsState>((set, get) => {
@@ -118,7 +120,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       const docRef = doc(db, 'settings', `app_config_${tenantId}`);
       const unsub = onSnapshot(docRef, (docSnap) => {
         if (docSnap.exists()) {
-          const loadedSettings = { ...defaultSettings, ...docSnap.data() } as AppSettings;
+          const rawData = docSnap.data() as AppSettings;
+          const isConfigured = Boolean(rawData.isStoreConfigured || (rawData.businessName && rawData.businessName !== 'محل بريق للمبيعات'));
+          const loadedSettings = { ...defaultSettings, ...rawData, isStoreConfigured: isConfigured } as AppSettings;
           try {
              localStorage.setItem('app_config_settings', JSON.stringify(loadedSettings));
           } catch (e) {}

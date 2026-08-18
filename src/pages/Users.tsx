@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { collection, query, onSnapshot, doc, updateDoc, setDoc, where, getDocs } from 'firebase/firestore';
+import { collection, query, onSnapshot, doc, updateDoc, setDoc, where, getDocs, deleteDoc } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { useAuthStore, AppRole, AppPermissions, ModulePermissions } from '../store/authStore';
-import { UserCheck, UserX, Shield, Plus, X, Settings2, Save, Users as UsersIcon, ChevronRight } from 'lucide-react';
+import { UserCheck, UserX, Shield, Plus, X, Settings2, Save, Users as UsersIcon, ChevronRight, Edit3, Banknote, Trash2 } from 'lucide-react';
 import { logUserAction } from '../lib/logger';
 
 interface UserData {
@@ -14,6 +14,8 @@ interface UserData {
     isActive: boolean;
     permissions?: AppPermissions;
     createdAt: number;
+    salary?: number;
+    password?: string;
 }
 
 const defaultModulePerms: ModulePermissions = { view: false, add: false, edit: false, delete: false, return: false };
@@ -95,7 +97,7 @@ export const modulesMap: Record<keyof Omit<AppPermissions, 'edit' | 'add' | 'del
     cards_exchanges: 'استبدال الكروت'
 };
 
-const PermissionsEditor = ({ permissions, onChange }: { permissions: AppPermissions, onChange: (newPerms: AppPermissions) => void }) => {
+const PermissionsEditor = ({ permissions, onChange, maxHeightClass = "max-h-64" }: { permissions: AppPermissions, onChange: (newPerms: AppPermissions) => void, maxHeightClass?: string }) => {
     const handleModuleChange = (mod: keyof typeof modulesMap, action: keyof ModulePermissions, value: boolean) => {
         const currentModPerms = permissions[mod];
         const baseModPerms = typeof currentModPerms === 'object' && currentModPerms !== null 
@@ -112,7 +114,7 @@ const PermissionsEditor = ({ permissions, onChange }: { permissions: AppPermissi
 
     return (
         <div className="overflow-hidden border border-gray-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-950 w-full shadow-inner">
-            <div className="overflow-x-auto w-full max-h-64 overflow-y-auto">
+            <div className={`overflow-x-auto w-full overflow-y-auto ${maxHeightClass}`}>
                 <table className="w-full text-right text-xs whitespace-nowrap">
                     <thead className="bg-gray-50 dark:bg-slate-900 text-black dark:text-gray-200 sticky top-0 border-b border-gray-100 dark:border-slate-800 z-10">
                         <tr>
@@ -171,6 +173,7 @@ export default function Users() {
     const [isAddOpen, setIsAddOpen] = useState(false);
     const [newUsername, setNewUsername] = useState('');
     const [newPassword, setNewPassword] = useState('');
+    const [newSalary, setNewSalary] = useState<string>('');
     const [newRole, setNewRole] = useState<AppRole>('cashier');
     const [newPermissions, setNewPermissions] = useState<AppPermissions>(getInitPerms());
     const [isCreating, setIsCreating] = useState(false);
@@ -178,6 +181,12 @@ export default function Users() {
     // Edit permissions state
     const [editingUserId, setEditingUserId] = useState<string | null>(null);
     const [editPermissions, setEditPermissions] = useState<AppPermissions>(getInitPerms());
+
+    // Edit User general state
+    const [editingUser, setEditingUser] = useState<UserData | null>(null);
+    const [editNameInput, setEditNameInput] = useState<string>('');
+    const [editPasswordInput, setEditPasswordInput] = useState<string>('');
+    const [editSalaryInput, setEditSalaryInput] = useState<string>('');
 
     useEffect(() => {
         if (appUser?.role !== 'admin') return;
@@ -243,6 +252,58 @@ export default function Users() {
         }
     };
 
+    const openEditUser = (user: UserData) => {
+        setEditingUser(user);
+        setEditNameInput(user.name || '');
+        setEditPasswordInput(user.password || '');
+        setEditSalaryInput(user.salary ? String(user.salary) : '');
+    };
+
+    const handleSaveUser = async () => {
+        if (!editingUser) return;
+        if (!editNameInput.trim()) {
+            return alert('يرجى إدخال اسم المستخدم');
+        }
+        if (editPasswordInput && editPasswordInput.length < 6) {
+            return alert('كلمة المرور يجب أن لا تقل عن 6 أحرف');
+        }
+        const salaryVal = parseFloat(editSalaryInput) || 0;
+        try {
+            const updateData: any = {
+                name: editNameInput.trim(),
+                salary: salaryVal,
+                updatedAt: Date.now()
+            };
+            if (editPasswordInput) {
+                updateData.password = editPasswordInput;
+            }
+            await updateDoc(doc(db, 'users', editingUser.id), updateData);
+            logUserAction(`تعديل بيانات مستخدم`, `تحديث الاسم إلى: ${editNameInput.trim()}، والراتب إلى: ${salaryVal}`);
+            alert('تم تحديث بيانات المستخدم بنجاح');
+            setEditingUser(null);
+        } catch (error: any) {
+            handleFirestoreError(error, OperationType.UPDATE, 'users');
+            alert('فشل في تحديث بيانات المستخدم');
+        }
+    };
+
+    const handleDeleteUser = async (user: UserData) => {
+        if (user.id === appUser?.uid || user.email === appUser?.email) {
+            return alert('لا يمكنك حذف حسابك الحالي الناشط');
+        }
+        if (!window.confirm(`هل أنت متأكد من حذف المستخدم "${user.name}" نهائياً من النظام؟`)) {
+            return;
+        }
+        try {
+            await deleteDoc(doc(db, 'users', user.id));
+            logUserAction(`حذف مستخدم`, `تم حذف المستخدم ${user.name} (${user.email}) نهائياً`);
+            alert('تم حذف المستخدم بنجاح');
+        } catch (error: any) {
+            handleFirestoreError(error, OperationType.DELETE, 'users');
+            alert('فشل في حذف المستخدم');
+        }
+    };
+
     const handleAddUser = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!newUsername || !newPassword || newPassword.length < 6) {
@@ -264,12 +325,14 @@ export default function Users() {
 
             const newUserId = Math.random().toString(36).substring(2, 15);
             const email = newUsername.includes('@') ? newUsername : `${newUsername}@local.app`;
+            const salaryVal = parseFloat(newSalary) || 0;
             
             await setDoc(doc(db, 'users', newUserId), {
                 email: email,
                 name: newUsername,
                 password: newPassword, // Note: storing plain text as requested for "internal simplicity"
                 role: newRole,
+                salary: salaryVal,
                 isActive: true,
                 permissions: newRole === 'admin' ? getAdminPerms() : newPermissions,
                 tenantId: currentTenantId,
@@ -282,6 +345,7 @@ export default function Users() {
             setIsAddOpen(false);
             setNewUsername('');
             setNewPassword('');
+            setNewSalary('');
             setNewPermissions(getInitPerms());
         } catch (error: any) {
             console.error('Error creating user', error);
@@ -299,7 +363,8 @@ export default function Users() {
         'admin': 'مدير (Admin)',
         'cashier': 'كاشير (Cashier)',
         'inventory': 'أمين مخزن (Storekeeper)',
-        'salesman': 'مندوب مبيعات (Salesman)'
+        'salesman': 'مندوب مبيعات (Salesman)',
+        'network_worker': 'عامل شبكة (Network Worker)'
     };
 
     const permissionLabels: Partial<Record<keyof AppPermissions, string>> = {
@@ -338,144 +403,199 @@ export default function Users() {
                 </button>
             </div>
 
-            <div className="grid grid-cols-1 gap-3">
+            <div className="grid grid-cols-2 gap-3 md:gap-5">
                 {users.map(user => (
-                    <div key={user.id} className="bg-white dark:bg-slate-950 rounded-xl p-3.5 shadow-sm border border-gray-100 dark:border-slate-800 flex flex-col md:flex-row gap-3 md:items-center transition hover:border-indigo-500 dark:hover:border-indigo-500 hover:shadow-md">
-                        {/* Avatar & Info */}
-                        <div className="flex items-center gap-3 md:w-1/4">
-                            <div className="w-10 h-10 rounded-xl bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 flex items-center justify-center font-black text-base shrink-0 border border-indigo-100/50 dark:border-indigo-900/20">
-                                {user.name?.charAt(0).toUpperCase() || 'U'}
-                            </div>
-                            <div className="flex flex-col overflow-hidden leading-tight">
-                                <h3 className="font-bold text-sm md:text-base text-black dark:text-white truncate">{user.name || 'مستخدم'}</h3>
-                                <p className="text-gray-500 dark:text-gray-400 text-xs font-mono truncate mt-0.5">{user.email}</p>
-                            </div>
-                        </div>
-
-                        {/* Role selection */}
-                        <div className="md:w-36 flex flex-col justify-center shrink-0">
-                            <select 
-                                value={user.role} 
-                                onChange={(e) => handleRoleChange(user, e.target.value as AppRole)}
-                                className="bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-800 text-black dark:text-gray-100 font-semibold py-1.5 px-2 rounded-lg outline-none focus:border-indigo-500 transition w-full text-xs"
-                            >
-                                <option value="admin">{roleNames['admin']}</option>
-                                <option value="cashier">{roleNames['cashier']}</option>
-                                <option value="inventory">{roleNames['inventory']}</option>
-                            </select>
-                        </div>
-
-                        {/* Permissions Action */}
-                        <div className="flex-1 shrink-0">
-                            {user.role === 'admin' ? (
-                                <div className="text-gray-500 dark:text-gray-400 font-bold text-xs bg-gray-50 dark:bg-slate-900 rounded-lg px-2.5 py-1.5 w-max border border-gray-100 dark:border-slate-800">
-                                    مسؤول (صلاحيات كاملة)
+                    <div key={user.id} className="bg-white dark:bg-slate-950 rounded-2xl p-3 sm:p-4 shadow-sm border border-gray-100 dark:border-slate-800/80 flex flex-col justify-between gap-3 transition hover:border-indigo-500 dark:hover:border-indigo-500 hover:shadow-md h-full min-h-[190px]">
+                        {/* Top: Avatar, Name & Role Selection */}
+                        <div className="flex items-start justify-between gap-2">
+                            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+                                <div className="w-9 h-9 sm:w-11 sm:h-11 rounded-xl bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 flex items-center justify-center font-black text-base sm:text-lg shrink-0 border border-indigo-100/50 dark:border-indigo-900/20">
+                                    {user.name?.charAt(0).toUpperCase() || 'U'}
                                 </div>
-                            ) : (
-                                <button 
-                                    onClick={() => openEditPermissions(user)}
-                                    className="flex items-center gap-1.5 bg-indigo-50 hover:bg-indigo-100 dark:bg-slate-900 dark:hover:bg-slate-850 text-indigo-700 dark:text-indigo-400 px-3 py-1.5 rounded-lg font-bold transition text-xs cursor-pointer border border-indigo-100/40 dark:border-slate-800"
-                                >
-                                    <Settings2 size={13} />
-                                    تعديل الصلاحيات 
-                                </button>
-                            )}
+                                <div className="flex flex-col overflow-hidden leading-tight min-w-0">
+                                    <h3 className="font-bold text-xs sm:text-sm text-black dark:text-white truncate">{user.name || 'مستخدم'}</h3>
+                                    <p className="text-gray-400 dark:text-gray-500 text-[10px] font-mono truncate mt-0.5">{user.email}</p>
+                                </div>
+                            </div>
+
+                            {/* Status Pill */}
+                            <div className={`px-1.5 py-0.5 rounded-md text-[8px] sm:text-[9px] font-black border shrink-0 ${user.isActive ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400 border-emerald-100 dark:border-emerald-900/30' : 'bg-rose-50 dark:bg-rose-950/30 text-rose-700 dark:text-rose-400 border-rose-100 dark:border-rose-900/30'}`}>
+                                {user.isActive ? 'نشط' : 'موقوف'}
+                            </div>
                         </div>
 
-                        {/* Status Actions */}
-                        <div className="flex items-center justify-between md:justify-end gap-3 md:w-40 shrink-0">
-                             <div className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border ${user.isActive ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400 border-emerald-100 dark:border-emerald-900/30' : 'bg-rose-50 dark:bg-rose-950/30 text-rose-700 dark:text-rose-400 border-rose-100 dark:border-rose-900/30'}`}>
-                                {user.isActive ? 'حساب نشط' : 'حساب موقوف'}
+                        {/* Middle: Role selector and salary info */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                            <div>
+                                <label className="block text-[9px] font-bold text-slate-400 dark:text-slate-500 mb-1">الدور الوظيفي:</label>
+                                <select 
+                                    value={user.role} 
+                                    onChange={(e) => handleRoleChange(user, e.target.value as AppRole)}
+                                    className="bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-800 text-black dark:text-gray-100 font-bold py-1 px-1.5 rounded-lg outline-none focus:border-indigo-500 transition w-full text-[10px] sm:text-xs"
+                                >
+                                    <option value="admin">{roleNames['admin']}</option>
+                                    <option value="cashier">{roleNames['cashier']}</option>
+                                    <option value="inventory">{roleNames['inventory']}</option>
+                                    <option value="salesman">{roleNames['salesman']}</option>
+                                    <option value="network_worker">{roleNames['network_worker']}</option>
+                                </select>
                             </div>
-                            <button 
-                                onClick={() => handleToggleActive(user)}
-                                className={`p-1.5 rounded-lg transition font-bold flex items-center justify-center cursor-pointer border
-                                    ${user.isActive 
-                                        ? 'text-rose-600 bg-rose-50/40 hover:bg-rose-100 dark:bg-slate-900 dark:text-rose-400 dark:border-slate-800 dark:hover:bg-slate-800' 
-                                        : 'text-emerald-600 bg-emerald-50/40 hover:bg-emerald-100 dark:bg-slate-900 dark:text-emerald-400 dark:border-slate-800 dark:hover:bg-slate-800'}
-                                `}
-                                title={user.isActive ? 'تعطيل الحساب' : 'تفعيل الحساب'}
-                            >
-                                {user.isActive ? <UserX size={15}/> : <UserCheck size={15}/>}
-                            </button>
+
+                            <div>
+                                <label className="block text-[9px] font-bold text-slate-400 dark:text-slate-500 mb-1">الراتب الشهري:</label>
+                                <div className="flex items-center justify-between bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg px-2 py-1 text-[10px] sm:text-xs h-[28px]">
+                                    <span className="font-extrabold font-mono text-emerald-600 dark:text-emerald-400 truncate">
+                                        {user.salary !== undefined && user.salary !== null && user.salary > 0 ? `${user.salary.toLocaleString()} ر.ي` : 'غير محدد'}
+                                    </span>
+                                    <button
+                                        onClick={() => openEditUser(user)}
+                                        className="p-0.5 hover:bg-slate-200 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-indigo-600 transition cursor-pointer"
+                                        title="تعديل الراتب والاسم وكلمة المرور"
+                                    >
+                                        <Edit3 size={11} />
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Bottom: Permissions Action Button & Administration Actions */}
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2 border-t border-slate-100 dark:border-slate-800/80 mt-auto">
+                            <div>
+                                {user.role === 'admin' ? (
+                                    <div className="text-gray-500 dark:text-gray-400 font-black text-[9px] bg-gray-50 dark:bg-slate-900 rounded-lg px-2 py-1 border border-gray-100 dark:border-slate-800/60 inline-block">
+                                        مسؤول (صلاحيات كاملة)
+                                    </div>
+                                ) : (
+                                    <button 
+                                        onClick={() => openEditPermissions(user)}
+                                        className="flex items-center gap-1 bg-indigo-50 hover:bg-indigo-100 dark:bg-slate-900 dark:hover:bg-slate-850 text-indigo-700 dark:text-indigo-400 px-2 py-1 rounded-lg font-black transition text-[9px] cursor-pointer border border-indigo-100/40 dark:border-slate-800"
+                                    >
+                                        <Settings2 size={11} />
+                                        تعديل الصلاحيات 
+                                    </button>
+                                )}
+                            </div>
+
+                            {/* Action Buttons Row */}
+                            <div className="flex items-center gap-1 shrink-0">
+                                <button 
+                                    onClick={() => handleToggleActive(user)}
+                                    className={`p-1.5 rounded-lg transition font-bold flex items-center justify-center cursor-pointer border
+                                        ${user.isActive 
+                                            ? 'text-rose-600 bg-rose-50/40 hover:bg-rose-100 dark:bg-slate-900 dark:text-rose-400 dark:border-slate-800 dark:hover:bg-slate-800' 
+                                            : 'text-emerald-600 bg-emerald-50/40 hover:bg-emerald-100 dark:bg-slate-900 dark:text-emerald-400 dark:border-slate-800 dark:hover:bg-slate-800'}
+                                    `}
+                                    title={user.isActive ? 'تعطيل الحساب' : 'تفعيل الحساب'}
+                                >
+                                    {user.isActive ? <UserX size={13}/> : <UserCheck size={13}/>}
+                                </button>
+                                <button 
+                                    onClick={() => openEditUser(user)}
+                                    className="p-1.5 rounded-lg border border-gray-200 dark:border-slate-800 text-slate-600 hover:text-indigo-600 dark:text-slate-400 dark:hover:text-indigo-400 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 transition cursor-pointer"
+                                    title="تعديل الاسم أو كلمة السر أو الراتب"
+                                >
+                                    <Edit3 size={13} />
+                                </button>
+                                <button 
+                                    onClick={() => handleDeleteUser(user)}
+                                    className="p-1.5 rounded-lg border border-rose-100 dark:border-rose-900/30 text-rose-600 hover:text-rose-700 bg-rose-50/30 hover:bg-rose-50 dark:bg-slate-900 dark:hover:bg-rose-950/20 transition cursor-pointer"
+                                    title="حذف المستخدم نهائياً"
+                                >
+                                    <Trash2 size={13} />
+                                </button>
+                            </div>
                         </div>
                     </div>
                 ))}
             </div>
-            
-            {users.length === 0 && (
-                <div className="text-center py-20 text-black dark:text-gray-300 font-semibold text-lg bg-white dark:bg-slate-950 rounded-2xl border-2 border-dashed border-gray-200 dark:border-slate-800">
-                    لا يوجد مستخدمين لعرضهم
-                </div>
-            )}
 
             {isAddOpen && (
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 transition-all">
-                    <div className="bg-white dark:bg-slate-900 rounded-2xl md:rounded-3xl w-full max-w-md shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200 flex flex-col max-h-[90vh] border border-gray-150 dark:border-slate-800">
-                        <div className="p-4 md:p-5 border-b border-gray-100 dark:border-slate-800 flex justify-between items-center text-black dark:text-white shrink-0">
-                            <h3 className="text-base md:text-lg font-bold">إضافة مستخدم جديد</h3>
-                            <button onClick={() => setIsAddOpen(false)} className="bg-gray-50 dark:bg-slate-800 hover:bg-gray-100 p-2 rounded-full transition text-black dark:text-white cursor-pointer">
-                                <X size={16} />
+                    <div className="bg-white dark:bg-slate-900 rounded-2xl md:rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200 flex flex-col max-h-[95vh] border border-gray-150 dark:border-slate-800">
+                        <div className="p-3.5 sm:p-4 border-b border-gray-100 dark:border-slate-800 flex justify-between items-center text-black dark:text-white shrink-0">
+                            <h3 className="text-sm sm:text-base font-bold">إضافة مستخدم جديد</h3>
+                            <button onClick={() => setIsAddOpen(false)} className="bg-gray-50 dark:bg-slate-800 hover:bg-gray-100 p-1.5 rounded-full transition text-black dark:text-white cursor-pointer">
+                                <X size={15} />
                             </button>
                         </div>
                         <form onSubmit={handleAddUser} className="flex flex-col flex-1 overflow-hidden">
-                            <div className="p-4 md:p-5 flex flex-col gap-3.5 overflow-y-auto">
-                                <div>
-                                    <label className="block text-xs font-bold text-black dark:text-gray-200 mb-2">اسم المستخدم (أو البريد)</label>
-                                    <input 
-                                        type="text" 
-                                        className="w-full bg-white dark:bg-slate-950 text-black dark:text-white border border-gray-200 dark:border-slate-800 rounded-xl p-3 outline-none focus:border-indigo-500 transition text-sm"
-                                        value={newUsername}
-                                        onChange={e => setNewUsername(e.target.value)}
-                                        placeholder="مثال: abdullah"
-                                        dir="ltr"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-bold text-black dark:text-gray-200 mb-2">كلمة المرور (6 أحرف على الأقل)</label>
-                                    <input 
-                                        type="password" 
-                                        className="w-full bg-white dark:bg-slate-950 text-black dark:text-white border border-gray-200 dark:border-slate-800 rounded-xl p-3 outline-none focus:border-indigo-500 transition text-sm"
-                                        value={newPassword}
-                                        onChange={e => setNewPassword(e.target.value)}
-                                        dir="ltr"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-bold text-black dark:text-gray-200 mb-2">الدور في النظام</label>
-                                    <select 
-                                        className="w-full bg-white dark:bg-slate-950 text-black dark:text-white border border-gray-200 dark:border-slate-800 rounded-xl p-3 outline-none focus:border-indigo-500 transition font-bold text-xs"
-                                        value={newRole}
-                                        onChange={e => setNewRole(e.target.value as AppRole)}
-                                    >
-                                        <option value="admin">{roleNames['admin']}</option>
-                                        <option value="cashier">{roleNames['cashier']}</option>
-                                        <option value="inventory">{roleNames['inventory']}</option>
-                                    </select>
+                            <div className="p-3 sm:p-4 flex flex-col gap-3 overflow-y-auto">
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-50/50 dark:bg-slate-950/20 p-2.5 sm:p-3 rounded-xl border border-gray-100 dark:border-slate-800/60">
+                                    <div>
+                                        <label className="block text-[10px] font-black text-black dark:text-gray-200 mb-1">اسم المستخدم (أو البريد)</label>
+                                        <input 
+                                            type="text" 
+                                            className="w-full bg-white dark:bg-slate-950 text-black dark:text-white border border-gray-200 dark:border-slate-800 rounded-lg p-2 outline-none focus:border-indigo-500 transition text-xs"
+                                            value={newUsername}
+                                            onChange={e => setNewUsername(e.target.value)}
+                                            placeholder="مثال: abdullah"
+                                            dir="ltr"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-[10px] font-black text-black dark:text-gray-200 mb-1">كلمة المرور (6 أحرف على الأقل)</label>
+                                        <input 
+                                            type="password" 
+                                            className="w-full bg-white dark:bg-slate-950 text-black dark:text-white border border-gray-200 dark:border-slate-800 rounded-lg p-2 outline-none focus:border-indigo-500 transition text-xs"
+                                            value={newPassword}
+                                            onChange={e => setNewPassword(e.target.value)}
+                                            dir="ltr"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-[10px] font-black text-black dark:text-gray-200 mb-1 flex items-center gap-1">
+                                            <Banknote size={11} className="text-emerald-500" />
+                                            الراتب الشهري (ر.ي)
+                                        </label>
+                                        <input 
+                                            type="number" 
+                                            min="0"
+                                            step="any"
+                                            className="w-full bg-white dark:bg-slate-950 text-black dark:text-white border border-gray-200 dark:border-slate-800 rounded-lg p-2 outline-none focus:border-indigo-500 transition text-xs font-mono"
+                                            value={newSalary}
+                                            onChange={e => setNewSalary(e.target.value)}
+                                            placeholder="مثال: 3000"
+                                            dir="ltr"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-[10px] font-black text-black dark:text-gray-200 mb-1">الدور في النظام</label>
+                                        <select 
+                                            className="w-full bg-white dark:bg-slate-950 text-black dark:text-white border border-gray-200 dark:border-slate-800 rounded-lg p-2 outline-none focus:border-indigo-500 transition font-bold text-xs"
+                                            value={newRole}
+                                            onChange={e => setNewRole(e.target.value as AppRole)}
+                                        >
+                                            <option value="admin">{roleNames['admin']}</option>
+                                            <option value="cashier">{roleNames['cashier']}</option>
+                                            <option value="inventory">{roleNames['inventory']}</option>
+                                            <option value="salesman">{roleNames['salesman']}</option>
+                                            <option value="network_worker">{roleNames['network_worker']}</option>
+                                        </select>
+                                    </div>
                                 </div>
                                 
                                 {newRole !== 'admin' && (
-                                    <div>
-                                        <label className="block text-xs font-bold text-black dark:text-gray-200 mb-2">الصلاحيات المخصصة</label>
+                                    <div className="border-t border-gray-100 dark:border-slate-850 pt-3">
+                                        <label className="block text-[11px] font-black text-black dark:text-gray-200 mb-1.5 bg-indigo-50/50 dark:bg-indigo-950/20 px-2 py-1 rounded-md w-max border border-indigo-100/20">الصلاحيات المخصصة لهذا المستخدم</label>
                                         <PermissionsEditor permissions={newPermissions} onChange={setNewPermissions} />
                                     </div>
                                 )}
                             </div>
-
-                            <div className="p-4 md:p-5 border-t border-gray-100 dark:border-slate-800 bg-white dark:bg-slate-900 shrink-0 flex gap-2">
+ 
+                            <div className="p-3 sm:p-4 border-t border-gray-100 dark:border-slate-800 bg-white dark:bg-slate-900 shrink-0 flex gap-2">
                                 <button 
                                     type="button"
                                     onClick={() => setIsAddOpen(false)}
-                                    className="flex-1 bg-gray-50 hover:bg-gray-100 dark:bg-slate-800 dark:hover:bg-slate-750 text-black dark:text-white font-bold py-3 px-4 rounded-xl transition shadow-sm flex justify-center items-center gap-1.5 text-xs cursor-pointer border border-gray-150 dark:border-slate-700"
+                                    className="flex-1 bg-gray-50 hover:bg-gray-100 dark:bg-slate-800 dark:hover:bg-slate-750 text-black dark:text-white font-bold py-2 px-3 rounded-lg transition shadow-sm flex justify-center items-center gap-1.5 text-xs cursor-pointer border border-gray-150 dark:border-slate-700"
                                 >
                                     خروج
                                 </button>
                                 <button 
                                     type="submit" 
                                     disabled={isCreating}
-                                    className="flex-[2] bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-xl transition shadow-sm flex justify-center items-center gap-1.5 text-xs cursor-pointer"
+                                    className="flex-[2] bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 disabled:cursor-not-allowed text-white font-bold py-2 px-3 rounded-lg transition shadow-sm flex justify-center items-center gap-1.5 text-xs cursor-pointer"
                                 >
-                                    {isCreating ? 'جاري إنشاء المستخدم...' : <><Plus size={16}/> احفظ واعتمد المستخدم</>}
+                                    {isCreating ? 'جاري إنشاء المستخدم...' : <><Plus size={14}/> احفظ واعتمد المستخدم</>}
                                 </button>
                             </div>
                         </form>
@@ -485,7 +605,7 @@ export default function Users() {
 
             {editingUserId && (
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 transition-all">
-                    <div className="bg-white dark:bg-slate-900 rounded-2xl md:rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200 flex flex-col max-h-[90vh] border border-gray-150 dark:border-slate-800">
+                    <div className="bg-white dark:bg-slate-900 rounded-2xl md:rounded-3xl w-full max-w-4xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200 flex flex-col max-h-[95vh] border border-gray-150 dark:border-slate-800">
                         <div className="p-4 md:p-5 border-b border-gray-100 dark:border-slate-800 flex justify-between items-center text-black dark:text-white shrink-0">
                             <h3 className="text-base md:text-lg font-bold flex items-center gap-2">
                                 <Settings2 size={20} className="text-indigo-600 dark:text-indigo-400" />
@@ -496,7 +616,7 @@ export default function Users() {
                             </button>
                         </div>
                         <div className="p-4 md:p-5 overflow-y-auto flex-1">
-                            <PermissionsEditor permissions={editPermissions} onChange={setEditPermissions} />
+                            <PermissionsEditor permissions={editPermissions} onChange={setEditPermissions} maxHeightClass="max-h-[60vh]" />
                         </div>
                         <div className="p-4 md:p-5 border-t border-gray-100 dark:border-slate-800 shrink-0 flex justify-end gap-3 bg-white dark:bg-slate-900">
                             <button 
@@ -508,6 +628,76 @@ export default function Users() {
                             <button 
                                 onClick={handleSavePermissions}
                                 className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2.5 rounded-xl font-bold flex items-center gap-1.5 transition text-xs cursor-pointer"
+                            >
+                                <Save size={14} />
+                                حفظ التعديلات
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {editingUser && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 transition-all">
+                    <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-sm shadow-2xl p-5 border border-gray-200 dark:border-slate-800 space-y-4 animate-in fade-in zoom-in duration-200">
+                        <div className="flex justify-between items-center border-b border-gray-100 dark:border-slate-800 pb-3">
+                            <h3 className="font-bold text-sm md:text-base text-black dark:text-white flex items-center gap-1.5">
+                                <Settings2 size={18} className="text-indigo-500" />
+                                تعديل بيانات المستخدم
+                            </h3>
+                            <button onClick={() => setEditingUser(null)} className="p-1 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400">
+                                <X size={16} />
+                            </button>
+                        </div>
+                        <div className="space-y-3">
+                            <div>
+                                <label className="block text-xs font-bold text-black dark:text-gray-200 mb-1.5">الاسم / اسم المستخدم</label>
+                                <input 
+                                    type="text"
+                                    value={editNameInput}
+                                    onChange={(e) => setEditNameInput(e.target.value)}
+                                    placeholder="أدخل اسم المستخدم"
+                                    className="w-full bg-white dark:bg-slate-950 text-black dark:text-white border border-gray-200 dark:border-slate-800 rounded-xl p-2.5 outline-none focus:border-indigo-500 text-sm"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-black dark:text-gray-200 mb-1.5">كلمة المرور الجديدة (اختياري)</label>
+                                <input 
+                                    type="password"
+                                    value={editPasswordInput}
+                                    onChange={(e) => setEditPasswordInput(e.target.value)}
+                                    placeholder="اتركها فارغة لعدم التغيير (6 أحرف كحد أدنى)"
+                                    className="w-full bg-white dark:bg-slate-950 text-black dark:text-white border border-gray-200 dark:border-slate-800 rounded-xl p-2.5 outline-none focus:border-indigo-500 text-sm"
+                                    dir="ltr"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-black dark:text-gray-200 mb-1.5 flex items-center gap-1.5">
+                                    <Banknote size={14} className="text-emerald-500" />
+                                    الراتب الشهري (ر.ي)
+                                </label>
+                                <input 
+                                    type="number"
+                                    min="0"
+                                    step="any"
+                                    value={editSalaryInput}
+                                    onChange={(e) => setEditSalaryInput(e.target.value)}
+                                    placeholder="أدخل قيمة الراتب الشهري"
+                                    className="w-full bg-white dark:bg-slate-950 text-black dark:text-white border border-gray-200 dark:border-slate-800 rounded-xl p-2.5 outline-none focus:border-indigo-500 text-sm font-mono"
+                                    dir="ltr"
+                                />
+                            </div>
+                        </div>
+                        <div className="flex gap-2 pt-2 border-t border-gray-100 dark:border-slate-800">
+                            <button
+                                onClick={() => setEditingUser(null)}
+                                className="flex-1 py-2.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-300 font-bold rounded-xl text-xs transition cursor-pointer"
+                            >
+                                إلغاء
+                            </button>
+                            <button
+                                onClick={handleSaveUser}
+                                className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs transition flex items-center justify-center gap-1 cursor-pointer"
                             >
                                 <Save size={14} />
                                 حفظ التعديلات

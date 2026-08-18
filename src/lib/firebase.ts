@@ -44,8 +44,16 @@ function setupNetworkSync(dbRef: any) {
 }
 
 // We use persistence by default to satisfy the "local database" requirement.
-// If persistence fails or causes internal state assertions in iframe environments, we fall back to memoryLocalCache.
-const isIframe = typeof window !== 'undefined' && window.self !== window.top;
+// We prefer persistentLocalCache without the multiple tab manager because multiple tab coordination (Web Locks/IndexedDB locks)
+// is highly unstable and throws internal assertion failures (e.g., ID: ca9 / ID: b815) in sandboxed or partitioned browser environments.
+let isIframe = false;
+if (typeof window !== 'undefined') {
+    try {
+        isIframe = window.self !== window.top;
+    } catch (e) {
+        isIframe = true;
+    }
+}
 const useMemoryCache = isIframe || (typeof window !== 'undefined' && sessionStorage.getItem('firestore_use_memory_cache') === 'true');
 
 if (useMemoryCache) {
@@ -66,12 +74,11 @@ if (useMemoryCache) {
     try {
         dbInstance = initializeFirestore(app, {
             localCache: persistentLocalCache({
-                tabManager: persistentMultipleTabManager(),
                 cacheSizeBytes: CACHE_SIZE_UNLIMITED
             }),
             experimentalForceLongPolling: false
         }, firebaseConfig.firestoreDatabaseId);
-        console.log("Firestore initialized with persistent multiple tab local cache.");
+        console.log("Firestore initialized with stable persistent local cache.");
         setupNetworkSync(dbInstance);
     } catch (e) {
         console.warn("Failed to initialize Firestore with persistent cache, falling back to memoryLocalCache:", e);

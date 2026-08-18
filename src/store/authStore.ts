@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { User as FirebaseUser, onAuthStateChanged } from 'firebase/auth';
 import { auth } from '../lib/firebase';
 
-export type AppRole = 'admin' | 'cashier' | 'inventory' | 'salesman';
+export type AppRole = 'admin' | 'cashier' | 'inventory' | 'salesman' | 'network_worker';
 
 export interface ModulePermissions {
     view: boolean;
@@ -52,6 +52,7 @@ export interface AppUser {
     permissions: AppPermissions;
     password?: string;
     tenantId?: string;
+    salary?: number;
 }
 
 interface AuthState {
