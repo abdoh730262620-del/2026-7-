@@ -43,56 +43,17 @@ function setupNetworkSync(dbRef: any) {
     }
 }
 
-// We use persistence by default to satisfy the "local database" requirement.
-// We prefer persistentLocalCache without the multiple tab manager because multiple tab coordination (Web Locks/IndexedDB locks)
-// is highly unstable and throws internal assertion failures (e.g., ID: ca9 / ID: b815) in sandboxed or partitioned browser environments.
-let isIframe = false;
-if (typeof window !== 'undefined') {
-    try {
-        isIframe = window.self !== window.top;
-    } catch (e) {
-        isIframe = true;
-    }
+// We initialize Firestore with memoryLocalCache() to prevent IndexedDB assertion failures
+// (e.g., ID: ca9 / ID: b815) in sandboxed or multi-tab browser environments.
+try {
+    dbInstance = initializeFirestore(app, {
+        localCache: memoryLocalCache()
+    }, firebaseConfig.firestoreDatabaseId);
+    console.log("Firestore initialized safely with memoryLocalCache.");
+} catch (e) {
+    dbInstance = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 }
-const useMemoryCache = isIframe || (typeof window !== 'undefined' && sessionStorage.getItem('firestore_use_memory_cache') === 'true');
-
-if (useMemoryCache) {
-    if (isIframe) {
-        console.log("Firestore initializing with memoryLocalCache because the application is running inside a sandboxed iframe.");
-    } else {
-        console.log("Firestore initializing with memoryLocalCache due to previous persistent cache assertion.");
-    }
-    try {
-        dbInstance = initializeFirestore(app, {
-            localCache: memoryLocalCache()
-        }, firebaseConfig.firestoreDatabaseId);
-    } catch (e) {
-        dbInstance = getFirestore(app, firebaseConfig.firestoreDatabaseId);
-    }
-    setupNetworkSync(dbInstance);
-} else {
-    try {
-        dbInstance = initializeFirestore(app, {
-            localCache: persistentLocalCache({
-                cacheSizeBytes: CACHE_SIZE_UNLIMITED
-            }),
-            experimentalForceLongPolling: false
-        }, firebaseConfig.firestoreDatabaseId);
-        console.log("Firestore initialized with stable persistent local cache.");
-        setupNetworkSync(dbInstance);
-    } catch (e) {
-        console.warn("Failed to initialize Firestore with persistent cache, falling back to memoryLocalCache:", e);
-        try {
-            dbInstance = initializeFirestore(app, {
-                localCache: memoryLocalCache()
-            }, firebaseConfig.firestoreDatabaseId);
-            setupNetworkSync(dbInstance);
-        } catch (fallbackError) {
-            console.error("Firestore initialization fallback failure:", fallbackError);
-            dbInstance = getFirestore(app, firebaseConfig.firestoreDatabaseId);
-        }
-    }
-}
+setupNetworkSync(dbInstance);
 
 export const db = dbInstance;
 export const auth = getAuth(app);
@@ -165,6 +126,31 @@ export interface FirestoreErrorInfo {
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
   const errorMessage = error instanceof Error ? error.message : String(error);
   const errCode = (error as any)?.code;
+
+  if (errorMessage.includes('INTERNAL ASSERTION FAILED') || errorMessage.includes('Unexpected state') || errorMessage.includes('ca9') || errorMessage.includes('b815')) {
+    console.warn('Firestore Internal Assertion Error safely handled and suppressed:', errorMessage);
+    return;
+  }
+
+  const isQuotaExceeded = errCode === 'resource-exhausted' || 
+                          errorMessage.toLowerCase().includes('quota') || 
+                          errorMessage.toLowerCase().includes('resource-exhausted');
+  
+  if (isQuotaExceeded) {
+    console.warn('Firestore Quota Limit Exceeded handled gracefully:', errorMessage);
+    try {
+      ErrorNotifier.notify(
+        'تم تجاوز الحصة المجانية لقاعدة البيانات (Firestore Quota)',
+        'لقد تم تجاوز الحد اليومي المجاني لعمليات القراءة أو الكتابة بقاعدة البيانات السحابية (50,000 عملية يومياً). سيتم إعادة تعيين الحصة تلقائياً خلال 24 ساعة، أو يمكن لمالك المشروع ترقية الحساب وتفعيل الفوترة لزيادة الحصة وتجنب انقطاع الخدمة.',
+        errorMessage,
+        'firebase',
+        'نظام قواعد البيانات السحابية'
+      );
+    } catch (e) {
+      console.warn('Failed to notify database quota warning:', e);
+    }
+    return;
+  }
   
   const errInfo: FirestoreErrorInfo = {
     error: errorMessage,
@@ -219,10 +205,27 @@ if (typeof window !== 'undefined') {
                lower.includes('unexpected state') ||
                lower.includes('internal assertion failed') ||
                lower.includes('id: ca9') ||
-               lower.includes('id: b815');
+               lower.includes('id: b815') ||
+               lower.includes('quota') ||
+               lower.includes('resource-exhausted');
     };
 
-    const handleSuppressed = (source: string) => {
+    const handleSuppressed = (source: string, text: string) => {
+        if (text.toLowerCase().includes('quota') || text.toLowerCase().includes('resource-exhausted')) {
+            console.warn(`[Firestore Safe Guard] Suppressed Quota Limit error from ${source}.`);
+            try {
+              ErrorNotifier.notify(
+                'تم تجاوز الحصة المجانية لقاعدة البيانات (Firestore Quota)',
+                'لقد تم تجاوز الحد اليومي المجاني لعمليات القراءة أو الكتابة بقاعدة البيانات السحابية (50,000 عملية يومياً). سيتم إعادة تعيين الحصة تلقائياً خلال 24 ساعة، أو يمكن لمالك المشروع ترقية الحساب وتفعيل الفوترة لزيادة الحصة وتجنب انقطاع الخدمة.',
+                text,
+                'firebase',
+                'نظام قواعد البيانات السحابية'
+              );
+            } catch (e) {
+              // ignore
+            }
+            return;
+        }
         console.warn(`[Firestore Safe Guard] Suppressed internal assertion conflict from ${source}. Switching fallback to memory cache.`);
         try {
             sessionStorage.setItem('firestore_use_memory_cache', 'true');
@@ -235,8 +238,8 @@ if (typeof window !== 'undefined') {
     console.error = function (...args: any[]) {
         const fullText = args.map(a => typeof a === 'object' ? (a?.message || a?.stack || String(a)) : String(a)).join(' ');
         if (isSuppressedError(fullText)) {
-            handleSuppressed('console.error');
-            console.warn('[Firestore Internal Assertion Warn]:', ...args);
+            handleSuppressed('console.error', fullText);
+            console.warn('[Firestore Suppressed Warn]:', ...args);
             return;
         }
         originalConsoleError.apply(console, args);
@@ -245,8 +248,9 @@ if (typeof window !== 'undefined') {
     const handleGlobalError = (event: ErrorEvent) => {
         const msg = event.message ? String(event.message) : '';
         const errorStr = event.error ? String(event.error) : '';
-        if (isSuppressedError(msg) || isSuppressedError(errorStr)) {
-            handleSuppressed('window.error');
+        const combined = `${msg} ${errorStr}`;
+        if (isSuppressedError(combined)) {
+            handleSuppressed('window.error', combined);
             event.preventDefault();
             event.stopPropagation();
         }
@@ -255,7 +259,7 @@ if (typeof window !== 'undefined') {
     const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
         const reason = event.reason ? String(event.reason) : '';
         if (isSuppressedError(reason)) {
-            handleSuppressed('unhandledrejection');
+            handleSuppressed('unhandledrejection', reason);
             event.preventDefault();
             event.stopPropagation();
         }

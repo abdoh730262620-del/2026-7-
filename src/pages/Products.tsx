@@ -3,11 +3,12 @@ import { collection, query, getDocs, addDoc, updateDoc, doc, Timestamp, onSnapsh
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { useAuthStore } from '../store/authStore';
 import { useSettingsStore } from '../store/settingsStore';
-import { Plus, Search, Edit2, X, ArrowRight, ArrowLeft, Printer, Filter, Camera, ArrowDownUp, Barcode } from 'lucide-react';
+import { Plus, Search, Edit2, X, ArrowRight, ArrowLeft, Printer, Filter, Camera, ArrowDownUp, Barcode, RefreshCw } from 'lucide-react';
 import { logUserAction } from '../lib/logger';
 import { useNavigate } from 'react-router-dom';
 import { printReport } from '../lib/printHelper';
 import { BarcodeScannerModal } from '../components/BarcodeScannerModal';
+import { LocalCache } from '../lib/localCache';
 
 interface Product {
     id: string;
@@ -28,7 +29,8 @@ export default function Products() {
     const { settings } = useSettingsStore();
     const [viewMode, setViewMode] = useState<'menu' | 'list'>('menu');
     const [products, setProducts] = useState<Product[]>([]);
-    const [linkedProductIds, setLinkedProductIds] = useState<Set<string>>(new Set());
+    const [isRefreshing, setIsRefreshing] = useState(false);
+    const [lastUpdated, setLastUpdated] = useState<number | null>(null);
     const [search, setSearch] = useState('');
     const [showSuggestions, setShowSuggestions] = useState(false);
     const [isActionModalOpen, setActionModalOpen] = useState(false);
@@ -91,67 +93,27 @@ export default function Products() {
         };
     }, [viewMode]);
 
-    useEffect(() => {
+    const loadData = async (force = false) => {
         const tenantId = appUser?.tenantId || 'single_store';
+        setIsRefreshing(true);
+        try {
+            const q = query(collection(db, 'products'), where('tenantId', '==', tenantId));
+            const productsResult = await LocalCache.fetchCollection<Product>('products', tenantId, q, { forceRefresh: force });
+            setProducts(productsResult.data);
+            setLastUpdated(productsResult.lastUpdated);
 
-        const fetchLinkedProducts = () => {
-            const ids = new Set<string>();
-            const addIdsFromItems = (snapshot: any) => {
-                snapshot.docs.forEach((doc: any) => {
-                    const data = doc.data();
-                    if (data.items && Array.isArray(data.items)) {
-                        data.items.forEach((item: any) => {
-                            if (item.productId) ids.add(item.productId);
-                        });
-                    }
-                });
-            };
-            
-            const qSales = query(collection(db, 'sales'), where('tenantId', '==', tenantId));
-            const unsubSales = onSnapshot(qSales, (snap) => {
-                addIdsFromItems(snap);
-                setLinkedProductIds(new Set(ids));
-            });
+            const qCat = query(collection(db, 'categories'), where('tenantId', '==', tenantId));
+            const categoriesResult = await LocalCache.fetchCollection<{ id: string; num: string; name: string }>('categories', tenantId, qCat, { forceRefresh: force });
+            setCategories(categoriesResult.data);
+        } catch (error) {
+            console.error('Failed to load products/categories:', error);
+        } finally {
+            setIsRefreshing(false);
+        }
+    };
 
-            const qPurchases = query(collection(db, 'purchases'), where('tenantId', '==', tenantId));
-            const unsubPurchases = onSnapshot(qPurchases, (snap) => {
-                addIdsFromItems(snap);
-                setLinkedProductIds(new Set(ids));
-            });
-
-            return () => {
-                unsubSales();
-                unsubPurchases();
-            };
-        };
-        const cleanupLinked = fetchLinkedProducts();
-
-        const q = query(collection(db, 'products'), where('tenantId', '==', tenantId));
-        const unsubscribe = onSnapshot(q, (snapshot) => {
-            const list: Product[] = [];
-            snapshot.forEach(docObj => {
-                const r = docObj.data();
-                list.push({ id: docObj.id, ...r } as Product);
-            });
-            setProducts(list);
-        }, (error) => {
-             handleFirestoreError(error, OperationType.GET, 'products');
-        });
-
-        const qCat = query(collection(db, 'categories'), where('tenantId', '==', tenantId));
-        const unsubscribeCat = onSnapshot(qCat, (snapshot) => {
-            const list: { id: string; num: string; name: string }[] = [];
-            snapshot.forEach(doc => {
-                list.push({ id: doc.id, ...doc.data() } as { id: string; num: string; name: string });
-            });
-            setCategories(list);
-        });
-
-        return () => {
-            unsubscribe();
-            unsubscribeCat();
-            cleanupLinked();
-        };
+    useEffect(() => {
+        loadData(false);
     }, [appUser]);
 
     const filtered = useMemo(() => {
@@ -344,9 +306,14 @@ export default function Products() {
 
             if (editingProduct) {
                 await updateDoc(doc(db, 'products', editingProduct.id), productPayload);
+                await LocalCache.updateCachedItem<Product>('products', tenantId, { id: editingProduct.id, ...productPayload });
+                setProducts(prev => prev.map(p => p.id === editingProduct.id ? { ...p, ...productPayload } : p));
                 await logUserAction('تعديل منتج', `تم تعديل منتج: ${name}`);
             } else {
                 await setDoc(doc(db, 'products', productId), productPayload);
+                const newProduct = { id: productId, ...productPayload };
+                await LocalCache.updateCachedItem<Product>('products', tenantId, newProduct);
+                setProducts(prev => [newProduct, ...prev]);
                 await logUserAction('إضافة منتج', `تمت إضافة منتج جديد: ${name} (باركود: ${barcode})`);
             }
             setActionModalOpen(false);
@@ -392,6 +359,7 @@ export default function Products() {
                 }));
             }
 
+            await loadData(true);
             await logUserAction('تعديل جماعي للمنتجات', `تم تعديل ${selectedProductIds.length} منتج بنسبة أو قيمة أو تصنيف`);
             alert('تم تحديث المنتجات المحددة بنجاح');
             setSelectedProductIds([]);
@@ -465,6 +433,22 @@ export default function Products() {
                              </h1>
                              
                              <div className="flex items-center gap-2 flex-wrap">
+                                 {/* Cache Refresh Button */}
+                                 <button
+                                     onClick={() => loadData(true)}
+                                     disabled={isRefreshing}
+                                     className="bg-indigo-50 dark:bg-slate-900 hover:bg-indigo-100 border border-indigo-100 text-indigo-700 dark:text-indigo-400 disabled:opacity-50 px-3 py-1.5 rounded-xl flex items-center gap-1.5 text-xs font-bold transition shadow-sm cursor-pointer"
+                                     title="تحديث المنتجات من السيرفر"
+                                 >
+                                     <RefreshCw size={14} className={`${isRefreshing ? 'animate-spin' : ''}`} />
+                                     <span>{isRefreshing ? 'جاري التحديث...' : 'تحديث البيانات'}</span>
+                                     {lastUpdated && (
+                                         <span className="text-[10px] opacity-70 font-normal">
+                                             ({new Date(lastUpdated).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })})
+                                         </span>
+                                     )}
+                                 </button>
+
                                  {/* Print Button */}
                                  <button
                                      onClick={handlePrintProductsList}
@@ -1232,6 +1216,7 @@ export default function Products() {
                                             
                                             await logUserAction('تعديل أسعار الكل', `تم تعديل أسعار ${count} منتج بنسبة ${perc}% ${adjustMode === 'increase' ? 'زيادة' : 'نقصان'}`);
                                         }
+                                        await loadData(true);
                                         alert('تم تحديث الأسعار بنجاح');
                                         setPriceAdjustModalOpen(false);
                                         setAdjustPercentage('');

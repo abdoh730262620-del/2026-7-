@@ -313,6 +313,10 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                 let oldCreatedAt = Date.now();
                 let oldWasReturn = false;
                 
+                let oldCreatorName = '';
+                let oldDateStr = '';
+                let oldDateTimeStr = '';
+                
                 if (editingInvoice && editingInvoice.docIds) {
                     for (const docId of editingInvoice.docIds) {
                         const oldDocRef = doc(db, 'card_purchases', docId);
@@ -329,8 +333,20 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                                 oldWasReturn = true;
                             }
                             if (data.createdAt) oldCreatedAt = data.createdAt;
+                            if (!oldCreatorName) oldCreatorName = data.createdByName || data.userName || data.sellerName || '';
+                            if (!oldDateStr) oldDateStr = data.date || '';
+                            if (!oldDateTimeStr) oldDateTimeStr = data.dateTime || '';
                         }
                     }
+                }
+                if (!oldCreatorName && editingInvoice) {
+                    oldCreatorName = editingInvoice.userName || (editingInvoice as any).createdByName || (editingInvoice as any).sellerName || '';
+                }
+                if (!oldDateStr && editingInvoice) {
+                    oldDateStr = editingInvoice.date || '';
+                }
+                if (!oldDateTimeStr && editingInvoice) {
+                    oldDateTimeStr = editingInvoice.dateTime || '';
                 }
 
                 const cleanName = (s?: string) => (s || '').replace(/فئة|كروت|كرت|ريال|\s+/g, '').toLowerCase();
@@ -483,9 +499,20 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                     const finalCatId = item.isNewCat ? newCatRefs[item.catId] : item.catId;
                     const purchaseRef = doc(collection(db, 'card_purchases'));
                     const cleanNotes = notes.trim();
-                    const finalNotes = isReturnInvoice 
+                    let finalNotes = isReturnInvoice 
                         ? (cleanNotes ? `مردودات مشتريات: ${cleanNotes}` : 'مردودات مشتريات (مرتجع للمورد)') 
                         : cleanNotes;
+
+                    if (editingInvoice) {
+                        const editNotice = `تم تعديل الفاتورة بواسطة (${staffName}) بتاريخ ${dateStr} ${timeStr}`;
+                        if (!finalNotes.includes(editNotice) && !finalNotes.includes(`تم تعديل الفاتورة بواسطة (${staffName})`)) {
+                            finalNotes = finalNotes ? `${finalNotes}\n[${editNotice}]` : `[${editNotice}]`;
+                        }
+                    }
+
+                    const finalCreatorName = (editingInvoice && oldCreatorName) ? oldCreatorName : staffName;
+                    const finalDateStr = (editingInvoice && oldDateStr) ? oldDateStr : dateStr;
+                    const finalDateTimeStr = (editingInvoice && oldDateTimeStr) ? oldDateTimeStr : `${dateStr} ${timeStr}`;
 
                     transaction.set(purchaseRef, {
                         tenantId,
@@ -500,15 +527,18 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                         unitPrice: item.unitPrice,
                         totalAmount: isReturnInvoice ? -Math.abs(item.totalAmount) : Math.abs(item.totalAmount),
                         month: yearMonth,
-                        date: dateStr,
-                        dateTime: `${dateStr} ${timeStr}`,
-                        userName: staffName,
-                        sellerName: staffName,
-                        createdByName: staffName,
+                        date: finalDateStr,
+                        dateTime: finalDateTimeStr,
+                        userName: finalCreatorName,
+                        sellerName: finalCreatorName,
+                        createdByName: finalCreatorName,
                         invoiceNumber: nextInvoiceNumber,
                         status: invoiceStatus,
                         notes: finalNotes,
-                        createdAt: oldDocsToDelete.length > 0 ? oldCreatedAt : Date.now()
+                        createdAt: oldDocsToDelete.length > 0 ? oldCreatedAt : Date.now(),
+                        editedByName: editingInvoice ? staffName : (oldItems[0]?.editedByName || null),
+                        editedAt: editingInvoice ? Date.now() : (oldItems[0]?.editedAt || null),
+                        isEdited: editingInvoice ? true : (oldItems[0]?.isEdited || false)
                     });
                 }
 
@@ -1053,48 +1083,6 @@ export default function CardPurchaseModal({ isOpen, onClose, categoryName, onSuc
                                     </span>
                                 </label>
                             )}
-
-                            {/* Workflow Status Selector */}
-                            <div>
-                                <label className="block text-xs font-black text-slate-700 dark:text-slate-300 mb-1.5">
-                                    حالة الفاتورة (Workflow Status)
-                                </label>
-                                <div className="grid grid-cols-3 gap-2">
-                                    <button
-                                        type="button"
-                                        onClick={() => setInvoiceStatus('draft')}
-                                        className={`py-2 px-2 rounded-xl text-[11px] font-black transition border flex items-center justify-center gap-1 ${
-                                            invoiceStatus === 'draft'
-                                                ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
-                                                : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700'
-                                        }`}
-                                    >
-                                        <span>مسودة (Draft)</span>
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => setInvoiceStatus('completed')}
-                                        className={`py-2 px-2 rounded-xl text-[11px] font-black transition border flex items-center justify-center gap-1 ${
-                                            invoiceStatus === 'completed'
-                                                ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
-                                                : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700'
-                                        }`}
-                                    >
-                                        <span>مكتملة (Approved)</span>
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => setInvoiceStatus('cancelled')}
-                                        className={`py-2 px-2 rounded-xl text-[11px] font-black transition border flex items-center justify-center gap-1 ${
-                                            invoiceStatus === 'cancelled'
-                                                ? 'bg-rose-600 text-white border-rose-600 shadow-sm'
-                                                : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700'
-                                        }`}
-                                    >
-                                        <span>ملغاة (Cancelled)</span>
-                                    </button>
-                                </div>
-                            </div>
 
                             {/* 3. السعر والإجمالي في نفس السطر (Row Layout) */}
                             <div className="bg-emerald-50/70 dark:bg-emerald-950/40 p-3 rounded-2xl border border-emerald-100 dark:border-emerald-900/40 space-y-2">

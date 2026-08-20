@@ -96,6 +96,23 @@
     color: #000000 !important;
   }
 
+  /* Prevent unwanted text selection popups and black context callouts on UI elements */
+  *:not(input):not(textarea):not([contenteditable="true"]) {
+    -webkit-user-select: none !important;
+    -moz-user-select: none !important;
+    -ms-user-select: none !important;
+    user-select: none !important;
+    -webkit-touch-callout: none !important;
+    -webkit-tap-highlight-color: transparent !important;
+  }
+
+  input, textarea, [contenteditable="true"] {
+    -webkit-user-select: text !important;
+    -moz-user-select: text !important;
+    -ms-user-select: text !important;
+    user-select: text !important;
+  }
+
   /* Force background to be white and text to be black for layout grids, headers, nav, and body */
   body, html, #root, main, header, aside, section, table, thead, tbody, tr, th, td, ul, ol, form, blockquote, pre {
     background-color: #ffffff !important;

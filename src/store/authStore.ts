@@ -31,9 +31,11 @@ export interface AppPermissions {
     cards_distributors?: ModulePermissions;
     cards_sellers?: ModulePermissions;
     cards_sales_report?: ModulePermissions;
+    cards_sales_invoices?: ModulePermissions;
     cards_cashbox?: ModulePermissions;
     cards_vouchers?: ModulePermissions;
     cards_exchanges?: ModulePermissions;
+    employees?: ModulePermissions;
     
     // Legacy mapping support for existing users
     edit?: boolean;
@@ -131,8 +133,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         
         const modulePerms = appUser.permissions?.[module];
         if (modulePerms) {
-            return !!modulePerms[action as keyof ModulePermissions];
+            if (modulePerms[action as keyof ModulePermissions] !== undefined) {
+                return !!modulePerms[action as keyof ModulePermissions];
+            }
         }
+        
+        // For employees module, viewing is allowed by default for all employees/roles
+        if (module === 'employees' && action === 'view') return true;
         
         // Legacy fallback
         if (action === 'view') return true;

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { collection, query, onSnapshot, addDoc, updateDoc, doc, deleteDoc, where, writeBatch, increment, orderBy, limit } from 'firebase/firestore';
+import { collection, query, onSnapshot, addDoc, updateDoc, doc, deleteDoc, where, writeBatch, increment, orderBy, limit, getDocs } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { LocalCache } from '../lib/localCache';
 import { useAuthStore } from '../store/authStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { printInvoice, printReport } from '../lib/printHelper';
@@ -26,7 +27,6 @@ export default function Customers() {
     const { appUser } = useAuthStore();
     const { settings } = useSettingsStore();
     const [customers, setCustomers] = useState<Customer[]>([]);
-    const [linkedCustomerIds, setLinkedCustomerIds] = useState<Set<string>>(new Set());
     const [search, setSearch] = useState('');
     const [isActionModalOpen, setActionModalOpen] = useState(false);
     const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
@@ -641,11 +641,10 @@ export default function Customers() {
     useEffect(() => {
         if (!isPaymentModalOpen) return;
         const tenantId = appUser?.tenantId || 'single_store';
-        const qNum = query(collection(db, 'vouchers'), where('tenantId', '==', tenantId), orderBy('voucherNumber', 'desc'));
+        const qNum = query(collection(db, 'vouchers'), where('tenantId', '==', tenantId), orderBy('voucherNumber', 'desc'), limit(1));
         const unsubscribe = onSnapshot(qNum, snap => {
             if (!snap.empty) {
-                const allNums = snap.docs.map(d => parseInt(d.data().voucherNumber) || 0);
-                const maxNum = Math.max(...allNums);
+                const maxNum = parseInt(snap.docs[0].data().voucherNumber) || 0;
                 setNextVNumForPayment((maxNum + 1).toString());
             } else {
                 setNextVNumForPayment('1');
@@ -894,46 +893,39 @@ export default function Customers() {
         }
     };
 
+    const [isRefreshing, setIsRefreshing] = useState(false);
     const [name, setName] = useState('');
     const [phone, setPhone] = useState('');
     const [address, setAddress] = useState('');
     const [balance, setBalance] = useState('');
 
-    useEffect(() => {
+    
+    const loadData = async (force = false) => {
+        if (!appUser) return;
         const tenantId = appUser?.tenantId || 'single_store';
-        const qSales = query(collection(db, 'sales'), where('tenantId', '==', tenantId));
-        const unsubscribeSales = onSnapshot(qSales, (snapshot) => {
-            const ids = new Set<string>();
-            snapshot.docs.forEach(doc => {
-                const data = doc.data();
-                if (data.customerId) ids.add(data.customerId);
-            });
-            setLinkedCustomerIds(ids);
-        });
-
-        const q = query(collection(db, 'customers'), where('tenantId', '==', tenantId));
-        const unsubscribe = onSnapshot(q, (snapshot) => {
-            const list: Customer[] = [];
-            snapshot.forEach(doc => {
-                list.push({ id: doc.id, ...doc.data() } as Customer);
-            });
-            setCustomers(list);
+        setIsRefreshing(true);
+        try {
+            const q = query(collection(db, 'customers'), where('tenantId', '==', tenantId));
+            const res = await LocalCache.fetchCollection('customers', tenantId, q, { forceRefresh: force });
+            setCustomers(res.data as Customer[]);
             
-            // Sync selectedCustomer with the updated list to ensure fresh data (especially balance)
+            // Sync selectedCustomer
             setSelectedCustomer(prev => {
                 if (!prev) return prev;
-                const updated = list.find(c => c.id === prev.id);
+                const updated = (res.data as Customer[]).find(c => c.id === prev.id);
                 return updated || prev;
             });
-        }, (error) => {
-             handleFirestoreError(error, OperationType.GET, 'customers');
-        });
-        
-        return () => {
-            unsubscribe();
-            unsubscribeSales();
-        };
+        } catch (err) {
+            console.error('Failed to load customers data:', err);
+        } finally {
+            setIsRefreshing(false);
+        }
+    };
+
+    useEffect(() => {
+        loadData();
     }, [appUser]);
+
 
     const filtered = useMemo(() => {
         return customers.filter(c => c.name.includes(search) || c.phone.includes(search));
@@ -1009,13 +1001,31 @@ export default function Customers() {
             alert('خاصية الحذف متاحة للمديرين فقط');
             return;
         }
-        if (linkedCustomerIds.has(cust.id)) {
-            alert('لا يمكن حذف هذا العميل لوجود فواتير مرتبطة به.');
-            return;
+
+        // Lazy check on demand instead of real-time subscription of all sales
+        const tenantId = appUser?.tenantId || 'single_store';
+        try {
+            const checkQuery = query(
+                collection(db, 'sales'),
+                where('tenantId', '==', tenantId),
+                where('customerId', '==', cust.id),
+                limit(1)
+            );
+            const checkSnap = await getDocs(checkQuery);
+            if (!checkSnap.empty) {
+                alert('لا يمكن حذف هذا العميل لوجود فواتير مرتبطة به.');
+                return;
+            }
+        } catch (e) {
+            console.warn('Failed to verify customer link status:', e);
         }
+
         if (confirm(`هل أنت متأكد من حذف العميل: ${cust.name}؟`)) {
             try {
                 const deletePromise = deleteDoc(doc(db, 'customers', cust.id));
+                await LocalCache.removeCachedItem('customers', appUser?.tenantId || 'single_store', cust.id);
+                setCustomers(prev => prev.filter(c => c.id !== cust.id));
+                if (selectedCustomer?.id === cust.id) setSelectedCustomer(null);
                 const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Network timeout')), 10000));
                 await Promise.race([deletePromise, timeoutPromise]);
                 await logUserAction('حذف عميل', `تم حذف العميل: ${cust.name}`);
@@ -1045,16 +1055,19 @@ export default function Customers() {
 
             const tenantId = appUser?.tenantId || 'single_store';
             if (editingCustomer) {
-                await updateDoc(doc(db, 'customers', editingCustomer.id), {
+                const payload = {
                     name: name.trim(),
                     phone,
                     address,
                     balance: parseFloat(balance) || 0,
                     updatedAt: Date.now()
-                });
+                };
+                await updateDoc(doc(db, 'customers', editingCustomer.id), payload);
+                await LocalCache.updateCachedItem('customers', tenantId, { id: editingCustomer.id, ...payload });
+                setCustomers(prev => prev.map(c => c.id === editingCustomer.id ? { ...c, ...payload } : c));
                 await logUserAction('تعديل عميل', `تم تعديل بيانات العميل: ${name}`);
             } else {
-                await addDoc(collection(db, 'customers'), {
+                const payload = {
                     name: name.trim(),
                     phone,
                     address,
@@ -1062,7 +1075,11 @@ export default function Customers() {
                     tenantId,
                     createdAt: Date.now(),
                     updatedAt: Date.now()
-                });
+                };
+                const docRef = await addDoc(collection(db, 'customers'), payload);
+                const newCustomer = { id: docRef.id, ...payload };
+                await LocalCache.updateCachedItem('customers', tenantId, newCustomer);
+                setCustomers(prev => [newCustomer, ...prev]);
                 await logUserAction('إضافة عميل', `تم إضافة العميل: ${name}`);
             }
 
@@ -1608,11 +1625,9 @@ export default function Customers() {
                                     <button onClick={(e) => { e.stopPropagation(); openEditModal(customer); }} className="text-gray-400 hover:text-blue-600 transition p-1.5 bg-bg-main rounded-lg border border-border-main hover:bg-white" title="تعديل">
                                         <Edit2 size={14} />
                                     </button>
-                                    {!linkedCustomerIds.has(customer.id) && (
-                                        <button onClick={(e) => { e.stopPropagation(); handleDelete(customer); }} className="text-gray-400 hover:text-red-600 transition p-1.5 bg-bg-main rounded-lg border border-border-main hover:bg-white" title="حذف">
-                                            <Trash2 size={14} />
-                                        </button>
-                                    )}
+                                    <button onClick={(e) => { e.stopPropagation(); handleDelete(customer); }} className="text-gray-400 hover:text-red-600 transition p-1.5 bg-bg-main rounded-lg border border-border-main hover:bg-white" title="حذف">
+                                        <Trash2 size={14} />
+                                    </button>
                                 </div>
                             )}
                         </div>

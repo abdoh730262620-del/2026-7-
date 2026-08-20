@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { collection, query, onSnapshot, getDocs, doc, increment, orderBy, limit, where, writeBatch } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { LocalCache } from '../lib/localCache';
 import { useAuthStore } from '../store/authStore';
 import { useInvoiceStore, CartItem } from '../store/invoiceStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { logUserAction } from '../lib/logger';
-import { ShoppingCart, Plus, Minus, Trash2, Search, FileText, Printer, MessageCircle, Globe, Coins, MoreVertical, ArrowLeft, X, Camera, Maximize2, Minimize2, GripVertical, CheckCircle2, RotateCcw } from 'lucide-react';
+import { ShoppingCart, Plus, RefreshCw, Minus, Trash2, Search, FileText, Printer, MessageCircle, Globe, Coins, MoreVertical, ArrowLeft, X, Camera, Maximize2, Minimize2, GripVertical, CheckCircle2, RotateCcw } from 'lucide-react';
 import { printInvoice } from '../lib/printHelper';
 import { InvoicePreviewModal } from '../components/InvoicePreviewModal';
 import SearchableSelect from '../components/SearchableSelect';
@@ -89,6 +90,8 @@ export default function Sales() {
     const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
     const [previewInvoiceId, setPreviewInvoiceId] = useState<string | null>(null);
     const [notes, setNotes] = useState('');
+    const [isRefreshing, setIsRefreshing] = useState(false);
+    const [lastUpdated, setLastUpdated] = useState<number | null>(null);
     const [sellerName, setSellerName] = useState('');
 
     useEffect(() => {
@@ -199,17 +202,58 @@ export default function Sales() {
 
         if (invoice.paymentType === 'cash' || invoice.status === 'paid' || parseFloat(invoice.paidAmount || 0) > 0) {
             const amountToRefund = invoice.paymentType === 'cash' || invoice.status === 'paid' ? parseFloat(invoice.total) : parseFloat(invoice.paidAmount || 0);
-            batch.set(doc(collection(db, 'cash')), {
-                date: Date.now(),
-                amount: amountToRefund,
-                type: 'out',
-                category: 'refund',
-                description: `${actionType === 'returned' ? 'إرجاع' : 'إلغاء'} فاتورة ${invoice.invoiceNumber} للعميل ${invoice.customerName || customers.find(c => c.id === invoice.customerId)?.name || invoice.customerId}`,
-                referenceId: invoice.id,
-                createdBy: appUser?.uid || 'system',
-                tenantId,
-                createdAt: Date.now()
+            
+            // Check if the invoice items had cards
+            const items = invoice.items || [];
+            let cardRefundSubtotal = 0;
+            let regularRefundSubtotal = 0;
+            items.forEach((item: any) => {
+                const isCard = cardCategories.some(c => 
+                    c.name.trim().toLowerCase() === (item.name || item.productName || '').trim().toLowerCase() || 
+                    (c.linkedSection && c.linkedSection.trim().toLowerCase() === (item.name || item.productName || '').trim().toLowerCase())
+                );
+                const itemTotal = (parseFloat(item.price) || 0) * (item.quantity || 1);
+                if (isCard) cardRefundSubtotal += itemTotal;
+                else regularRefundSubtotal += itemTotal;
             });
+
+            const gross = cardRefundSubtotal + regularRefundSubtotal;
+            const ratio = gross > 0 ? (amountToRefund / gross) : 1;
+            const cardRefund = cardRefundSubtotal * ratio;
+            const regularRefund = amountToRefund - cardRefund;
+
+            if (regularRefund > 0.001) {
+                batch.set(doc(collection(db, 'cash')), {
+                    date: Date.now(),
+                    amount: regularRefund,
+                    type: 'out',
+                    category: 'refund',
+                    description: `${actionType === 'returned' ? 'إرجاع' : 'إلغاء'} فاتورة ${invoice.invoiceNumber} للعميل ${invoice.customerName || customers.find(c => c.id === invoice.customerId)?.name || invoice.customerId}`,
+                    referenceId: invoice.id,
+                    createdBy: appUser?.uid || 'system',
+                    tenantId,
+                    createdAt: Date.now()
+                });
+            }
+
+            if (cardRefund > 0.001) {
+                const dateStr = new Date().toISOString().split('T')[0];
+                const timeStr = new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
+                batch.set(doc(collection(db, 'card_cashbox')), {
+                    tenantId,
+                    type: 'manual_out',
+                    title: `${actionType === 'returned' ? 'مرتجع' : 'إلغاء'} فاتورة مبيعات كروت #${invoice.invoiceNumber}`,
+                    amount: cardRefund,
+                    isIncome: false,
+                    date: dateStr,
+                    dateTime: `${dateStr} ${timeStr}`,
+                    userName: appUser?.name || appUser?.email || 'النظام',
+                    invoiceId: invoice.id,
+                    invoiceNumber: invoice.invoiceNumber,
+                    createdAt: Date.now()
+                });
+            }
+
             if (invoice.paymentType === 'credit' && invoice.customerId) {
                  batch.update(doc(db, 'customers', invoice.customerId), {
                      balance: increment(-parseFloat(invoice.total))
@@ -246,6 +290,9 @@ export default function Sales() {
             const updatedItems = [...invoice.items];
 
             const tenantId = appUser?.tenantId || 'single_store';
+            let cardRefundVal = 0;
+            let regularRefundVal = 0;
+
             returnedItems.forEach(retItem => {
                 const itemIndex = updatedItems.findIndex(i => i.productId === retItem.productId);
                 if (itemIndex > -1) {
@@ -257,7 +304,15 @@ export default function Sales() {
                 
                 const grossValue = parseFloat(retItem.price) * retItem.returnedQuantity;
                 const itemDiscount = (grossValue * (invoice.discountPercent || 0)) / 100;
-                refundValue += (grossValue - itemDiscount);
+                const netItemVal = (grossValue - itemDiscount);
+                refundValue += netItemVal;
+
+                const isCard = cardCategories.some(c => 
+                    c.name.trim().toLowerCase() === (retItem.name || '').trim().toLowerCase() || 
+                    (c.linkedSection && c.linkedSection.trim().toLowerCase() === (retItem.name || '').trim().toLowerCase())
+                );
+                if (isCard) cardRefundVal += netItemVal;
+                else regularRefundVal += netItemVal;
 
                 if (retItem.productId) {
                     batch.set(doc(db, 'products', retItem.productId), {
@@ -273,17 +328,36 @@ export default function Sales() {
 
             let newPaidAmount = parseFloat(invoice.paidAmount || invoice.total);
             if (invoice.paymentType === 'cash' || invoice.status === 'paid') {
-                 batch.set(doc(collection(db, 'cash')), {
-                    date: now,
-                    amount: refundValue,
-                    type: 'out',
-                    category: 'refund',
-                    description: `استرجاع جزئي لفاتورة مبيعات ${invoice.invoiceNumber}`,
-                    referenceId: invoice.id,
-                    createdBy: appUser?.uid || 'system',
-                    tenantId,
-                    createdAt: now
-                 });
+                 if (regularRefundVal > 0.001) {
+                     batch.set(doc(collection(db, 'cash')), {
+                        date: now,
+                        amount: regularRefundVal,
+                        type: 'out',
+                        category: 'refund',
+                        description: `استرجاع جزئي لفاتورة مبيعات ${invoice.invoiceNumber}`,
+                        referenceId: invoice.id,
+                        createdBy: appUser?.uid || 'system',
+                        tenantId,
+                        createdAt: now
+                     });
+                 }
+                 if (cardRefundVal > 0.001) {
+                     const dateStr = new Date(now).toISOString().split('T')[0];
+                     const timeStr = new Date(now).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
+                     batch.set(doc(collection(db, 'card_cashbox')), {
+                        tenantId,
+                        type: 'manual_out',
+                        title: `استرجاع جزئي لفاتورة مبيعات كروت #${invoice.invoiceNumber}`,
+                        amount: cardRefundVal,
+                        isIncome: false,
+                        date: dateStr,
+                        dateTime: `${dateStr} ${timeStr}`,
+                        userName: appUser?.name || appUser?.email || 'النظام',
+                        invoiceId: invoice.id,
+                        invoiceNumber: invoice.invoiceNumber,
+                        createdAt: now
+                     });
+                 }
                  newPaidAmount -= refundValue; 
             } else if (invoice.paymentType === 'credit') {
                  if (invoice.customerId) {
@@ -492,81 +566,67 @@ export default function Sales() {
     const [showCancelledOnly, setShowCancelledOnly] = useState(false);
 
     useEffect(() => {
-        let unsubProducts = () => {};
-        let unsubCustomers = () => {};
-        let unsubCardCategories = () => {};
+        if (!appUser) return;
+        const tenantId = appUser.tenantId || 'single_store';
+        
 
-        const tenantId = appUser?.tenantId || 'single_store';
-
-        // Load products
-        const qProducts = query(collection(db, 'products'), where('tenantId', '==', tenantId));
-        unsubProducts = onSnapshot(qProducts, (snapshot) => {
-            const list: Product[] = [];
-            snapshot.forEach(docObj => {
-                const r = docObj.data();
-                list.push({ id: docObj.id, ...r } as Product);
-            });
-            setProducts(list);
-        }, (error) => handleFirestoreError(error, OperationType.GET, 'products'));
-
-        // Load card categories
-        const qCardCategories = query(collection(db, 'card_categories'), where('tenantId', '==', tenantId));
-        unsubCardCategories = onSnapshot(qCardCategories, (snapshot) => {
-            const list: any[] = [];
-            snapshot.forEach(docObj => {
-                list.push({ id: docObj.id, ...docObj.data() });
-            });
-            setCardCategories(list);
-        }, (error) => handleFirestoreError(error, OperationType.GET, 'card_categories'));
-
-        // Load customers
-        const loadCustomers = () => {
-            const qCustomers = query(collection(db, 'customers'), where('tenantId', '==', tenantId));
-            const unsubCustomers = onSnapshot(qCustomers, (snapshot) => {
-                const list: Customer[] = [];
-                snapshot.forEach(docObj => {
-                    const r = docObj.data();
-                    list.push({ 
-                        id: docObj.id, 
-                        name: r.name, 
-                        points: r.points, 
-                        balance: r.balance 
-                    } as Customer);
-                });
-                setCustomers(list);
-            }, (error) => {
-                handleFirestoreError(error, OperationType.GET, 'customers');
-            });
-            return unsubCustomers;
-        };
-        unsubCustomers = loadCustomers();
-
-        return () => {
-            unsubProducts();
-            unsubCustomers();
-            unsubCardCategories();
-        };
+        
+        loadInitialData();
     }, [appUser]);
 
-    useEffect(() => {
+    const loadInvoices = async (force = false) => {
         if (!appUser) return;
         const tenantId = appUser?.tenantId || 'single_store';
+        setIsRefreshing(true);
         let qInvoices;
         if (appUser.role === 'admin') {
             qInvoices = query(collection(db, 'sales'), where('tenantId', '==', tenantId), orderBy('createdAt', 'desc'), limit(100));
         } else {
             qInvoices = query(collection(db, 'sales'), where('tenantId', '==', tenantId), where('createdBy', '==', appUser.uid), orderBy('createdAt', 'desc'), limit(100));
         }
-        const unsubInvoices = onSnapshot(qInvoices, (snapshot) => {
-             const list = [];
-             snapshot.forEach(docObj => {
-                 const r = docObj.data();
-                 list.push({ id: docObj.id, ...r });
-             });
-             setInvoices(list);
-        }, (error) => handleFirestoreError(error, OperationType.GET, 'sales'));
-        return () => unsubInvoices();
+        
+        try {
+            const res = await LocalCache.fetchCollection('sales', tenantId, qInvoices, { forceRefresh: force });
+            setInvoices(res.data as SaleInvoice[]);
+        } catch (err) {
+            console.error('Failed to load invoices:', err);
+        } finally {
+            setIsRefreshing(false);
+        }
+    };
+
+    useEffect(() => {
+        loadInvoices();
     }, [appUser]);
+
+    
+        const loadInitialData = async (force = false) => {
+        if (!appUser) return;
+        const tenantId = appUser.tenantId || 'single_store';
+        setIsRefreshing(true);
+        try {
+            const qProducts = query(collection(db, 'products'), where('tenantId', '==', tenantId));
+            const pRes = await LocalCache.fetchCollection('products', tenantId, qProducts, { forceRefresh: force });
+            setProducts(pRes.data as Product[]);
+
+            const qCardCategories = query(collection(db, 'card_categories'), where('tenantId', '==', tenantId));
+            const cRes = await LocalCache.fetchCollection('card_categories', tenantId, qCardCategories, { forceRefresh: force });
+            setCardCategories(cRes.data);
+
+            const qCustomers = query(collection(db, 'customers'), where('tenantId', '==', tenantId));
+            const custRes = await LocalCache.fetchCollection('customers', tenantId, qCustomers, { forceRefresh: force });
+            setCustomers(custRes.data as Customer[]);
+        } catch (err) {
+            console.error("Failed to load initial data for sales:", err);
+        } finally {
+            setIsRefreshing(false);
+        }
+    };
+
+    const handleSync = async () => {
+        await loadInitialData(true);
+        await loadInvoices(true);
+    };
 
     const filteredProducts = useMemo(() => {
         return products.filter(p => p.name.includes(search) || p.barcode.includes(search));
@@ -800,13 +860,29 @@ export default function Sales() {
                 }
             }
 
+            const origCreatedBy = editingInvoice?.createdBy || appUser?.uid;
+            const origCreatedByName = editingInvoice?.createdByName || editingInvoice?.sellerName || editingInvoice?.userName || sellerName.trim() || appUser?.name || appUser?.email || 'المستخدم';
+            const origCreatedAt = editingInvoice?.createdAt || editingInvoice?.date || now;
+            const origDate = editingInvoice?.date || now;
+
+            const editorName = appUser?.name || appUser?.email || 'المدير';
+            const dateStr = new Date(now).toISOString().split('T')[0];
+            const timeStr = new Date(now).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
+            let finalNotes = notes.trim();
+            if (editingInvoice) {
+                const editNotice = `تم تعديل الفاتورة بواسطة (${editorName}) بتاريخ ${dateStr} ${timeStr}`;
+                if (!finalNotes.includes(editNotice) && !finalNotes.includes(`تم تعديل الفاتورة بواسطة (${editorName})`)) {
+                    finalNotes = finalNotes ? `${finalNotes}\n[${editNotice}]` : `[${editNotice}]`;
+                }
+            }
+
             const saleRef = editingInvoice ? doc(db, 'sales', editingInvoice.id) : doc(collection(db, 'sales'));
             const saleMonth = new Date().getMonth() + 1;
             const saleYear = new Date().getFullYear();
             
             batch.set(saleRef, {
                 invoiceNumber: finalInvoiceNum,
-                date: now,
+                date: editingInvoice ? origDate : now,
                 customerId: finalCustomerId,
                 customerName: customerSearchName.trim() || 'نقدي',
                 month: saleMonth,
@@ -826,15 +902,18 @@ export default function Sales() {
                 paymentType: paymentMethod,
                 paidAmount: paymentMethod === 'cash' ? total : invoicePaidAmount,
                 status: (paymentMethod === 'cash' || (paymentMethod === 'credit' && invoicePaidAmount >= total)) ? 'paid' : 'active',
-                createdBy: appUser?.uid,
-                sellerName: sellerName.trim() || appUser?.name || appUser?.email || 'المستخدم',
-                createdByName: sellerName.trim() || appUser?.name || appUser?.email || 'المستخدم',
-                userName: sellerName.trim() || appUser?.name || appUser?.email || 'المستخدم',
+                createdBy: editingInvoice ? origCreatedBy : (appUser?.uid || ''),
+                sellerName: editingInvoice ? origCreatedByName : (sellerName.trim() || appUser?.name || appUser?.email || 'المستخدم'),
+                createdByName: editingInvoice ? origCreatedByName : (sellerName.trim() || appUser?.name || appUser?.email || 'المستخدم'),
+                userName: editingInvoice ? origCreatedByName : (sellerName.trim() || appUser?.name || appUser?.email || 'المستخدم'),
                 tenantId,
-                createdAt: now,
+                createdAt: editingInvoice ? origCreatedAt : now,
                 commissionPercent,
                 commissionAmount,
-                notes: notes.trim()
+                notes: finalNotes,
+                editedByName: editingInvoice ? editorName : (editingInvoice?.editedByName || null),
+                editedAt: editingInvoice ? now : (editingInvoice?.editedAt || null),
+                isEdited: editingInvoice ? true : (editingInvoice?.isEdited || false)
             });
 
             // 5. Loyalty Points Logic
@@ -863,6 +942,9 @@ export default function Sales() {
             }
 
             // 3. Update Inventory & create logs
+            let cardItemsGross = 0;
+            let regularItemsGross = 0;
+
             for (const item of cart) {
                 const pRef = doc(db, 'products', item.id);
                 batch.update(pRef, {
@@ -886,7 +968,12 @@ export default function Sales() {
                     c.name.trim().toLowerCase() === item.name.trim().toLowerCase() || 
                     (c.linkedSection && c.linkedSection.trim().toLowerCase() === item.name.trim().toLowerCase())
                 );
+                
+                const itemTotalVal = item.price * item.cartQuantity;
+
                 if (matchingCardCat) {
+                    cardItemsGross += itemTotalVal;
+
                     // 1. Subtract the quantity from card_categories availableCount
                     const cardCatRef = doc(db, 'card_categories', matchingCardCat.id);
                     batch.update(cardCatRef, {
@@ -933,23 +1020,53 @@ export default function Sales() {
                         additionDate: `${dateStr} ${timeStr}`,
                         availableCountAfter: (matchingCardCat.availableCount || 0) - item.cartQuantity
                     });
+                } else {
+                    regularItemsGross += itemTotalVal;
                 }
             }
 
             // 4. Financial Routing
-            if (paymentMethod === 'cash' && (settings.cashIncludeSales !== false)) {
-                const cashRef = doc(collection(db, 'cash'));
-                batch.set(cashRef, {
-                    date: now,
-                    amount: total,
-                    type: 'in',
-                    category: 'sale',
-                    description: `Cash sale ${finalInvoiceNum}`,
-                    referenceId: saleRef.id,
-                    createdBy: appUser?.uid,
-                    tenantId,
-                    createdAt: now
-                });
+            const totalGross = cardItemsGross + regularItemsGross;
+            const discountFactor = totalGross > 0 ? (total / totalGross) : 1;
+            const netCardTotal = cardItemsGross * discountFactor;
+            const netRegularTotal = total - netCardTotal;
+
+            if (paymentMethod === 'cash') {
+                // 1. Regular items go to General Cashbox (الصندوق العام)
+                if (netRegularTotal > 0.001 && (settings.cashIncludeSales !== false)) {
+                    const cashRef = doc(collection(db, 'cash'));
+                    batch.set(cashRef, {
+                        date: now,
+                        amount: netRegularTotal,
+                        type: 'in',
+                        category: 'sale',
+                        description: `فاتورة مبيعات نقدية #${finalInvoiceNum}`,
+                        referenceId: saleRef.id,
+                        createdBy: appUser?.uid,
+                        tenantId,
+                        createdAt: now
+                    });
+                }
+
+                // 2. Network Card items go exclusively to Network Cards Cashbox (صندوق الكروت فقط)
+                if (netCardTotal > 0.001) {
+                    const cardCashRef = doc(collection(db, 'card_cashbox'));
+                    const dateStr = new Date(now).toISOString().split('T')[0];
+                    const timeStr = new Date(now).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
+                    batch.set(cardCashRef, {
+                        tenantId,
+                        type: 'cash_sale',
+                        title: `فاتورة بيع كروت نقدية #${finalInvoiceNum}`,
+                        amount: netCardTotal,
+                        isIncome: true,
+                        date: dateStr,
+                        dateTime: `${dateStr} ${timeStr}`,
+                        userName: appUser?.name || appUser?.email || 'كاشير',
+                        invoiceId: saleRef.id,
+                        invoiceNumber: finalInvoiceNum,
+                        createdAt: now
+                    });
+                }
             } else if (paymentMethod === 'credit' && finalCustomerId) {
                 const customerRef = doc(db, 'customers', finalCustomerId);
                 batch.update(customerRef, {
@@ -1016,7 +1133,9 @@ export default function Sales() {
         <div className={`flex flex-col gap-3 h-full min-h-0 text-xs overflow-hidden ${isSalesFocusMode ? 'bg-bg-main p-2' : ''}`} dir="rtl">
             {/* Tabs */}
             {!isSalesFocusMode && (
-                <div className="flex bg-bg-main rounded-xl p-0.5 border border-border-main shadow-sm w-max self-start shrink-0">
+                
+<div className="flex justify-between items-center w-full gap-2 shrink-0">
+<div className="flex bg-bg-main rounded-xl p-0.5 border border-border-main shadow-sm w-max self-start shrink-0">
                     <button 
                         onClick={() => setActiveTab('list')}
                         className={`px-4 md:px-6 py-1.5 rounded-lg font-bold transition-all flex items-center gap-1.5 text-xs md:text-sm ${activeTab === 'list' ? 'bg-blue-600 text-white shadow-md' : 'text-text-main/50 hover:text-blue-600 hover:bg-white'}`}
@@ -1032,6 +1151,18 @@ export default function Sales() {
                         فاتورة مبيعات
                     </button>
                 </div>
+<button 
+    onClick={() => {
+        setIsRefreshing(true);
+        loadInvoices(true).then(() => setIsRefreshing(false));
+    }}
+    disabled={isRefreshing}
+    className="mr-auto px-4 md:px-5 py-1.5 rounded-lg font-bold transition-all flex items-center gap-2 text-xs md:text-sm bg-indigo-50 text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-900/30 dark:text-indigo-400 dark:hover:bg-indigo-900/50 border border-indigo-200 dark:border-indigo-800"
+>
+    <RefreshCw size={16} className={isRefreshing ? 'animate-spin' : ''} />
+    {isRefreshing ? 'جاري التحديث...' : 'تحديث البيانات'}
+</button>
+</div>
             )}
 
             {isSalesFocusMode && (

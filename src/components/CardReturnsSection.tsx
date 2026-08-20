@@ -656,22 +656,23 @@ export const CardReturnsSection: React.FC<CardReturnsSectionProps> = ({
 
                     {/* Pagination */}
                     {totalPages > 1 && (
-                        <div className="flex items-center justify-between bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800">
-                            <span className="text-xs font-bold text-slate-400">
-                                صفحة {currentPage} من {totalPages} (إجمالي: {filteredInvoices.length} فاتورة)
+                        <div className="flex flex-row items-center justify-between bg-white dark:bg-slate-900 px-3 py-1 my-0 mt-1 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-bold whitespace-nowrap gap-2">
+                            <span className="text-xs font-bold text-slate-500 whitespace-nowrap">
+                                عرض الصفحة <span className="font-black text-rose-600">{currentPage}</span> من <span className="font-black">{totalPages}</span> (إجمالي: {filteredInvoices.length} فاتورة)
                             </span>
-                            <div className="flex items-center gap-1.5">
+                            <div className="flex items-center gap-1.5 whitespace-nowrap">
                                 <button
                                     onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
                                     disabled={currentPage === 1}
-                                    className="px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-100 dark:bg-slate-800 disabled:opacity-40"
+                                    className="px-2.5 py-1 rounded-lg text-xs font-bold bg-slate-100 dark:bg-slate-800 disabled:opacity-40 cursor-pointer"
                                 >
                                     السابق
                                 </button>
+                                <span className="font-mono font-black px-1.5">{currentPage} / {totalPages}</span>
                                 <button
                                     onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
                                     disabled={currentPage === totalPages}
-                                    className="px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-100 dark:bg-slate-800 disabled:opacity-40"
+                                    className="px-2.5 py-1 rounded-lg text-xs font-bold bg-slate-100 dark:bg-slate-800 disabled:opacity-40 cursor-pointer"
                                 >
                                     التالي
                                 </button>

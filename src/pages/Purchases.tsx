@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { collection, query, onSnapshot, addDoc, doc, updateDoc, increment, getDocs, orderBy, limit, where, writeBatch } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { LocalCache } from '../lib/localCache';
 import { useAuthStore } from '../store/authStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { useInvoiceStore, CartItem } from '../store/invoiceStore';
@@ -95,6 +96,8 @@ export default function Purchases() {
     const [newProdBarcode, setNewProdBarcode] = useState('');
     const [newProdCost, setNewProdCost] = useState<number>(0);
     const [notes, setNotes] = useState('');
+    const [isRefreshing, setIsRefreshing] = useState(false);
+    const [lastUpdated, setLastUpdated] = useState<number | null>(null);
 
     const _reverseInvoice = async (invoice: any, actionType: 'returned' | 'cancelled', providedBatch?: any) => {
         const batch = providedBatch || writeBatch(db);
@@ -555,11 +558,27 @@ export default function Purchases() {
                 finalSupplierId = suppRef.id;
             }
 
+            const origCreatedBy = editingInvoice?.createdBy || appUser?.uid;
+            const origCreatedByName = (editingInvoice as any)?.createdByName || (editingInvoice as any)?.sellerName || (editingInvoice as any)?.userName || appUser?.name || appUser?.email || 'المستخدم';
+            const origCreatedAt = editingInvoice?.createdAt || editingInvoice?.date || now;
+            const origDate = editingInvoice?.date || now;
+
+            const editorName = appUser?.name || appUser?.email || 'المدير';
+            const dateStr = new Date(now).toISOString().split('T')[0];
+            const timeStr = new Date(now).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
+            let finalNotes = notes.trim();
+            if (editingInvoice) {
+                const editNotice = `تم تعديل الفاتورة بواسطة (${editorName}) بتاريخ ${dateStr} ${timeStr}`;
+                if (!finalNotes.includes(editNotice) && !finalNotes.includes(`تم تعديل الفاتورة بواسطة (${editorName})`)) {
+                    finalNotes = finalNotes ? `${finalNotes}\n[${editNotice}]` : `[${editNotice}]`;
+                }
+            }
+
             // 1. Create Purchase Invoice
             const purchaseRef = editingInvoice ? doc(db, 'purchases', editingInvoice.id) : doc(collection(db, 'purchases'));
             batch.set(purchaseRef, {
                 invoiceNumber: invoiceNum,
-                date: now,
+                date: editingInvoice ? origDate : now,
                 supplierId: finalSupplierId,
                 supplierName: supplierSearchName.trim() || 'مورد عام',
                 items: cart.map(item => ({
@@ -574,13 +593,16 @@ export default function Purchases() {
                 total: total,
                 paymentType: paymentMethod,
                 status: 'active',
-                createdBy: appUser?.uid,
-                sellerName: appUser?.name || appUser?.email || 'المستخدم',
-                createdByName: appUser?.name || appUser?.email || 'المستخدم',
-                userName: appUser?.name || appUser?.email || 'المستخدم',
-                createdAt: now,
+                createdBy: editingInvoice ? origCreatedBy : (appUser?.uid || ''),
+                sellerName: editingInvoice ? origCreatedByName : (appUser?.name || appUser?.email || 'المستخدم'),
+                createdByName: editingInvoice ? origCreatedByName : (appUser?.name || appUser?.email || 'المستخدم'),
+                userName: editingInvoice ? origCreatedByName : (appUser?.name || appUser?.email || 'المستخدم'),
+                createdAt: editingInvoice ? origCreatedAt : now,
                 tenantId,
-                notes: notes.trim()
+                notes: finalNotes,
+                editedByName: editingInvoice ? editorName : ((editingInvoice as any)?.editedByName || null),
+                editedAt: editingInvoice ? now : ((editingInvoice as any)?.editedAt || null),
+                isEdited: editingInvoice ? true : ((editingInvoice as any)?.isEdited || false)
             });
 
             // 2. Update Inventory (Add to stock and update cost price if option enabled)

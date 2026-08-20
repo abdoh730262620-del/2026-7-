@@ -10,6 +10,7 @@ import { printReport } from '../lib/printHelper';
 import { getDaysSinceLastSync } from '../lib/syncTracker';
 import { useUIStore } from '../store/uiStore';
 import SyncProgressIndicator from '../components/SyncProgressIndicator';
+import { LocalCache } from '../lib/localCache';
 
 interface Product {
     id: string;
@@ -36,49 +37,48 @@ export default function Dashboard() {
     const [cardCash, setCardCash] = useState(0);
     const [cardCredit, setCardCredit] = useState(0);
 
-    useEffect(() => {
+    const [isRefreshing, setIsRefreshing] = useState(false);
+    const [lastUpdated, setLastUpdated] = useState<number | null>(null);
+
+    const loadDashboardData = async (force = false) => {
         if (!appUser?.uid) return;
         const tenantId = appUser?.tenantId || 'single_store';
         const isAdmin = appUser?.role === 'admin';
 
-        // Calculate the beginning of the current calendar month
-        const startOfMonth = new Date();
-        startOfMonth.setDate(1);
-        startOfMonth.setHours(0, 0, 0, 0);
-        const startOfMonthMs = startOfMonth.getTime();
+        setIsRefreshing(true);
+        try {
+            const startOfMonth = new Date();
+            startOfMonth.setDate(1);
+            startOfMonth.setHours(0, 0, 0, 0);
+            const startOfMonthMs = startOfMonth.getTime();
 
-        // 1. Subscribe to main cashbox (cash collection)
-        const qMain = query(collection(db, 'cash'), where('tenantId', '==', tenantId));
-        const unsubMain = onSnapshot(qMain, (snapshot) => {
-            let bal = 0;
-            snapshot.forEach(d => {
-                const data = d.data();
+            // 1. Fetch cash collection
+            const qMain = query(collection(db, 'cash'), where('tenantId', '==', tenantId));
+            const cashResult = await LocalCache.fetchCollection<any>('cash', tenantId, qMain, { forceRefresh: force });
+            
+            let balMain = 0;
+            cashResult.data.forEach(data => {
                 if (data.affectsCash === false) return;
-
-                // Restrict to current calendar month
                 const docTime = data.createdAt || (typeof data.date === 'number' ? data.date : (data.date ? new Date(data.date).getTime() : 0));
                 if (docTime < startOfMonthMs) return;
 
                 const isUserDoc = data.createdBy === appUser.uid;
                 if (isAdmin || isUserDoc) {
                     if (data.type === 'in') {
-                        bal += (data.amount || 0);
+                        balMain += (data.amount || 0);
                     } else if (data.type === 'out') {
-                        bal -= (data.amount || 0);
+                        balMain -= (data.amount || 0);
                     }
                 }
             });
-            setMainCash(bal);
-        }, (err) => handleFirestoreError(err, OperationType.GET, 'cash'));
+            setMainCash(balMain);
 
-        // 2. Subscribe to main sales for main credit (sales collection)
-        const qSales = query(collection(db, 'sales'), where('tenantId', '==', tenantId));
-        const unsubSales = onSnapshot(qSales, (snapshot) => {
-            let bal = 0;
-            snapshot.forEach(d => {
-                const data = d.data();
-
-                // Restrict to current calendar month
+            // 2. Fetch sales collection
+            const qSales = query(collection(db, 'sales'), where('tenantId', '==', tenantId));
+            const salesResult = await LocalCache.fetchCollection<any>('sales', tenantId, qSales, { forceRefresh: force });
+            
+            let balSales = 0;
+            salesResult.data.forEach(data => {
                 const docTime = data.createdAt || (typeof data.date === 'number' ? data.date : (data.date ? new Date(data.date).getTime() : 0));
                 if (docTime < startOfMonthMs) return;
 
@@ -87,64 +87,62 @@ export default function Dashboard() {
                     if (data.paymentType === 'credit' && data.status !== 'returned' && data.status !== 'cancelled') {
                         const outstanding = (data.total || 0) - (data.paidAmount || 0);
                         if (outstanding > 0) {
-                            bal += outstanding;
+                            balSales += outstanding;
                         }
                     }
                 }
             });
-            setMainCredit(bal);
-        }, (err) => handleFirestoreError(err, OperationType.GET, 'sales'));
+            setMainCredit(balSales);
 
-        // 3. Subscribe to card cashbox (card_cashbox collection)
-        const qCard = query(collection(db, 'card_cashbox'), where('tenantId', '==', tenantId));
-        const unsubCard = onSnapshot(qCard, (snapshot) => {
-            let bal = 0;
-            snapshot.forEach(d => {
-                const data = d.data();
-
-                // Restrict to current calendar month
+            // 3. Fetch card_cashbox collection
+            const qCard = query(collection(db, 'card_cashbox'), where('tenantId', '==', tenantId));
+            const cardResult = await LocalCache.fetchCollection<any>('card_cashbox', tenantId, qCard, { forceRefresh: force });
+            
+            let balCard = 0;
+            cardResult.data.forEach(data => {
                 const docTime = data.createdAt || (typeof data.date === 'number' ? data.date : (data.date ? new Date(data.date).getTime() : 0));
                 if (docTime < startOfMonthMs) return;
 
                 const isUserDoc = data.createdBy === appUser.uid || data.userName === appUser.name;
                 if (isAdmin || isUserDoc) {
                     if (data.isIncome) {
-                        bal += (data.amount || 0);
+                        balCard += (data.amount || 0);
                     } else {
-                        bal -= (data.amount || 0);
+                        balCard -= (data.amount || 0);
                     }
                 }
             });
-            setCardCash(bal);
-        }, (err) => handleFirestoreError(err, OperationType.GET, 'card_cashbox'));
+            setCardCash(balCard);
 
-        // 4. Subscribe to card sales for card credit (card_sales collection)
-        const qCardSales = query(collection(db, 'card_sales'), where('tenantId', '==', tenantId));
-        const unsubCardSales = onSnapshot(qCardSales, (snapshot) => {
-            let bal = 0;
-            snapshot.forEach(d => {
-                const data = d.data();
-
-                // Restrict to current calendar month
+            // 4. Fetch card_sales collection
+            const qCardSales = query(collection(db, 'card_sales'), where('tenantId', '==', tenantId));
+            const cardSalesResult = await LocalCache.fetchCollection<any>('card_sales', tenantId, qCardSales, { forceRefresh: force });
+            
+            let balCardSales = 0;
+            cardSalesResult.data.forEach(data => {
                 const docTime = data.createdAt || (typeof data.date === 'number' ? data.date : (data.date ? new Date(data.date).getTime() : 0));
                 if (docTime < startOfMonthMs) return;
 
                 const isUserDoc = data.createdBy === appUser.uid || data.userName === appUser.name || data.sellerName === appUser.name || data.createdByName === appUser.name;
                 if (isAdmin || isUserDoc) {
                     if (data.paymentType === 'credit' && data.status === 'completed') {
-                        bal += (data.totalAmount || 0);
+                        balCardSales += (data.totalAmount || 0);
                     }
                 }
             });
-            setCardCredit(bal);
-        }, (err) => handleFirestoreError(err, OperationType.GET, 'card_sales'));
+            setCardCredit(balCardSales);
 
-        return () => {
-            unsubMain();
-            unsubSales();
-            unsubCard();
-            unsubCardSales();
-        };
+            const meta = await LocalCache.getMetadata('cash', tenantId);
+            setLastUpdated(meta?.lastUpdated || Date.now());
+        } catch (err) {
+            console.error('Failed to load dashboard cash/sales counters:', err);
+        } finally {
+            setIsRefreshing(false);
+        }
+    };
+
+    useEffect(() => {
+        loadDashboardData(false);
     }, [appUser]);
     
     // Interactive Statement Flow
@@ -403,11 +401,38 @@ export default function Dashboard() {
         { title: 'المصروفات', path: '/expenses', icon: Coins, roles: ['admin', 'cashier'], bgColor: 'bg-white', textColor: 'text-pink-600', borderColor: 'border-pink-100' },
         { title: 'كروت الشبكة', path: '/network-cards', icon: Wifi, roles: ['admin', 'cashier', 'salesman', 'inventory', 'network_worker'], bgColor: 'bg-white', textColor: 'text-indigo-600', borderColor: 'border-indigo-100' },
         { title: 'إدارة الكروت', path: '/cards-management', icon: Layers, roles: ['admin', 'cashier', 'inventory', 'network_worker'], bgColor: 'bg-white', textColor: 'text-purple-600', borderColor: 'border-purple-100' },
-        { title: 'قسم الموظفين', path: '/employees', icon: Briefcase, roles: ['admin'], bgColor: 'bg-white', textColor: 'text-indigo-600', borderColor: 'border-indigo-100' }
+        { title: 'قسم الموظفين', path: '/employees', icon: Briefcase, roles: ['admin', 'cashier', 'inventory', 'salesman', 'network_worker'], bgColor: 'bg-white', textColor: 'text-indigo-600', borderColor: 'border-indigo-100' }
     ];
 
     const accessibleCards = cards.filter(card => {
-        const hasRole = appUser && card.roles.includes(appUser.role);
+        let hasRole = appUser && card.roles.includes(appUser.role);
+        if (appUser && appUser.role !== 'admin') {
+            const p = appUser.permissions as any;
+            if (p) {
+                if (card.path === '/employees') {
+                    if (p.employees?.view !== undefined) {
+                        hasRole = p.employees.view;
+                    } else {
+                        hasRole = true;
+                    }
+                }
+                if (card.path === '/sales' && p.sales?.view !== undefined) hasRole = p.sales.view;
+                if (card.path === '/purchases' && p.purchases?.view !== undefined) hasRole = p.purchases.view;
+                if (card.path === '/products' || card.path === '/inventory-audit') {
+                    if (p.products?.view !== undefined) hasRole = p.products.view;
+                }
+                if (card.path === '/customers' || card.path === '/loyalty') {
+                    if (p.customers?.view !== undefined) hasRole = p.customers.view;
+                }
+                if (card.path === '/quotations' && p.quotations?.view !== undefined) hasRole = p.quotations.view;
+                if (card.path === '/cash' && p.cash?.view !== undefined) hasRole = p.cash.view;
+                if (card.path === '/vouchers' && p.vouchers?.view !== undefined) hasRole = p.vouchers.view;
+                if (card.path === '/expenses' && p.expenses?.view !== undefined) hasRole = p.expenses.view;
+                if (card.path === '/cards-management' || card.path === '/network-cards') {
+                    if (p.cards?.view !== undefined) hasRole = p.cards.view;
+                }
+            }
+        }
         const isEnabled = card.enabled === undefined ? true : card.enabled;
         return hasRole && isEnabled;
     });
@@ -415,6 +440,20 @@ export default function Dashboard() {
     return (
         <div className="h-[calc(100vh-4rem)] md:h-[calc(100vh-1rem)] flex flex-col overflow-hidden pb-16 md:pb-2 pt-2">
             <SyncProgressIndicator />
+            {/* Cache Status & Refresh Dashboard Button */}
+            <div className="flex items-center justify-between px-4 py-1.5 bg-indigo-50/50 dark:bg-slate-900/40 border-b border-indigo-100/50 dark:border-slate-800 shrink-0">
+                <span className="text-[10px] font-bold text-indigo-700 dark:text-indigo-400 flex items-center gap-1">
+                    <span>آخر تحديث للوحة التحكم: {lastUpdated ? new Date(lastUpdated).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }) : 'مؤخراً'}</span>
+                </span>
+                <button
+                    onClick={() => loadDashboardData(true)}
+                    disabled={isRefreshing}
+                    className="flex items-center gap-1.5 px-3 py-1 bg-white dark:bg-slate-800 border border-indigo-200 dark:border-slate-700 text-indigo-700 dark:text-indigo-400 disabled:opacity-50 text-[10px] font-black rounded-lg transition hover:bg-indigo-50 shadow-xs cursor-pointer"
+                >
+                    <RefreshCw size={12} className={`${isRefreshing ? 'animate-spin' : ''}`} />
+                    <span>{isRefreshing ? 'جاري التحديث...' : 'تحديث لوحة التحكم'}</span>
+                </button>
+            </div>
             {/* Intelligent Assistant Section - Hero Search */}
             <div className="mb-3 md:mb-4 shrink-0">
                 <div className="relative group max-w-2xl mx-auto">

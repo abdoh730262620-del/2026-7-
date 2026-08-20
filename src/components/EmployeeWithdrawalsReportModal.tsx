@@ -473,17 +473,17 @@ export function EmployeeWithdrawalsReportModal({
                             <p className="text-xs font-bold">لا توجد عمليات سحب أو خصومات مطابقة للفلترة المحددة</p>
                         </div>
                     ) : (
-                        <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden shadow-2xs">
+                        <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-x-auto shadow-2xs">
                             <table className="w-full text-right text-xs">
                                 <thead>
-                                    <tr className="bg-slate-100 dark:bg-slate-800/80 text-slate-600 dark:text-slate-300 font-bold border-b border-slate-200 dark:border-slate-700">
-                                        <th className="p-2.5 text-center w-10">#</th>
-                                        <th className="p-2.5 text-center">التاريخ والوقت</th>
-                                        <th className="p-2.5">الموظف المستفيد</th>
-                                        <th className="p-2.5 text-center">مبلغ السحب</th>
-                                        <th className="p-2.5">البيان والملاحظات</th>
-                                        <th className="p-2.5 text-center">جهة الصرف / الخصم</th>
-                                        <th className="p-2.5 text-center">المحرر</th>
+                                    <tr className="bg-slate-100 dark:bg-slate-800/80 text-slate-600 dark:text-slate-300 font-bold border-b border-slate-200 dark:border-slate-700 whitespace-nowrap">
+                                        <th className="p-2.5 text-center w-10 whitespace-nowrap">#</th>
+                                        <th className="p-2.5 text-center whitespace-nowrap">التاريخ والوقت</th>
+                                        <th className="p-2.5 whitespace-nowrap">الموظف المستفيد</th>
+                                        <th className="p-2.5 text-center whitespace-nowrap">مبلغ السحب</th>
+                                        <th className="p-2.5 whitespace-nowrap">البيان والملاحظات</th>
+                                        <th className="p-2.5 text-center whitespace-nowrap">جهة الصرف / الخصم</th>
+                                        <th className="p-2.5 text-center whitespace-nowrap">المحرر</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 bg-white dark:bg-slate-900">
@@ -493,18 +493,18 @@ export function EmployeeWithdrawalsReportModal({
                                         const isTransfer = !!w.withdrawnFromEmployeeName;
 
                                         return (
-                                            <tr key={w.id || idx} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition">
-                                                <td className="p-2.5 text-center font-mono text-[11px] text-slate-400">
+                                            <tr key={w.id || idx} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition whitespace-nowrap">
+                                                <td className="p-2.5 text-center font-mono text-[11px] text-slate-400 whitespace-nowrap">
                                                     {idx + 1}
                                                 </td>
                                                 <td className="p-2.5 text-center font-mono text-[11px] text-slate-500 dark:text-slate-400 whitespace-nowrap">
                                                     {dateStr}
                                                 </td>
-                                                <td className="p-2.5 font-bold text-slate-900 dark:text-white">
-                                                    <div className="flex items-center gap-1.5">
+                                                <td className="p-2.5 font-bold text-slate-900 dark:text-white whitespace-nowrap">
+                                                    <div className="flex items-center gap-1.5 whitespace-nowrap">
                                                         <span>{w.employeeName}</span>
                                                         {w.employeeRole && (
-                                                            <span className="text-[9px] font-normal px-1.5 py-0.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded">
+                                                            <span className="text-[9px] font-normal px-1.5 py-0.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded whitespace-nowrap">
                                                                 {w.employeeRole}
                                                             </span>
                                                         )}
@@ -513,26 +513,26 @@ export function EmployeeWithdrawalsReportModal({
                                                 <td className="p-2.5 text-center font-black font-mono text-red-600 dark:text-red-400 whitespace-nowrap">
                                                     {amt.toLocaleString()} <span className="text-[10px] font-normal">ر.ي</span>
                                                 </td>
-                                                <td className="p-2.5 text-slate-700 dark:text-slate-300">
+                                                <td className="p-2.5 text-slate-700 dark:text-slate-300 whitespace-nowrap">
                                                     {w.notes || 'سحب سلفة'}
                                                 </td>
-                                                <td className="p-2.5 text-center">
+                                                <td className="p-2.5 text-center whitespace-nowrap">
                                                     {isTransfer ? (
-                                                        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-900">
+                                                        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-900 whitespace-nowrap">
                                                             <ArrowRightLeft size={10} />
                                                             صندوق: {w.withdrawnFromEmployeeName}
                                                         </span>
                                                     ) : w.sourceFund === 'network_cashbox' ? (
-                                                        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900">
+                                                        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900 whitespace-nowrap">
                                                             صندوق الشبكات
                                                         </span>
                                                     ) : (
-                                                        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-900">
+                                                        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-900 whitespace-nowrap">
                                                             الصندوق العام
                                                         </span>
                                                     )}
                                                 </td>
-                                                <td className="p-2.5 text-center text-[11px] text-slate-500 font-mono">
+                                                <td className="p-2.5 text-center text-[11px] text-slate-500 font-mono whitespace-nowrap">
                                                     {w.createdBy || '-'}
                                                 </td>
                                             </tr>

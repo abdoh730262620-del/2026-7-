@@ -76,10 +76,13 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
     const [isEditingCartItem, setIsEditingCartItem] = useState<boolean>(false);
     const [editItemQty, setEditItemQty] = useState<string>('1');
     const [editItemUnitPrice, setEditItemUnitPrice] = useState<number>(0);
+    const [editItemSaleType, setEditItemSaleType] = useState<'retail' | 'wholesale' | 'distributor'>('retail');
 
     // Payment Drawer / Modal
     const [showPaymentModal, setShowPaymentModal] = useState<boolean>(false);
     const [paymentType, setPaymentType] = useState<'cash' | 'credit'>('cash');
+    const [paidAmount, setPaidAmount] = useState<number>(0);
+    const [paidAmountInput, setPaidAmountInput] = useState<string>('');
     const [invoiceStatus, setInvoiceStatus] = useState<'draft' | 'completed' | 'cancelled'>('completed');
     const [selectedDistributorId, setSelectedDistributorId] = useState<string>('');
     const [distributorSearch, setDistributorSearch] = useState<string>('');
@@ -92,6 +95,11 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
     useEffect(() => {
         if (isOpen && editingInvoice) {
             setPaymentType(editingInvoice.paymentType || 'cash');
+            const initialPaid = editingInvoice.paidAmount !== undefined 
+                ? Number(editingInvoice.paidAmount) 
+                : (editingInvoice.paymentType === 'cash' ? (editingInvoice.netTotal || editingInvoice.totalAmount || 0) : 0);
+            setPaidAmount(initialPaid);
+            setPaidAmountInput(String(initialPaid));
             if (editingInvoice.distributorId) {
                 setSelectedDistributorId(editingInvoice.distributorId);
             }
@@ -105,6 +113,7 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
             if (editingInvoice.items && Array.isArray(editingInvoice.items)) {
                 const initialCart = editingInvoice.items.map((it: any) => ({
                     id: Math.random().toString(36).substr(2, 9),
+                    categoryId: it.categoryId || '',
                     categoryName: it.categoryName || '',
                     saleType: it.saleType || 'retail',
                     unitPrice: it.unitPrice || 0,
@@ -117,6 +126,8 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
         } else if (isOpen && !editingInvoice) {
             setCartItems([]);
             setPaymentType('cash');
+            setPaidAmount(0);
+            setPaidAmountInput('');
             setSelectedDistributorId('');
             setDistributorSearch('');
             setNotes('');
@@ -245,6 +256,9 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
 
     const handleSaleTypeChange = (type: 'retail' | 'wholesale' | 'distributor') => {
         setSaleType(type);
+        if (type === 'wholesale' || type === 'retail') {
+            setCommissionPercent(0);
+        }
         if (selectedCategoryName) {
             handleSelectCategory(selectedCategoryName, type);
         }
@@ -331,9 +345,31 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
         setSelectedCartItemForActions(item);
         setEditItemQty(item.quantity.toString());
         setEditItemUnitPrice(item.unitPrice);
+        setEditItemSaleType(item.saleType || 'retail');
     };
 
-    // Save edited quantity or unit price
+    const handleEditItemSaleTypeChange = (newType: 'retail' | 'wholesale' | 'distributor') => {
+        setEditItemSaleType(newType);
+        if (selectedCartItemForActions) {
+            const cat = displayCategories.find(c => c.name.trim() === selectedCartItemForActions.categoryName.trim());
+            if (cat) {
+                if (newType === 'wholesale' && cat.wholesalePrice > 0) {
+                    setEditItemUnitPrice(cat.wholesalePrice);
+                } else if (newType === 'retail' && cat.retailPrice > 0) {
+                    setEditItemUnitPrice(cat.retailPrice);
+                } else if (newType === 'distributor') {
+                    const distObj = selectedDistributorForAdding || distributors.find(d => d.id === selectedDistributorId);
+                    if (distObj) {
+                        const commission = distObj.commission || 0;
+                        const basePrice = cat.retailPrice || 0;
+                        setEditItemUnitPrice(basePrice * (1 - commission / 100));
+                    }
+                }
+            }
+        }
+    };
+
+    // Save edited quantity, unit price, or sale type
     const handleSaveEditedCartItem = () => {
         if (!selectedCartItemForActions) return;
         const qtyNum = parseInt(editItemQty, 10);
@@ -351,6 +387,7 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
             if (it.id === selectedCartItemForActions.id) {
                 return {
                     ...it,
+                    saleType: editItemSaleType,
                     quantity: qtyNum,
                     unitPrice: priceNum,
                     totalAmount: qtyNum * priceNum
@@ -378,8 +415,24 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
     // Totals calculations
     const invoiceTotal = cartItems.reduce((sum, item) => sum + item.totalAmount, 0);
     const totalCardsQty = cartItems.reduce((sum, item) => sum + item.quantity, 0);
-    const commissionAmount = saleType === 'distributor' ? 0 : invoiceTotal * (commissionPercent / 100);
+    
+    // Separate retail and wholesale totals
+    const retailTotal = cartItems.filter(item => item.saleType === 'retail').reduce((sum, item) => sum + item.totalAmount, 0);
+    const wholesaleTotal = cartItems.filter(item => item.saleType === 'wholesale').reduce((sum, item) => sum + item.totalAmount, 0);
+    const distributorTotal = cartItems.filter(item => item.saleType === 'distributor').reduce((sum, item) => sum + item.totalAmount, 0);
+
+    // Commission logic: Commission applies only if user or distributor specified commissionPercent > 0
+    const effectiveCommissionRate = commissionPercent > 0 ? commissionPercent : 0;
+    const commissionAmount = retailTotal * (effectiveCommissionRate / 100);
     const netTotal = invoiceTotal - commissionAmount;
+
+    // When Payment Modal opens for a new sale, default paidAmount to netTotal
+    useEffect(() => {
+        if (showPaymentModal && !editingInvoice) {
+            setPaidAmount(netTotal);
+            setPaidAmountInput(String(netTotal));
+        }
+    }, [showPaymentModal, netTotal, editingInvoice]);
 
     // Execute Sales Transaction
     const handleConfirmCheckout = async () => {
@@ -389,26 +442,40 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
             return;
         }
 
-        if (paymentType === 'credit' && !selectedDistributorId) {
-            alert('في حالة البيع الآجل، يجب اختيار الموزع / العميل.');
+        const effectivePaidAmount = Math.max(0, Math.min(isNaN(paidAmount) ? 0 : paidAmount, netTotal));
+        const remainingDebt = Math.max(0, netTotal - effectivePaidAmount);
+        const effectivePaymentType = (paymentType === 'cash' && remainingDebt > 0) ? 'credit' : paymentType;
+
+        const customTypedName = (selectedDistributorId || distributorSearch || '').trim();
+        let currentDistId = selectedDistributorId;
+        let selectedDistributor = distributors.find(d => 
+            d.id === currentDistId || 
+            d.name.trim().toLowerCase() === customTypedName.toLowerCase()
+        );
+
+        if (selectedDistributor) {
+            currentDistId = selectedDistributor.id;
+        }
+
+        if ((effectivePaymentType === 'credit' || remainingDebt > 0) && !selectedDistributor && !customTypedName) {
+            alert(`الفاتورة تتضمن مبلغاً متبقياً بالآجل قدره (${remainingDebt.toFixed(2)} ريال). يجب اختيار أو كتابة اسم العميل / الموزع لتسجيل الدين باسمه.`);
             return;
         }
 
         setSaving(true);
-        const selectedDistributor = distributors.find(d => d.id === selectedDistributorId);
         const now = new Date();
         const yearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
         const dateStr = now.toISOString().split('T')[0];
         const timeStr = now.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
 
         // Immediate Alert/Verification for distributor credit and balance/prepaid status
-        if (paymentType === 'credit' && selectedDistributor) {
+        if ((effectivePaymentType === 'credit' || remainingDebt > 0) && selectedDistributor) {
             const currentDebt = selectedDistributor.balance || 0;
             // If they have prepaid balance (stored as negative debt), check if current sale exceeds it
             if (currentDebt < 0) {
                 const availablePrepaid = Math.abs(currentDebt);
-                if (netTotal > availablePrepaid) {
-                    const confirmProceed = window.confirm(`تنبيه فوري: رصيد الصندوق للموزع لا يكفي للعملية!\nالمبلغ المتوفر كدفعة مقدمة: ${availablePrepaid.toFixed(2)} ريال.\nقيمة الفاتورة الحالية: ${netTotal.toFixed(2)} ريال.\nهل ترغب بالاستمرار وتحويل المبلغ المتبقي (${(netTotal - availablePrepaid).toFixed(2)} ريال) كدين مستحق؟`);
+                if (remainingDebt > availablePrepaid) {
+                    const confirmProceed = window.confirm(`تنبيه فوري: رصيد الصندوق للموزع لا يكفي للعملية!\nالمبلغ المتوفر كدفعة مقدمة: ${availablePrepaid.toFixed(2)} ريال.\nالمبلغ المتبقي الآجل: ${remainingDebt.toFixed(2)} ريال.\nهل ترغب بالاستمرار وتحويل المبلغ المتبقي (${(remainingDebt - availablePrepaid).toFixed(2)} ريال) كدين مستحق؟`);
                     if (!confirmProceed) {
                         setSaving(false);
                         return;
@@ -447,38 +514,92 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                 }
             }
 
+            // Pre-fetch old document IDs if editing
+            let allOldDocIds: string[] = [];
+            if (editingInvoice) {
+                const idsSet = new Set<string>();
+                if (Array.isArray(editingInvoice.docIds)) {
+                    editingInvoice.docIds.forEach((id: string) => id && idsSet.add(id));
+                }
+                if (editingInvoice.id && !editingInvoice.id.startsWith('grp_') && !editingInvoice.id.startsWith('inv_')) {
+                    idsSet.add(editingInvoice.id);
+                }
+                if (nextInvoiceNumber) {
+                    try {
+                        const qOld = query(
+                            collection(db, 'card_sales'),
+                            where('tenantId', '==', tenantId),
+                            where('invoiceNumber', '==', nextInvoiceNumber)
+                        );
+                        const snapOld = await getDocs(qOld);
+                        snapOld.docs.forEach(d => idsSet.add(d.id));
+                    } catch (e) {
+                        console.warn('Could not pre-fetch old card_sales docs by invoiceNumber:', e);
+                    }
+                }
+                allOldDocIds = Array.from(idsSet);
+            }
+
             await runTransaction(db, async (transaction) => {
                 // --- PHASE 1: COMPUTE DELTAS AND COLLECT OLD DATA ---
                 let oldInvoiceTotal = 0;
                 let oldPaymentType = '';
                 let oldDistributorId = '';
-                const oldItems = [];
-                const oldDocsToDelete = [];
+                let oldPaidTotal = 0;
+                let oldRemainingDebt = 0;
+                const oldItems: any[] = [];
+                const oldDocsToDelete: any[] = [];
                 let oldCreatedAt = Date.now();
                 
-                if (editingInvoice && editingInvoice.docIds) {
-                    for (const docId of editingInvoice.docIds) {
+                let oldCreatorName = '';
+                let oldDateStr = '';
+                let oldDateTimeStr = '';
+                
+                if (allOldDocIds.length > 0) {
+                    for (const docId of allOldDocIds) {
+                        if (!docId || docId.trim() === '') continue;
                         const oldDocRef = doc(db, 'card_sales', docId);
                         const oldDocSnap = await transaction.get(oldDocRef);
                         if (oldDocSnap.exists() && oldDocSnap.data().status !== 'cancelled') {
                             const data = oldDocSnap.data();
                             oldDocsToDelete.push(oldDocRef);
                             oldItems.push(data);
-                            oldInvoiceTotal += (data.netTotal || data.totalAmount || 0);
-                            oldPaymentType = data.paymentType;
+                            const itemNet = Number(data.netTotal || data.totalAmount || 0);
+                            oldInvoiceTotal += itemNet;
+                            oldPaymentType = data.paymentType || '';
                             oldDistributorId = data.distributorId || '';
+
+                            const itemPaid = data.paidAmount !== undefined 
+                                ? Number(data.paidAmount) 
+                                : (data.paymentType === 'cash' ? itemNet : 0);
+                            const itemRem = data.remainingAmount !== undefined 
+                                ? Number(data.remainingAmount) 
+                                : (data.paymentType === 'credit' ? itemNet : 0);
+                            oldPaidTotal += itemPaid;
+                            oldRemainingDebt += itemRem;
+
                             if (data.createdAt) oldCreatedAt = data.createdAt;
+                            if (!oldCreatorName) oldCreatorName = data.createdByName || data.userName || data.sellerName || '';
+                            if (!oldDateStr) oldDateStr = data.date || '';
+                            if (!oldDateTimeStr) oldDateTimeStr = data.dateTime || '';
                         }
                     }
+                }
+                if (!oldCreatorName && editingInvoice) {
+                    oldCreatorName = editingInvoice.userName || (editingInvoice as any).createdByName || (editingInvoice as any).sellerName || '';
+                }
+                if (!oldDateStr && editingInvoice) {
+                    oldDateStr = editingInvoice.date || '';
+                }
+                if (!oldDateTimeStr && editingInvoice) {
+                    oldDateTimeStr = editingInvoice.dateTime || '';
                 }
 
                 const cleanName = (s?: string) => (s || '').replace(/فئة|كروت|كرت|ريال|\s+/g, '').toLowerCase();
 
                 const newItemsWithCats = cartItems.map(item => {
-                    // 1. Match by item.categoryId directly if present
                     let catDoc = item.categoryId ? categories.find(c => c.id === item.categoryId) : undefined;
                     
-                    // 2. Match by exact name or linkedSection
                     if (!catDoc) {
                         catDoc = categories.find(c => 
                             c.name.trim() === item.categoryName.trim() || 
@@ -486,7 +607,6 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                         );
                     }
                     
-                    // 3. Match by cleaned normalized name (handles "فئة 100" vs "100" vs "100 ريال")
                     if (!catDoc) {
                         const itemClean = cleanName(item.categoryName);
                         catDoc = categories.find(c => 
@@ -512,51 +632,55 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                         if (matched) oldCatId = matched.id;
                     }
                     if (oldCatId) {
-                        stockDeltas[oldCatId] = (stockDeltas[oldCatId] || 0) + (old.quantity || 0);
+                        stockDeltas[oldCatId] = (stockDeltas[oldCatId] || 0) + (Number(old.quantity) || 0);
                     }
                 }
                 
                 // When we add a new sale, stock GOES DOWN
                 if (invoiceStatus === 'completed') {
                     for (const item of newItemsWithCats) {
-                        stockDeltas[item.catId] = (stockDeltas[item.catId] || 0) - (item.quantity || 0);
+                        if (item.catId) {
+                            stockDeltas[item.catId] = (stockDeltas[item.catId] || 0) - (Number(item.quantity) || 0);
+                        }
                     }
                 }
 
-                const distributorDeltas = {};
-                // If old was credit, cancelling it means the distributor owes LESS (subtract oldInvoiceTotal)
-                if (oldPaymentType === 'credit' && oldDistributorId) {
-                    distributorDeltas[oldDistributorId] = (distributorDeltas[oldDistributorId] || 0) - oldInvoiceTotal;
+                const distributorDeltas: Record<string, number> = {};
+                // Subtract old debt
+                if (oldDistributorId && oldDistributorId.trim() !== '' && oldRemainingDebt > 0) {
+                    distributorDeltas[oldDistributorId] = (distributorDeltas[oldDistributorId] || 0) - oldRemainingDebt;
                 }
-                // If new is credit, new sale means the distributor owes MORE (add netTotal)
-                if (invoiceStatus === 'completed' && paymentType === 'credit' && selectedDistributorId) {
-                    distributorDeltas[selectedDistributorId] = (distributorDeltas[selectedDistributorId] || 0) + netTotal;
+                // Add new debt
+                if (invoiceStatus === 'completed' && selectedDistributorId && selectedDistributorId.trim() !== '' && remainingDebt > 0) {
+                    distributorDeltas[selectedDistributorId] = (distributorDeltas[selectedDistributorId] || 0) + remainingDebt;
                 }
 
                 let netCashboxInflow = 0;
-                // Old cash sale cancelled = cash goes OUT
-                if (oldPaymentType === 'cash') netCashboxInflow -= oldInvoiceTotal;
-                // New cash sale = cash goes IN
-                if (invoiceStatus === 'completed' && paymentType === 'cash') netCashboxInflow += netTotal;
+                // Old cash paid = cash goes OUT
+                netCashboxInflow -= oldPaidTotal;
+                // New cash paid = cash goes IN
+                if (invoiceStatus === 'completed') {
+                    netCashboxInflow += effectivePaidAmount;
+                }
 
                 // --- PHASE 2: ALL READS ---
-                const categorySnaps = {};
+                const categorySnaps: Record<string, { ref: any; snap: any }> = {};
                 for (const item of newItemsWithCats) {
-                    if (!item.isNewCat) {
+                    if (item.catId && !item.isNewCat && !item.catId.startsWith('new_')) {
                         const ref = doc(db, 'card_categories', item.catId);
                         if (!categorySnaps[item.catId]) categorySnaps[item.catId] = { ref, snap: await transaction.get(ref) };
                     }
                 }
                 for (const catId of Object.keys(stockDeltas)) {
-                    if (!catId.startsWith('new_') && stockDeltas[catId] !== 0 && !categorySnaps[catId]) {
+                    if (catId && !catId.startsWith('new_') && stockDeltas[catId] !== 0 && !categorySnaps[catId]) {
                         const ref = doc(db, 'card_categories', catId);
                         categorySnaps[catId] = { ref, snap: await transaction.get(ref) };
                     }
                 }
 
-                const distributorSnaps = {};
+                const distributorSnaps: Record<string, { ref: any; snap: any }> = {};
                 for (const distId of Object.keys(distributorDeltas)) {
-                    if (distributorDeltas[distId] !== 0) {
+                    if (distId && distId.trim() !== '' && distributorDeltas[distId] !== 0) {
                         const ref = doc(db, 'card_distributors', distId);
                         distributorSnaps[distId] = { ref, snap: await transaction.get(ref) };
                     }
@@ -577,7 +701,7 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                                 name: item.categoryName,
                                 wholesalePrice: item.saleType === 'wholesale' ? item.unitPrice : 0,
                                 retailPrice: item.saleType === 'retail' ? item.unitPrice : 0,
-                                availableCount: 0, // Gets updated by stock delta below
+                                availableCount: 0,
                                 createdAt: Date.now()
                             });
                             newCatRefs[item.catId] = newCatRef.id;
@@ -589,8 +713,14 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                 for (const item of newItemsWithCats) {
                     const finalCatId = item.isNewCat ? newCatRefs[item.catId] : item.catId;
                     
-                    const itemCommission = commissionPercent > 0 ? (item.totalAmount * commissionPercent) / 100 : 0;
+                    const itemCommissionRate = commissionPercent > 0 ? commissionPercent : 0;
+                    const itemCommission = (item.totalAmount * itemCommissionRate) / 100;
                     const itemNetTotal = item.totalAmount - itemCommission;
+
+                    // Proportional share of paid and remaining
+                    const itemRatio = netTotal > 0 ? (itemNetTotal / netTotal) : (1 / newItemsWithCats.length);
+                    const itemPaidAmount = effectivePaidAmount * itemRatio;
+                    const itemRemainingAmount = remainingDebt * itemRatio;
 
                     const saleRef = doc(collection(db, 'card_sales'));
                     transaction.set(saleRef, {
@@ -598,27 +728,41 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                         categoryId: finalCatId || '',
                         categoryName: item.categoryName,
                         quantity: item.quantity,
-                        saleType: item.saleType,
-                        paymentType,
-                        distributorId: selectedDistributorId || '',
-                        distributorName: selectedDistributor ? selectedDistributor.name : 'عميل نقدي',
+                        saleType: item.saleType || 'retail',
+                        paymentType: effectivePaymentType,
+                        paidAmount: itemPaidAmount,
+                        remainingAmount: itemRemainingAmount,
+                        distributorId: selectedDistributor ? selectedDistributor.id : (selectedDistributorId || ''),
+                        distributorName: selectedDistributor ? selectedDistributor.name : (customTypedName || 'عميل نقدي'),
                         unitPrice: item.unitPrice,
-                        commissionPercent,
+                        commissionPercent: itemCommissionRate,
                         commissionAmount: itemCommission,
                         totalAmount: item.totalAmount,
                         netTotal: itemNetTotal,
                         month: yearMonth,
                         monthNum: now.getMonth() + 1,
                         yearNum: now.getFullYear(),
-                        date: dateStr,
-                        dateTime: `${dateStr} ${timeStr}`,
-                        userName: staffName,
-                        sellerName: staffName,
-                        createdByName: staffName,
+                        date: (editingInvoice && oldDateStr) ? oldDateStr : dateStr,
+                        dateTime: (editingInvoice && oldDateTimeStr) ? oldDateTimeStr : `${dateStr} ${timeStr}`,
+                        userName: (editingInvoice && oldCreatorName) ? oldCreatorName : staffName,
+                        sellerName: (editingInvoice && oldCreatorName) ? oldCreatorName : staffName,
+                        createdByName: (editingInvoice && oldCreatorName) ? oldCreatorName : staffName,
                         invoiceNumber: nextInvoiceNumber,
                         status: invoiceStatus,
-                        notes: notes.trim(),
-                        createdAt: oldDocsToDelete.length > 0 ? oldCreatedAt : Date.now()
+                        notes: (() => {
+                            let fn = notes.trim();
+                            if (editingInvoice) {
+                                const editNotice = `تم تعديل الفاتورة بواسطة (${staffName}) بتاريخ ${dateStr} ${timeStr}`;
+                                if (!fn.includes(editNotice) && !fn.includes(`تم تعديل الفاتورة بواسطة (${staffName})`)) {
+                                    fn = fn ? `${fn}\n[${editNotice}]` : `[${editNotice}]`;
+                                }
+                            }
+                            return fn;
+                        })(),
+                        createdAt: oldDocsToDelete.length > 0 ? oldCreatedAt : Date.now(),
+                        editedByName: editingInvoice ? staffName : (oldItems[0]?.editedByName || null),
+                        editedAt: editingInvoice ? Date.now() : (oldItems[0]?.editedAt || null),
+                        isEdited: editingInvoice ? true : (oldItems[0]?.isEdited || false)
                     });
                 }
 
@@ -753,7 +897,12 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
             onClose();
         } catch (error) {
             console.error('Error saving card sale:', error);
-            handleFirestoreError(error, OperationType.WRITE, 'card_sales');
+            alert('حدث خطأ أثناء حفظ الفاتورة: ' + (error instanceof Error ? error.message : String(error)));
+            try {
+                handleFirestoreError(error, OperationType.WRITE, 'card_sales');
+            } catch (e) {
+                console.error(e);
+            }
             setSaving(false);
         }
     };
@@ -1076,41 +1225,45 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
 
             {/* CHECKOUT PAYMENT MODAL (نافذة الدفع للمبيعات - اختيار العميل من جدول الموزعين) */}
             {showPaymentModal && (
-                <div className="fixed inset-0 z-50 bg-black/20  flex items-center justify-center p-4 animate-in fade-in duration-200 dir-rtl" dir="rtl">
-                    <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-5 my-auto">
-                        <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
-                            <div className="flex items-center gap-3">
-                                <div className="p-3 bg-emerald-50 dark:bg-emerald-950 text-emerald-600 rounded-2xl">
-                                    <CreditCard size={22} />
+                <div className="fixed inset-0 z-50 bg-black/30 backdrop-blur-xs flex items-center justify-center p-3 animate-in fade-in duration-200 dir-rtl" dir="rtl">
+                    <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-md w-full p-4 sm:p-5 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-3.5 my-auto">
+                        <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2.5">
+                            <div className="flex items-center gap-2.5">
+                                <div className="p-2.5 bg-emerald-50 dark:bg-emerald-950 text-emerald-600 rounded-2xl">
+                                    <CreditCard size={20} />
                                 </div>
                                 <div>
-                                    <h3 className="font-black text-lg text-slate-900 dark:text-white">
+                                    <h3 className="font-black text-base text-slate-900 dark:text-white">
                                         نافذة الدفع والتسديد
                                     </h3>
-                                    <p className="text-xs font-bold text-slate-400">
+                                    <p className="text-[11px] font-bold text-slate-400">
                                         اخْتَر العميل/الموزع وطريقة الدفع لإتمام الفاتورة
                                     </p>
                                 </div>
                             </div>
                             <button
                                 onClick={() => setShowPaymentModal(false)}
-                                className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800"
+                                className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800"
                             >
-                                <X size={20} />
+                                <X size={18} />
                             </button>
                         </div>
 
-                        <div className="space-y-4 max-h-[75vh] overflow-y-auto p-1">
+                        <div className="space-y-3 max-h-[75vh] overflow-y-auto p-0.5">
                             {/* 1. طريقة الدفع فوقهم بالأعلى */}
                             <div>
-                                <label className="block text-xs font-black text-slate-700 dark:text-slate-300 mb-1.5">
+                                <label className="block text-[11px] font-black text-slate-700 dark:text-slate-300 mb-1">
                                     طريقة الدفع
                                 </label>
                                 <div className="grid grid-cols-2 gap-2">
                                     <button
                                         type="button"
-                                        onClick={() => setPaymentType('cash')}
-                                        className={`py-2.5 px-3 rounded-xl text-xs font-black transition border ${
+                                        onClick={() => {
+                                            setPaymentType('cash');
+                                            setPaidAmount(netTotal);
+                                            setPaidAmountInput(String(netTotal));
+                                        }}
+                                        className={`py-2 px-3 rounded-xl text-xs font-black transition border ${
                                             paymentType === 'cash'
                                                 ? 'bg-emerald-600 text-white border-emerald-600 shadow-md'
                                                 : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700'
@@ -1120,8 +1273,14 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                                     </button>
                                     <button
                                         type="button"
-                                        onClick={() => setPaymentType('credit')}
-                                        className={`py-2.5 px-3 rounded-xl text-xs font-black transition border ${
+                                        onClick={() => {
+                                            setPaymentType('credit');
+                                            if (paidAmount === netTotal) {
+                                                setPaidAmount(0);
+                                                setPaidAmountInput('0');
+                                            }
+                                        }}
+                                        className={`py-2 px-3 rounded-xl text-xs font-black transition border ${
                                             paymentType === 'credit'
                                                 ? 'bg-amber-600 text-white border-amber-600 shadow-md'
                                                 : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700'
@@ -1132,27 +1291,72 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                                 </div>
                             </div>
 
-                            {/* 2. اسم العميل وتحته حقل الملاحظات */}
-                            <div className="space-y-3 bg-slate-50 dark:bg-slate-800/40 p-3 rounded-xl border border-slate-200 dark:border-slate-800">
-                                <div className="space-y-1.5">
-                                    <label className="block text-xs font-black text-slate-700 dark:text-slate-300">
-                                        اختيار العميل / الموزع {paymentType === 'credit' && <span className="text-rose-500">* (مطلوب للآجل)</span>}
+                            {/* 2. حقل إجمالي السعر (سعر الفاتورة) - يظهر مباشرة بعد طريقة الدفع */}
+                            <div className="bg-emerald-50/80 dark:bg-emerald-950/60 p-2.5 rounded-2xl border border-emerald-200 dark:border-emerald-900/60 flex items-center justify-between">
+                                <span className="text-xs font-black text-emerald-900 dark:text-emerald-200">
+                                    إجمالي السعر (سعر الفاتورة):
+                                </span>
+                                <span className="text-sm font-black text-emerald-700 dark:text-emerald-300 font-mono" dir="ltr">
+                                    {netTotal.toLocaleString('ar-SA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ر.ي
+                                </span>
+                            </div>
+
+                            {/* 3. حقل المدفوع (المبلغ الذي قام بالدفع) - يظهر تحت حقل إجمالي السعر */}
+                            <div className="space-y-1.5 bg-slate-50 dark:bg-slate-800/50 p-2.5 rounded-2xl border border-slate-200 dark:border-slate-700">
+                                <label className="block text-xs font-black text-slate-700 dark:text-slate-300">
+                                    المدفوع (المبلغ النقدي المسلم):
+                                </label>
+                                <input
+                                    type="number"
+                                    min="0"
+                                    max={netTotal}
+                                    step="any"
+                                    value={paidAmountInput}
+                                    onChange={(e) => {
+                                        const valStr = e.target.value;
+                                        setPaidAmountInput(valStr);
+                                        const num = parseFloat(valStr);
+                                        setPaidAmount(isNaN(num) ? 0 : num);
+                                    }}
+                                    onFocus={(e) => e.target.select()}
+                                    className="w-full h-10 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-3 text-sm font-black text-slate-900 dark:text-white outline-none focus:border-indigo-600 text-center font-mono"
+                                    placeholder="أدخل المبلغ المدفوع..."
+                                />
+                                {paidAmount < netTotal && (
+                                    <div className="p-2 bg-amber-50 dark:bg-amber-950/60 border border-amber-200 dark:border-amber-900/60 rounded-xl text-[11px] font-bold text-amber-900 dark:text-amber-200 flex items-center justify-between mt-1">
+                                        <span>المتبقي (آجل على العميل):</span>
+                                        <span className="font-black font-mono text-xs text-rose-600 dark:text-rose-400">
+                                            {(netTotal - paidAmount).toLocaleString('ar-SA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ر.ي
+                                        </span>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* 4. اسم العميل وتحته حقل الملاحظات + السعر/الرصيد السابق للعميل */}
+                            <div className="space-y-2.5 bg-slate-50 dark:bg-slate-800/40 p-2.5 rounded-2xl border border-slate-200 dark:border-slate-800">
+                                <div className="space-y-1">
+                                    <label className="block text-[11px] font-black text-slate-700 dark:text-slate-300">
+                                        اختيار العميل / الموزع {(paymentType === 'credit' || paidAmount < netTotal) && <span className="text-rose-500">* (مطلوب للآجل/المتبقي)</span>}
                                     </label>
                                     <SearchableSelect
-                                        value={selectedDistributorId || ''}
-                                        onChange={(distId) => {
-                                            if (distId === '') {
+                                        value={selectedDistributorId || distributorSearch || ''}
+                                        onChange={(val) => {
+                                            const trimmed = (val || '').trim();
+                                            if (!trimmed) {
                                                 setSelectedDistributorId('');
                                                 setDistributorSearch('');
                                                 setCommissionPercent(0);
                                             } else {
-                                                const dist = distributors.find(d => d.id === distId);
+                                                const dist = distributors.find(d => d.id === trimmed || d.name.trim().toLowerCase() === trimmed.toLowerCase());
                                                 if (dist) {
                                                     handleSelectDistributor(dist);
+                                                } else {
+                                                    setSelectedDistributorId(trimmed);
+                                                    setDistributorSearch(trimmed);
                                                 }
                                             }
                                         }}
-                                        placeholder="-- بدون موزع (عميل نقدي عام) --"
+                                        placeholder="-- بدون موزع (عميل نقدي عام) أو اكتب اسماً جديداً... --"
                                         options={distributors.map(dist => ({ 
                                             id: dist.id, 
                                             label: dist.name, 
@@ -1174,15 +1378,33 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                                                 alert('لم يتم العثور على عميل مبيعات الشهر الحالي في النظام. يرجى الانتظار قليلاً أو إعادة تحميل الصفحة.');
                                             }
                                         }}
-                                        className="text-[10px] font-bold text-amber-600 hover:text-amber-800 underline underline-offset-4 decoration-amber-300 transition-colors w-max mt-1"
+                                        className="text-[10px] font-bold text-amber-600 hover:text-amber-800 underline underline-offset-4 decoration-amber-300 transition-colors w-max mt-0.5 block"
                                     >
                                         + إدراج عميل مبيعات الشهر الحالي تلقائياً
                                     </button>
                                 </div>
 
+                                {/* عرض السعر / الرصيد السابق للعميل عند اختيار الفاتورة آجل أو وجود متبقي */}
+                                {(paymentType === 'credit' || paidAmount < netTotal) && (
+                                    <div className="flex items-center justify-between p-2 bg-amber-50/80 dark:bg-amber-950/60 border border-amber-200 dark:border-amber-900/60 rounded-xl text-[11px] font-bold text-amber-900 dark:text-amber-200">
+                                        <span>السعر / الدين السابق للعميل:</span>
+                                        <span className="font-black font-mono">
+                                            {selectedDistributorId ? (
+                                                (() => {
+                                                    const dist = distributors.find(d => d.id === selectedDistributorId);
+                                                    const bal = dist?.balance !== undefined ? dist.balance : (dist?.previousDebt || 0);
+                                                    return `${bal.toLocaleString()} ريال يمني`;
+                                                })()
+                                            ) : (
+                                                <span className="text-rose-500 font-normal">اختر العميل لرؤية الرصيد</span>
+                                            )}
+                                        </span>
+                                    </div>
+                                )}
+
                                 {/* حقل الملاحظات تحت اسم العميل */}
                                 <div>
-                                    <label className="block text-xs font-black mb-1.5 text-slate-700 dark:text-slate-300">
+                                    <label className="block text-[11px] font-black mb-1 text-slate-700 dark:text-slate-300">
                                         ملاحظات عملية البيع (تظهر على الفاتورة)
                                     </label>
                                     <textarea
@@ -1190,106 +1412,25 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                                         placeholder="أدخل أي ملاحظات على العملية..."
                                         value={notes}
                                         onChange={e => setNotes(e.target.value)}
-                                        className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-2.5 text-xs font-bold text-slate-900 dark:text-white outline-none focus:border-emerald-600 transition resize-none"
+                                        className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-2 text-xs font-bold text-slate-900 dark:text-white outline-none focus:border-emerald-600 transition resize-none"
                                     />
                                 </div>
                             </div>
 
-                            {/* Workflow Status Selector */}
-                            <div>
-                                <label className="block text-xs font-black text-slate-700 dark:text-slate-300 mb-1.5">
-                                    حالة الفاتورة (Workflow Status)
-                                </label>
-                                <div className="grid grid-cols-3 gap-2">
-                                    <button
-                                        type="button"
-                                        onClick={() => setInvoiceStatus('draft')}
-                                        className={`py-2 px-2 rounded-xl text-[11px] font-black transition border flex items-center justify-center gap-1 ${
-                                            invoiceStatus === 'draft'
-                                                ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
-                                                : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700'
-                                        }`}
-                                    >
-                                        <span>مسودة (Draft)</span>
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => setInvoiceStatus('completed')}
-                                        className={`py-2 px-2 rounded-xl text-[11px] font-black transition border flex items-center justify-center gap-1 ${
-                                            invoiceStatus === 'completed'
-                                                ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
-                                                : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700'
-                                        }`}
-                                    >
-                                        <span>مكتملة (Approved)</span>
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => setInvoiceStatus('cancelled')}
-                                        className={`py-2 px-2 rounded-xl text-[11px] font-black transition border flex items-center justify-center gap-1 ${
-                                            invoiceStatus === 'cancelled'
-                                                ? 'bg-rose-600 text-white border-rose-600 shadow-sm'
-                                                : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700'
-                                        }`}
-                                    >
-                                        <span>ملغاة (Cancelled)</span>
-                                    </button>
-                                </div>
-                            </div>
-
-                            {/* 3. السعر والعمولة/الخصم والإجمالي في نفس السطر (Row Layout) */}
-                            <div className="bg-emerald-50/70 dark:bg-emerald-950/40 p-3 rounded-2xl border border-emerald-100 dark:border-emerald-900/40 space-y-2">
-                                <div className="grid grid-cols-3 gap-2 items-center text-center">
-                                    {/* الإجمالي قبل الخصم */}
-                                    <div className="bg-white dark:bg-slate-900 p-2 rounded-xl border border-slate-200 dark:border-slate-700 flex flex-col justify-center">
-                                        <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-0.5">الإجمالي ({totalCardsQty} كارت)</span>
-                                        <span className="text-xs font-black text-slate-900 dark:text-white truncate" dir="ltr">
-                                            {invoiceTotal} ريال يمني
-                                        </span>
-                                    </div>
-
-                                    {/* الخصم / العمولة */}
-                                    <div className="bg-white dark:bg-slate-900 p-2 rounded-xl border border-slate-200 dark:border-slate-700 flex flex-col justify-center">
-                                        <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-0.5">عمولة الموزع (%)</span>
-                                        {saleType !== 'distributor' ? (
-                                            <input
-                                                type="number"
-                                                min="0"
-                                                max="100"
-                                                step="any"
-                                                value={commissionPercent}
-                                                onChange={(e) => setCommissionPercent(parseFloat(e.target.value) || 0)}
-                                                className="w-14 mx-auto bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded text-center text-xs font-black text-amber-600 outline-none p-0.5"
-                                            />
-                                        ) : (
-                                            <span className="text-xs font-black text-amber-600">{commissionPercent}%</span>
-                                        )}
-                                    </div>
-
-                                    {/* صافي المطلوب */}
-                                    <div className="bg-emerald-600 text-white p-2 rounded-xl flex flex-col justify-center shadow-sm">
-                                        <span className="text-[10px] font-bold text-emerald-100 mb-0.5">الصافي المطلوب</span>
-                                        <span className="text-xs font-black truncate" dir="ltr">
-                                            {netTotal.toFixed(2)} ريال يمني
-                                        </span>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div className="pt-2 flex items-center gap-2">
+                            <div className="pt-1 flex items-center gap-2">
                                 <button
                                     type="button"
                                     onClick={handleConfirmCheckout}
                                     disabled={saving}
-                                    className="flex-1 py-3.5 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-black text-xs rounded-2xl shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2 transition disabled:opacity-50"
+                                    className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-black text-xs rounded-2xl shadow-md shadow-emerald-600/20 flex items-center justify-center gap-2 transition disabled:opacity-50"
                                 >
-                                    <CheckCircle2 size={18} />
-                                    <span>{saving ? 'جاري الحفظ والإنهاء...' : 'تأكيد وإتمام البيع وطباعة الفاتورة'}</span>
+                                    <CheckCircle2 size={16} />
+                                    <span>{saving ? (editingInvoice ? 'جاري حفظ التعديلات...' : 'جاري الحفظ والإنهاء...') : (editingInvoice ? 'حفظ تعديلات الفاتورة' : 'تأكيد وإتمام البيع وطباعة الفاتورة')}</span>
                                 </button>
                                 <button
                                     type="button"
                                     onClick={() => setShowPaymentModal(false)}
-                                    className="px-4 py-3.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-bold text-xs rounded-2xl transition"
+                                    className="px-3.5 py-3 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-bold text-xs rounded-2xl transition"
                                 >
                                     تراجع
                                 </button>
@@ -1376,6 +1517,48 @@ export default function CardSaleModal({ isOpen, onClose, categoryName, onSuccess
                         </div>
 
                         <div className="space-y-3">
+                            {/* نوع البيع */}
+                            <div>
+                                <label className="block text-xs font-black text-slate-700 dark:text-slate-300 mb-1.5 whitespace-nowrap">
+                                    نوع البيع
+                                </label>
+                                <div className="grid grid-cols-3 gap-1.5">
+                                    <button
+                                        type="button"
+                                        onClick={() => handleEditItemSaleTypeChange('retail')}
+                                        className={`py-2 px-1.5 rounded-xl text-xs font-black transition border ${
+                                            editItemSaleType === 'retail'
+                                                ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                                                : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700'
+                                        }`}
+                                    >
+                                        تجزئة (قطاعي)
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => handleEditItemSaleTypeChange('wholesale')}
+                                        className={`py-2 px-1.5 rounded-xl text-xs font-black transition border ${
+                                            editItemSaleType === 'wholesale'
+                                                ? 'bg-purple-600 text-white border-purple-600 shadow-sm'
+                                                : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700'
+                                        }`}
+                                    >
+                                        جملة
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => handleEditItemSaleTypeChange('distributor')}
+                                        className={`py-2 px-1.5 rounded-xl text-xs font-black transition border ${
+                                            editItemSaleType === 'distributor'
+                                                ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
+                                                : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700'
+                                        }`}
+                                    >
+                                        موزع
+                                    </button>
+                                </div>
+                            </div>
+
                             {/* عدد الكروت / الكمية */}
                             <div>
                                 <label className="block text-xs font-black text-slate-700 dark:text-slate-300 mb-1.5 whitespace-nowrap">

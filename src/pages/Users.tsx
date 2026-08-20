@@ -39,9 +39,11 @@ export const getInitPerms = (): AppPermissions => ({
     cards_distributors: { ...defaultModulePerms },
     cards_sellers: { ...defaultModulePerms },
     cards_sales_report: { ...defaultModulePerms },
+    cards_sales_invoices: { ...defaultModulePerms },
     cards_cashbox: { ...defaultModulePerms },
     cards_vouchers: { ...defaultModulePerms },
     cards_exchanges: { ...defaultModulePerms },
+    employees: { ...defaultModulePerms, view: true },
     backup: false
 });
 
@@ -56,6 +58,7 @@ export const getAdminPerms = (): AppPermissions => {
         customers: { ...adminP },
         suppliers: { ...adminP },
         users: { ...adminP },
+        employees: { ...adminP },
         settings: { ...adminP },
         reports: { ...adminP },
         quotations: { ...adminP },
@@ -66,6 +69,7 @@ export const getAdminPerms = (): AppPermissions => {
         cards_distributors: { ...adminP },
         cards_sellers: { ...adminP },
         cards_sales_report: { ...adminP },
+        cards_sales_invoices: { ...adminP },
         cards_cashbox: { ...adminP },
         cards_vouchers: { ...adminP },
         cards_exchanges: { ...adminP },
@@ -83,6 +87,7 @@ export const modulesMap: Record<keyof Omit<AppPermissions, 'edit' | 'add' | 'del
     products: 'المنتجات',
     customers: 'العملاء',
     suppliers: 'الموردين',
+    employees: 'الموظفين (كشف الحساب والبيانات)',
     users: 'المستخدمين',
     settings: 'الإعدادات',
     reports: 'التقارير',
@@ -92,6 +97,7 @@ export const modulesMap: Record<keyof Omit<AppPermissions, 'edit' | 'add' | 'del
     cards_distributors: 'موزعي الكروت وحساباتهم',
     cards_sellers: 'بائعي الكروت وعمولات التجزئة',
     cards_sales_report: 'تقرير مبيعات الكروت الشهرية',
+    cards_sales_invoices: 'فواتير مبيعات الكروت وتعديلها',
     cards_cashbox: 'صندوق مبيعات الكروت',
     cards_vouchers: 'سندات قبض وصرف الموزعين',
     cards_exchanges: 'استبدال الكروت'
@@ -232,7 +238,16 @@ export default function Users() {
     };
 
     const openEditPermissions = (user: UserData) => {
-        setEditPermissions(user.permissions || getInitPerms());
+        const base = getInitPerms();
+        const userPerms = user.permissions || {};
+        const merged: AppPermissions = {
+            ...base,
+            ...userPerms,
+            employees: userPerms.employees !== undefined 
+                ? userPerms.employees 
+                : { ...defaultModulePerms, view: true }
+        };
+        setEditPermissions(merged);
         setEditingUserId(user.id);
     };
 

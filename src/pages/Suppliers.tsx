@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { collection, query, onSnapshot, addDoc, updateDoc, doc, deleteDoc, where, writeBatch } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { LocalCache } from '../lib/localCache';
 import { useAuthStore } from '../store/authStore';
-import { Plus, Search, Truck, Edit2, X, Upload, Trash2, ArrowLeft } from 'lucide-react';
+import { Plus, RefreshCw, Search, Truck, Edit2, X, Upload, Trash2, ArrowLeft } from 'lucide-react';
 import { logUserAction } from '../lib/logger';
 import * as XLSX from 'xlsx';
 import ImportMapper from '../components/ImportMapper';
@@ -34,6 +35,7 @@ export default function Suppliers() {
         rows: []
     });
     
+    const [isRefreshing, setIsRefreshing] = useState(false);
     const [name, setName] = useState('');
     const [phone, setPhone] = useState('');
     const [address, setAddress] = useState('');
@@ -97,6 +99,9 @@ export default function Suppliers() {
         if (confirm(`هل أنت متأكد من حذف المورد: ${supp.name}؟`)) {
             try {
                 const deletePromise = deleteDoc(doc(db, 'suppliers', supp.id));
+                await LocalCache.removeCachedItem('suppliers', appUser?.tenantId || 'single_store', supp.id);
+                setSuppliers(prev => prev.filter(s => s.id !== supp.id));
+                if (editingSupplier?.id === supp.id) setEditingSupplier(null);
                 const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Network timeout')), 10000));
                 await Promise.race([deletePromise, timeoutPromise]);
                 await logUserAction('حذف مورد', `تم حذف المورد: ${supp.name}`);
@@ -112,16 +117,19 @@ export default function Suppliers() {
         try {
             const tenantId = appUser?.tenantId || 'single_store';
             if (editingSupplier) {
-                await updateDoc(doc(db, 'suppliers', editingSupplier.id), {
+                const payload = {
                     name,
                     phone,
                     address,
                     balance: parseFloat(balance) || 0,
                     updatedAt: Date.now()
-                });
+                };
+                await updateDoc(doc(db, 'suppliers', editingSupplier.id), payload);
+                await LocalCache.updateCachedItem('suppliers', tenantId, { id: editingSupplier.id, ...payload });
+                setSuppliers(prev => prev.map(s => s.id === editingSupplier.id ? { ...s, ...payload } : s));
                 await logUserAction('تعديل مورد', `تم تعديل بيانات المورد: ${name}`);
             } else {
-                await addDoc(collection(db, 'suppliers'), {
+                const payload = {
                     name,
                     phone,
                     address,
@@ -129,7 +137,11 @@ export default function Suppliers() {
                     tenantId,
                     createdAt: Date.now(),
                     updatedAt: Date.now()
-                });
+                };
+                const docRef = await addDoc(collection(db, 'suppliers'), payload);
+                const newSupplier = { id: docRef.id, ...payload };
+                await LocalCache.updateCachedItem('suppliers', tenantId, newSupplier);
+                setSuppliers(prev => [newSupplier, ...prev]);
                 await logUserAction('إضافة مورد', `تم إضافة المورد: ${name}`);
             }
 

@@ -301,68 +301,67 @@ export default function NotificationsMenu() {
             </button>
 
             {isOpen && (
-                <div className="absolute left-0 mt-2 w-80 md:w-96 bg-card-bg rounded-2xl shadow-2xl border border-border-main z-50 flex flex-col max-h-[85vh] overflow-hidden" dir="rtl">
+                <div className="fixed inset-x-2 top-14 sm:absolute sm:inset-auto sm:left-0 sm:top-auto sm:mt-2 w-auto sm:w-96 max-w-[calc(100vw-16px)] sm:max-w-md bg-card-bg rounded-2xl shadow-2xl border border-border-main z-50 flex flex-col max-h-[85vh] overflow-hidden" dir="rtl">
                     
                     {/* Header */}
-                    <div className="p-3 md:p-4 bg-gradient-to-r from-slate-900 to-indigo-950 text-white border-b border-border-main flex flex-col gap-2 shrink-0">
-                        <div className="flex items-center justify-between">
-                            <h3 className="font-black text-sm flex items-center gap-2 text-indigo-200">
-                                <Bell size={16} className="text-amber-400" /> تنبيهات المدير المباشرة
+                    <div className="p-2.5 sm:p-3 bg-card-bg text-text-main border-b border-border-main flex flex-col gap-2 shrink-0">
+                        <div className="flex items-center justify-between gap-2">
+                            <h3 className="font-bold text-xs sm:text-sm flex items-center gap-1.5 text-text-main">
+                                <Bell size={15} className="text-amber-500 shrink-0" />
+                                <span>تنبيهات المدير المباشرة</span>
                             </h3>
-                            {totalAlerts > 0 && (
-                                <span className="text-xs font-bold bg-red-500/20 text-red-300 px-2.5 py-0.5 rounded-full border border-red-500/40">
-                                    {totalAlerts} جديد
-                                </span>
-                            )}
+                            <div className="flex items-center gap-1.5">
+                                {totalAlerts > 0 && (
+                                    <span className="text-[11px] font-black bg-red-100 dark:bg-red-950/60 text-red-700 dark:text-red-300 px-2 py-0.5 rounded-full border border-red-200 dark:border-red-800">
+                                        {totalAlerts} جديد
+                                    </span>
+                                )}
+                                <button 
+                                    onClick={downloadReport}
+                                    className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 flex items-center gap-1 px-2 py-1 bg-indigo-50 dark:bg-indigo-950/50 rounded-lg border border-indigo-200 dark:border-indigo-800/60 transition-colors cursor-pointer"
+                                    title="تصدير كشف التنبيهات كـ PDF"
+                                >
+                                    <FileText size={13} />
+                                    <span>تصدير PDF</span>
+                                </button>
+                            </div>
                         </div>
 
-                        {/* Android Notification Support Bar */}
-                        <div className="mt-1 p-2 bg-white/10 backdrop-blur-sm rounded-xl flex items-center justify-between gap-2 border border-white/10 text-xs">
+                        {/* Android Notification Support Bar & Clear Action */}
+                        <div className="p-1.5 bg-slate-50 dark:bg-slate-900 rounded-xl flex items-center justify-between gap-2 border border-border-main text-xs">
                             <div className="flex items-center gap-1.5 min-w-0">
-                                <Smartphone size={15} className="text-emerald-400 shrink-0" />
-                                <span className="text-[11px] truncate text-slate-200 font-semibold">
-                                    إشعارات أندرويد: {notifPermission === 'granted' ? 'مفعلة 🟢' : 'غير مفعلة 🔴'}
+                                <Smartphone size={14} className="text-emerald-600 shrink-0" />
+                                <span className="text-[10px] sm:text-[11px] truncate text-text-main font-semibold">
+                                    أندرويد: {notifPermission === 'granted' ? 'مفعل 🟢' : 'غير مفعل 🔴'}
                                 </span>
                             </div>
                             <div className="flex items-center gap-1 shrink-0">
                                 {notifPermission !== 'granted' ? (
                                     <button 
                                         onClick={handleEnableAndroidNotifications}
-                                        className="px-2 py-1 bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold rounded-lg transition-all shadow active:scale-95 cursor-pointer"
+                                        className="px-2 py-0.5 bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold rounded-md transition-all shadow active:scale-95 cursor-pointer"
                                     >
-                                        تفعيل الأندرويد
+                                        تفعيل
                                     </button>
                                 ) : (
                                     <button 
                                         onClick={handleTestNotification}
-                                        className="px-2 py-1 bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold rounded-lg transition-all flex items-center gap-1 cursor-pointer"
+                                        className="px-1.5 py-0.5 bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold rounded-md transition-all flex items-center gap-0.5 cursor-pointer"
                                         title="إرسال تجربة إشعار أندرويد"
                                     >
-                                        <Volume2 size={12} />
+                                        <Volume2 size={11} />
                                         <span>تجربة</span>
                                     </button>
                                 )}
+                                {unreadInvoices.length > 0 && (
+                                    <button 
+                                        onClick={clearAllInvoiceNotifications}
+                                        className="px-2 py-0.5 bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 text-text-main text-[10px] font-bold rounded-md transition-colors cursor-pointer"
+                                    >
+                                        مسح الكل
+                                    </button>
+                                )}
                             </div>
-                        </div>
-
-                        {/* Action Toolbar */}
-                        <div className="flex items-center justify-between gap-2 mt-1">
-                            {unreadInvoices.length > 0 && (
-                                <button 
-                                    onClick={clearAllInvoiceNotifications}
-                                    className="text-[11px] font-bold text-slate-300 hover:text-white transition-colors cursor-pointer flex items-center gap-1"
-                                >
-                                    مسح إشعارات الفواتير ✓
-                                </button>
-                            )}
-                            <button 
-                                onClick={downloadReport}
-                                className="text-[10px] font-black text-amber-300 hover:text-amber-200 flex items-center gap-1 px-2 py-1 bg-white/10 rounded-lg border border-white/10 transition-colors cursor-pointer ml-auto"
-                                title="تصدير كشف التنبيهات كـ PDF"
-                            >
-                                <FileText size={12} />
-                                <span>تصدير PDF</span>
-                            </button>
                         </div>
                     </div>
                     
@@ -371,43 +370,42 @@ export default function NotificationsMenu() {
                         
                         {/* Section: New Invoices for Manager */}
                         {invoiceNotifications.length > 0 && (
-                            <div className="p-2 bg-indigo-50/50 dark:bg-indigo-950/20">
-                                <div className="p-2 text-xs font-black text-indigo-900 dark:text-indigo-300 flex items-center justify-between">
+                            <div className="p-1.5 bg-indigo-50/40 dark:bg-indigo-950/20">
+                                <div className="px-1.5 py-1 text-[11px] font-black text-indigo-900 dark:text-indigo-300 flex items-center justify-between">
                                     <span className="flex items-center gap-1">
-                                        <Receipt size={14} className="text-indigo-600" />
+                                        <Receipt size={13} className="text-indigo-600" />
                                         فواتير المستخدمين الجديدة ({invoiceNotifications.length})
                                     </span>
                                 </div>
-                                <div className="space-y-2 mt-1">
+                                <div className="space-y-1.5 mt-1">
                                     {invoiceNotifications.map((notif) => (
                                         <div 
                                             key={notif.id}
                                             onClick={() => markInvoiceNotifRead(notif.id)}
-                                            className={`p-3 rounded-xl border transition-all cursor-pointer flex items-start gap-3 relative ${
+                                            className={`p-2 rounded-xl border transition-all cursor-pointer flex items-start gap-2 relative ${
                                                 !notif.read 
-                                                    ? 'bg-white dark:bg-slate-900 border-indigo-200 dark:border-indigo-800 shadow-md ring-1 ring-indigo-500/30' 
+                                                    ? 'bg-white dark:bg-slate-900 border-indigo-200 dark:border-indigo-800 shadow-sm ring-1 ring-indigo-500/20' 
                                                     : 'bg-card-bg border-border-main opacity-80'
                                             }`}
                                         >
-                                            <div className="p-2.5 bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 rounded-xl shrink-0 mt-0.5">
-                                                <Receipt size={18} />
+                                            <div className="p-2 bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 rounded-lg shrink-0 mt-0.5">
+                                                <Receipt size={15} />
                                             </div>
                                             <div className="flex-1 min-w-0">
-                                                <div className="flex items-center justify-between gap-1 mb-1">
-                                                    <p className="text-xs font-black text-text-main truncate">
+                                                <div className="flex items-center justify-between gap-1 mb-0.5">
+                                                    <p className="text-[11px] font-black text-text-main truncate">
                                                         {notif.title}
                                                     </p>
                                                     {!notif.read && (
-                                                        <span className="text-[9px] font-black bg-emerald-500 text-white px-1.5 py-0.5 rounded-full shrink-0">
+                                                        <span className="text-[9px] font-black bg-emerald-500 text-white px-1.5 py-0.2 rounded-full shrink-0">
                                                             جديد
                                                         </span>
                                                     )}
                                                 </div>
-                                                <p className="text-xs text-text-main/80 font-semibold leading-relaxed">
+                                                <p className="text-[11px] text-text-main/80 font-semibold leading-relaxed">
                                                     {notif.body}
                                                 </p>
-                                                <div className="flex items-center justify-between text-[10px] text-text-main/50 mt-1.5 font-bold">
-                                                    <span>المستخدم: {notif.createdByName}</span>
+                                                <div className="flex items-center justify-end text-[10px] text-text-main/50 mt-1 font-bold">
                                                     <span>{new Date(notif.createdAt).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}</span>
                                                 </div>
                                             </div>
@@ -419,29 +417,29 @@ export default function NotificationsMenu() {
 
                         {/* System Inventory & Cash Alerts */}
                         {totalAlerts === 0 ? (
-                            <div className="p-8 text-center flex flex-col items-center justify-center">
-                                <PackageOpen size={44} className="text-text-main/20 mb-2" />
+                            <div className="p-6 text-center flex flex-col items-center justify-center">
+                                <PackageOpen size={36} className="text-text-main/20 mb-2" />
                                 <p className="text-text-main/60 text-xs font-bold">لا توجد تنبيهات حالياً</p>
-                                <p className="text-text-main/40 text-[11px] mt-1">سيصلك إشعار فوري وتنبيه أندرويد فور إجراء أي فاتورة جديدة.</p>
+                                <p className="text-text-main/40 text-[10px] mt-0.5">سيصلك إشعار فوري وتنبيه أندرويد فور إجراء أي فاتورة جديدة.</p>
                             </div>
                         ) : (
-                            <div className="flex flex-col">
+                            <div className="flex flex-col divide-y divide-border-main">
                                 {activeCashLow && (
                                     <div 
                                         onClick={() => dismissAlert('low-cash')}
-                                        className="p-3 md:p-4 hover:bg-bg-main transition-colors flex items-start gap-3 cursor-pointer group/item relative"
+                                        className="p-2.5 hover:bg-bg-main transition-colors flex items-start gap-2.5 cursor-pointer group/item relative"
                                     >
-                                        <div className="p-2 bg-red-100 dark:bg-red-900/40 text-red-600 dark:text-red-400 rounded-xl shrink-0">
-                                            <AlertTriangle size={18} />
+                                        <div className="p-1.5 bg-red-100 dark:bg-red-900/40 text-red-600 dark:text-red-400 rounded-lg shrink-0 mt-0.5">
+                                            <AlertTriangle size={15} />
                                         </div>
                                         <div className="flex-1 min-w-0">
-                                            <div className="flex items-center justify-between mb-1">
+                                            <div className="flex items-center justify-between mb-0.5">
                                                 <p className="text-xs font-bold text-text-main truncate">
                                                     تحذير سيولة نقدية
                                                 </p>
                                                 <span className="text-[9px] text-gray-400 group-hover/item:text-red-500 transition-colors">استبعاد ×</span>
                                             </div>
-                                            <p className="text-xs text-text-main/70 leading-relaxed font-semibold">
+                                            <p className="text-[11px] text-text-main/70 leading-relaxed font-semibold">
                                                 الرصيد الفعلي في الصندوق (<span className="text-red-600 font-bold">{cashBalance?.toFixed(2)}</span> ر.س) أقل من الحد الأدنى المطلوب (<span className="text-red-600">{settings.cashMinimumAlertThreshold}</span> ر.س).
                                             </p>
                                         </div>
@@ -452,19 +450,19 @@ export default function NotificationsMenu() {
                                     <div 
                                         key={`stock-${product.id || idx}-${idx}`} 
                                         onClick={() => dismissAlert(`low-stock-${product.id}`)}
-                                        className="p-3 md:p-4 hover:bg-bg-main transition-colors flex items-start gap-3 cursor-pointer group/item relative"
+                                        className="p-2.5 hover:bg-bg-main transition-colors flex items-start gap-2.5 cursor-pointer group/item relative"
                                     >
-                                        <div className="p-2 bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-400 rounded-xl shrink-0">
-                                            <AlertTriangle size={18} />
+                                        <div className="p-1.5 bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-400 rounded-lg shrink-0 mt-0.5">
+                                            <AlertTriangle size={15} />
                                         </div>
                                         <div className="flex-1 min-w-0">
-                                            <div className="flex items-center justify-between mb-1">
+                                            <div className="flex items-center justify-between mb-0.5">
                                                 <p className="text-xs font-bold text-text-main truncate" title={product.name}>
                                                     انخفاض مخزون: {product.name}
                                                 </p>
                                                 <span className="text-[9px] text-gray-400 group-hover/item:text-red-500 transition-colors">استبعاد ×</span>
                                             </div>
-                                            <p className="text-xs text-text-main/70 leading-relaxed font-semibold">
+                                            <p className="text-[11px] text-text-main/70 leading-relaxed font-semibold">
                                                 الكمية الحالية (<span className="text-red-600 font-bold">{product.quantity}</span>) وصلت لحد الأمان المخصص (<span className="text-amber-600">{product.lowStockAlert}</span>) أو أقل منه.
                                             </p>
                                         </div>
@@ -475,15 +473,15 @@ export default function NotificationsMenu() {
                     </div>
                     
                     {/* View All History Link */}
-                    <div className="p-3 bg-bg-main border-t border-border-main shrink-0">
+                    <div className="p-2 bg-bg-main border-t border-border-main shrink-0">
                         <button 
                             onClick={() => {
                                 setIsOpen(false);
                                 navigate('/notifications-history');
                             }}
-                            className="w-full flex items-center justify-center gap-2 text-sm font-bold text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300 py-2 rounded-xl hover:bg-indigo-50 dark:hover:bg-indigo-900/30 transition-colors"
+                            className="w-full flex items-center justify-center gap-1.5 text-xs font-bold text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300 py-1.5 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-900/30 transition-colors"
                         >
-                            <List size={16} />
+                            <List size={14} />
                             <span>عرض سجل الإشعارات كاملاً</span>
                         </button>
                     </div>

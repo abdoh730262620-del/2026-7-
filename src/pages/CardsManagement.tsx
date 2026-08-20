@@ -6,7 +6,8 @@ import {
     Share2, MessageSquare, Send, Truck, ChevronDown, ChevronUp, ShoppingBag, RefreshCw,
     Scale, Eye, Filter, BarChart3, RotateCcw
 } from 'lucide-react';
-import { collection, query, where, onSnapshot, doc, getDoc, addDoc as firestoreAddDoc, updateDoc as firestoreUpdateDoc, deleteDoc as firestoreDeleteDoc, runTransaction , getDocs, writeBatch, increment } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, doc, getDoc, addDoc as firestoreAddDoc, updateDoc as firestoreUpdateDoc, deleteDoc as firestoreDeleteDoc, runTransaction , getDocs, writeBatch, increment, limit, orderBy } from 'firebase/firestore';
+import { LocalCache } from '../lib/localCache';
 
 // Helper functions for offline-safe writes
 const safeWrite = async (promise: Promise<any>) => {
@@ -79,7 +80,7 @@ export default function CardsManagement() {
         if (secId === 'distributors') return 'cards_distributors';
         if (secId === 'sellers') return 'cards_sellers';
         if (secId === 'monthly_sales') return 'cards_sales_report';
-        if (secId === 'card_sales_section') return 'cards_sales_report';
+        if (secId === 'card_sales_section') return 'cards_sales_invoices';
         if (secId === 'card_purchases_section') return 'cards_stock';
         if (secId === 'sales_cashbox') return 'cards_cashbox';
         if (secId === 'vouchers') return 'cards_vouchers';
@@ -94,6 +95,7 @@ export default function CardsManagement() {
         getSecPermission('cards_distributors', 'view') ||
         getSecPermission('cards_sellers', 'view') ||
         getSecPermission('cards_sales_report', 'view') ||
+        getSecPermission('cards_sales_invoices', 'view') ||
         getSecPermission('cards_cashbox', 'view') ||
         getSecPermission('cards_vouchers', 'view');
 
@@ -706,80 +708,75 @@ export default function CardsManagement() {
     const [expandedMonthlySalesInvoices, setExpandedMonthlySalesInvoices] = useState<Record<string, boolean>>({});
     const [expandedMonthlyPurchaseInvoices, setExpandedMonthlyPurchaseInvoices] = useState<Record<string, boolean>>({});
 
-    // Firebase Subscriptions
+    const [isRefreshing, setIsRefreshing] = useState(false);
+    const [lastUpdated, setLastUpdated] = useState<number | null>(null);
+
+    const loadCardsData = async (force = false) => {
+        setIsRefreshing(true);
+        try {
+            // 1. Categories
+            const qCat = query(collection(db, 'card_categories'), where('tenantId', '==', tenantId));
+            const catRes = await LocalCache.fetchCollection<CardCategory>('card_categories', tenantId, qCat, { forceRefresh: force });
+            setCategories(catRes.data);
+
+            // 2. Suppliers
+            const qSupp = query(collection(db, 'card_suppliers'), where('tenantId', '==', tenantId));
+            const suppRes = await LocalCache.fetchCollection<CardSupplier>('card_suppliers', tenantId, qSupp, { forceRefresh: force });
+            setSuppliers(suppRes.data);
+
+            // 3. Distributors
+            const qDist = query(collection(db, 'card_distributors'), where('tenantId', '==', tenantId));
+            const distRes = await LocalCache.fetchCollection<CardDistributor>('card_distributors', tenantId, qDist, { forceRefresh: force });
+            setDistributors(distRes.data);
+
+            // 4. Logs
+            const qLogs = query(collection(db, 'card_stock_logs'), where('tenantId', '==', tenantId), limit(100));
+            const logsRes = await LocalCache.fetchCollection<CardStockLog>('card_stock_logs', tenantId, qLogs, { forceRefresh: force });
+            const logsSorted = [...logsRes.data].sort((a, b) => b.additionDate.localeCompare(a.additionDate));
+            setStockLogs(logsSorted);
+
+            // 5. Sales
+            const qSales = query(collection(db, 'card_sales'), where('tenantId', '==', tenantId), limit(100));
+            const salesRes = await LocalCache.fetchCollection<CardSale>('card_sales', tenantId, qSales, { forceRefresh: force });
+            const salesSorted = [...salesRes.data].sort((a, b) => b.dateTime.localeCompare(a.dateTime));
+            setSales(salesSorted);
+
+            // 6. Vouchers
+            const qVouch = query(collection(db, 'card_vouchers'), where('tenantId', '==', tenantId), limit(100));
+            const vouchRes = await LocalCache.fetchCollection<CardVoucher>('card_vouchers', tenantId, qVouch, { forceRefresh: force });
+            const vouchSorted = [...vouchRes.data].sort((a, b) => (b.dateTime || b.date || '').toString().localeCompare((a.dateTime || a.date || '').toString()));
+            setVouchers(vouchSorted);
+
+            // 7. Cashbox
+            const qCash = query(collection(db, 'card_cashbox'), where('tenantId', '==', tenantId), limit(100));
+            const cashRes = await LocalCache.fetchCollection<CardCashboxEntry>('card_cashbox', tenantId, qCash, { forceRefresh: force });
+            const cashSorted = [...cashRes.data].sort((a, b) => (b.dateTime || b.date || '').toString().localeCompare((a.dateTime || a.date || '').toString()));
+            setCashboxEntries(cashSorted);
+
+            // 8. Purchases
+            const qPurchases = query(collection(db, 'card_purchases'), where('tenantId', '==', tenantId), limit(100));
+            const purchasesRes = await LocalCache.fetchCollection<CardPurchase>('card_purchases', tenantId, qPurchases, { forceRefresh: force });
+            const purchasesSorted = [...purchasesRes.data].sort((a, b) => (b.dateTime || '').localeCompare(a.dateTime || ''));
+            setPurchases(purchasesSorted);
+
+            // 9. Purchase Vouchers
+            const qPVouch = query(collection(db, 'card_purchase_vouchers'), where('tenantId', '==', tenantId), limit(100));
+            const pVouchRes = await LocalCache.fetchCollection<CardPurchaseVoucher>('card_purchase_vouchers', tenantId, qPVouch, { forceRefresh: force });
+            const pVouchSorted = [...pVouchRes.data].sort((a, b) => (b.dateTime || '').localeCompare(a.dateTime || ''));
+            setPurchaseVouchers(pVouchSorted);
+
+            const meta = await LocalCache.getMetadata('card_categories', tenantId);
+            setLastUpdated(meta?.lastUpdated || Date.now());
+        } catch (err) {
+            console.error('Failed to fetch cards management data:', err);
+        } finally {
+            setIsRefreshing(false);
+        }
+    };
+
     useEffect(() => {
-        const qCat = query(collection(db, 'card_categories'), where('tenantId', '==', tenantId));
-        const unsubCat = onSnapshot(qCat, (snap) => {
-            const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as CardCategory));
-            setCategories(list);
-        });
-
-        const qSupp = query(collection(db, 'card_suppliers'), where('tenantId', '==', tenantId));
-        const unsubSupp = onSnapshot(qSupp, (snap) => {
-            const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as CardSupplier));
-            setSuppliers(list);
-        });
-
-        const qDist = query(collection(db, 'card_distributors'), where('tenantId', '==', tenantId));
-        const unsubDist = onSnapshot(qDist, (snap) => {
-            const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as CardDistributor));
-            setDistributors(list);
-        });
-
-        const qLogs = query(collection(db, 'card_stock_logs'), where('tenantId', '==', tenantId));
-        const unsubLogs = onSnapshot(qLogs, (snap) => {
-            const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as CardStockLog));
-            list.sort((a, b) => b.additionDate.localeCompare(a.additionDate));
-            setStockLogs(list);
-        });
-
-        const qSales = query(collection(db, 'card_sales'), where('tenantId', '==', tenantId));
-        const unsubSales = onSnapshot(qSales, (snap) => {
-            const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as CardSale));
-            list.sort((a, b) => b.dateTime.localeCompare(a.dateTime));
-            setSales(list);
-        });
-
-        const qVouch = query(collection(db, 'card_vouchers'), where('tenantId', '==', tenantId));
-        const unsubVouch = onSnapshot(qVouch, (snap) => {
-            const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as CardVoucher));
-            list.sort((a, b) => b.dateTime.localeCompare(a.dateTime));
-            setVouchers(list);
-        });
-
-        const qCash = query(collection(db, 'card_cashbox'), where('tenantId', '==', tenantId));
-        const unsubCash = onSnapshot(qCash, (snap) => {
-            const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as CardCashboxEntry));
-            list.sort((a, b) => b.dateTime.localeCompare(a.dateTime));
-            setCashboxEntries(list);
-        });
-
-        const qPurchases = query(collection(db, 'card_purchases'), where('tenantId', '==', tenantId));
-        const unsubPurchases = onSnapshot(qPurchases, (snap) => {
-            const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as CardPurchase));
-            list.sort((a, b) => (b.dateTime || '').localeCompare(a.dateTime || ''));
-            setPurchases(list);
-        });
-
-        const qPVouch = query(collection(db, 'card_purchase_vouchers'), where('tenantId', '==', tenantId));
-        const unsubPVouch = onSnapshot(qPVouch, (snap) => {
-            const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as CardPurchaseVoucher));
-            list.sort((a, b) => (b.dateTime || '').localeCompare(a.dateTime || ''));
-            setPurchaseVouchers(list);
-        });
-
-        return () => {
-            unsubCat();
-            unsubSupp();
-            unsubDist();
-            unsubLogs();
-            unsubSales();
-            unsubVouch();
-            unsubCash();
-            unsubPurchases();
-            unsubPVouch();
-        };
-    }, []);
+        loadCardsData(false);
+    }, [tenantId]);
 
     // Handle global Layout header back action to go back between sections
     useEffect(() => {
@@ -1004,7 +1001,28 @@ export default function CardsManagement() {
         const now = new Date();
         const dateStr = now.toISOString().split('T')[0];
         const timeStr = now.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
-        const voucherNo = `V-CARD-${Date.now().toString().slice(-6)}`;
+        
+        let nextVoucherNum = 1;
+        try {
+            const qV = query(collection(db, 'card_vouchers'), where('tenantId', '==', tenantId));
+            const snapV = await getDocs(qV);
+            if (!snapV.empty) {
+                const nums = snapV.docs.map(d => {
+                    const vn = d.data().voucherNumber;
+                    if (typeof vn === 'number') return vn;
+                    if (typeof vn === 'string') {
+                        const digits = vn.replace(/\D/g, '');
+                        return digits ? parseInt(digits, 10) : 0;
+                    }
+                    return 0;
+                }).filter(n => !isNaN(n) && n > 0);
+                if (nums.length > 0) nextVoucherNum = Math.max(...nums) + 1;
+            }
+        } catch (e) {
+            console.error('Error getting next voucher number:', e);
+            nextVoucherNum = Date.now();
+        }
+        const voucherNo = nextVoucherNum.toString();
         const staffName = appUser?.name || appUser?.email || 'المدير';
 
         try {
@@ -1589,7 +1607,28 @@ export default function CardsManagement() {
         const now = new Date();
         const dateStr = now.toISOString().split('T')[0];
         const timeStr = now.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
-        const voucherNo = `V-SUPP-${Date.now().toString().slice(-6)}`;
+        
+        let nextPurchaseVoucherNum = 1;
+        try {
+            const qPV = query(collection(db, 'card_purchase_vouchers'), where('tenantId', '==', tenantId));
+            const snapPV = await getDocs(qPV);
+            if (!snapPV.empty) {
+                const nums = snapPV.docs.map(d => {
+                    const vn = d.data().voucherNumber;
+                    if (typeof vn === 'number') return vn;
+                    if (typeof vn === 'string') {
+                        const digits = vn.replace(/\D/g, '');
+                        return digits ? parseInt(digits, 10) : 0;
+                    }
+                    return 0;
+                }).filter(n => !isNaN(n) && n > 0);
+                if (nums.length > 0) nextPurchaseVoucherNum = Math.max(...nums) + 1;
+            }
+        } catch (e) {
+            console.error('Error getting next purchase voucher number:', e);
+            nextPurchaseVoucherNum = Date.now();
+        }
+        const voucherNo = nextPurchaseVoucherNum.toString();
         const staffName = appUser?.name || appUser?.email || 'المدير';
 
         try {
@@ -2048,6 +2087,23 @@ export default function CardsManagement() {
 
     return (
         <div className="p-4 sm:p-6 space-y-6 dir-rtl max-w-7xl mx-auto" dir="rtl">
+            {/* Cache Status & Refresh Cards Button */}
+            {!activeSection && (
+                <div className="flex flex-wrap items-center justify-between gap-3 p-4 bg-indigo-50/50 dark:bg-slate-900/40 border border-indigo-100/50 dark:border-slate-800 rounded-2xl shrink-0">
+                    <span className="text-xs font-bold text-indigo-700 dark:text-indigo-400 flex items-center gap-1.5">
+                        <Layers size={16} />
+                        <span>آخر تحديث لإدارة الكروت: {lastUpdated ? new Date(lastUpdated).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }) : 'مؤخراً'}</span>
+                    </span>
+                    <button
+                        onClick={() => loadCardsData(true)}
+                        disabled={isRefreshing}
+                        className="flex items-center gap-1.5 px-4 py-2 bg-white dark:bg-slate-800 border border-indigo-200 dark:border-slate-700 text-indigo-700 dark:text-indigo-400 disabled:opacity-50 text-xs font-black rounded-xl transition hover:bg-indigo-50 shadow-xs cursor-pointer"
+                    >
+                        <RefreshCw size={14} className={`${isRefreshing ? 'animate-spin' : ''}`} />
+                        <span>{isRefreshing ? 'جاري التحديث...' : 'تحديث بيانات الكروت والحسابات'}</span>
+                    </button>
+                </div>
+            )}
             {/* MAIN VIEW: 7 Square Cards (أقسام مربعة مثل القائمة الرئيسية) */}
             {!activeSection && (
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 md:gap-5">
@@ -5302,8 +5358,8 @@ export default function CardsManagement() {
                         setActionModalInvoice(invoice);
                         setActionModalOpen(true);
                     }}
-                    onEditInvoice={getSecPermission('cards_sales_report', 'edit') ? handleEditSaleInvoice : undefined}
-                    onCancelInvoice={getSecPermission('cards_sales_report', 'delete') ? handleCancelSaleInvoice : undefined}
+                    onEditInvoice={(getSecPermission('cards_sales_invoices', 'edit') || getSecPermission('cards_sales_report', 'edit')) ? handleEditSaleInvoice : undefined}
+                    onCancelInvoice={(getSecPermission('cards_sales_invoices', 'delete') || getSecPermission('cards_sales_report', 'delete')) ? handleCancelSaleInvoice : undefined}
                     appUser={appUser}
                 />
             )}

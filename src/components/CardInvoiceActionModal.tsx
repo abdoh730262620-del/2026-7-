@@ -279,9 +279,9 @@ export const CardInvoiceActionModal: React.FC<CardInvoiceActionModalProps> = ({
                         </div>
 
                         {/* Total Summary */}
-                        <div className="bg-slate-900 text-white p-4 rounded-2xl flex items-center justify-between">
-                            <span className="text-xs font-black text-slate-300">الإجمالي الصافي للفاتورة:</span>
-                            <span className="text-base font-black font-mono text-emerald-400" dir="ltr">
+                        <div className="bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/60 p-4 rounded-2xl flex items-center justify-between shadow-xs">
+                            <span className="text-xs font-black text-emerald-900 dark:text-emerald-300">الإجمالي الصافي للفاتورة:</span>
+                            <span className="text-base font-black font-mono text-emerald-700 dark:text-emerald-400" dir="ltr">
                                 {Math.abs(invoice.totalAmount).toFixed(2)} ريال يمني
                             </span>
                         </div>

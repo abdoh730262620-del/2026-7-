@@ -1,15 +1,55 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
-import { Users, DatabaseZap, ShieldCheck, ChevronLeft, Printer, Smartphone, Cpu, Palette, Terminal, RefreshCw } from 'lucide-react';
+import { Users, DatabaseZap, ShieldCheck, ChevronLeft, Printer, Smartphone, Cpu, Palette, Terminal, RefreshCw, CheckCircle2 } from 'lucide-react';
+import { LocalCache } from '../lib/localCache';
 
 export default function SettingsLayout() {
     const navigate = useNavigate();
     const { appUser } = useAuthStore();
+    const [isRefreshing, setIsRefreshing] = useState(false);
+    const [showSuccess, setShowSuccess] = useState(false);
+    const [cacheSize, setCacheSize] = useState<number>(0);
+
+    const loadCacheSize = async () => {
+        if (appUser?.tenantId) {
+            const size = await LocalCache.getCacheSize(appUser.tenantId);
+            setCacheSize(size);
+        }
+    };
+
+    useEffect(() => {
+        loadCacheSize();
+    }, [appUser?.tenantId]);
+
+    const formatBytes = (bytes: number, decimals = 2) => {
+        if (!+bytes) return '0 Bytes';
+        const k = 1024;
+        const dm = decimals < 0 ? 0 : decimals;
+        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
+    };
 
     if (appUser?.role !== 'admin') {
         return <div className="p-5 md:p-8 text-center text-red-600 font-bold text-base md:text-xl">ليس لديك صلاحية للوصول إلى هذه الصفحة</div>;
     }
+
+    const handleClearCache = async () => {
+        setIsRefreshing(true);
+        try {
+            await LocalCache.clear(appUser?.tenantId);
+            await loadCacheSize();
+            // Optionally clear all cache without tenant ID restriction if we wanted to
+            setShowSuccess(true);
+            setTimeout(() => setShowSuccess(false), 3000);
+        } catch (error) {
+            console.error('Failed to clear cache:', error);
+            alert('حدث خطأ أثناء تفريغ الكاش');
+        } finally {
+            setIsRefreshing(false);
+        }
+    };
 
     const tabs = [
         { 
@@ -100,6 +140,45 @@ export default function SettingsLayout() {
                         <ChevronLeft size={20} className="text-gray-300 dark:text-slate-600 group-hover:text-black dark:group-hover:text-white transition-colors shrink-0 mr-2" />
                     </Link>
                 ))}
+            </div>
+
+            {/* Cache Management Section */}
+            <div className="mt-6 bg-white dark:bg-slate-950 rounded-2xl shadow-sm border border-gray-100 dark:border-slate-800 p-4 md:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                    <h2 className="text-sm md:text-base font-bold text-black dark:text-white flex items-center gap-2 mb-1">
+                        <DatabaseZap size={18} className="text-indigo-600 dark:text-indigo-400" />
+                        تحديث ومزامنة البيانات (مسح الكاش)
+                    </h2>
+                    <p className="text-xs md:text-sm text-gray-500 dark:text-gray-400">
+                        استخدم هذا الخيار لمسح البيانات المخزنة مؤقتاً في التطبيق لإجبار جلب أحدث البيانات من السيرفر.
+                        {cacheSize > 0 && (
+                            <span className="block mt-2 font-semibold text-indigo-600 dark:text-indigo-400">
+                                حجم البيانات المستهلكة حالياً: {formatBytes(cacheSize)}
+                            </span>
+                        )}
+                    </p>
+                </div>
+                <button
+                    onClick={handleClearCache}
+                    disabled={isRefreshing || showSuccess}
+                    className={`shrink-0 flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all shadow-sm ${
+                        showSuccess 
+                            ? 'bg-emerald-100 text-emerald-700 border border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400 dark:border-emerald-800'
+                            : 'bg-indigo-600 hover:bg-indigo-700 text-white active:scale-95 disabled:opacity-50'
+                    }`}
+                >
+                    {showSuccess ? (
+                        <>
+                            <CheckCircle2 size={18} />
+                            <span>تم التحديث</span>
+                        </>
+                    ) : (
+                        <>
+                            <RefreshCw size={18} className={isRefreshing ? 'animate-spin' : ''} />
+                            <span>{isRefreshing ? 'جاري المسح...' : 'تفريغ الكاش'}</span>
+                        </>
+                    )}
+                </button>
             </div>
         </div>
     );

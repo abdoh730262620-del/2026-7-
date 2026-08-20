@@ -42,9 +42,29 @@ export const EmployeeMetricDetailModal: React.FC<EmployeeMetricDetailModalProps>
 }) => {
     const settings = useSettingsStore(state => state.settings);
     const [searchTerm, setSearchTerm] = useState('');
+    const [cardFilterType, setCardFilterType] = useState<'all' | 'retail' | 'wholesale'>('all');
     const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
 
     if (!isOpen) return null;
+
+    const isCardMetric = ['card_cash', 'card_credit', 'salary_comm'].includes(metricType);
+
+    // Calculate separated card metrics
+    const retailItemsAll = items.filter(item => item.saleType !== 'wholesale' && item.saleType !== 'distributor' && !item.distributorId);
+    const wholesaleItemsAll = items.filter(item => item.saleType === 'wholesale' || item.saleType === 'distributor' || Boolean(item.distributorId));
+
+    const totRetailAmount = retailItemsAll.reduce((sum, item) => sum + (Number(item.totalAmount) || 0), 0);
+    const totRetailQty = retailItemsAll.reduce((sum, item) => sum + (Number(item.quantity) || 1), 0);
+    const totRetailCommissions = retailItemsAll.reduce((sum, item) => {
+        const comm = typeof item.commissionAmount === 'number'
+            ? item.commissionAmount
+            : ((Number(item.totalAmount) || 0) * (typeof item.commissionPercent === 'number' ? item.commissionPercent / 100 : 0.1));
+        return sum + comm;
+    }, 0);
+
+    const totWholesaleAmount = wholesaleItemsAll.reduce((sum, item) => sum + (Number(item.totalAmount) || 0), 0);
+    const totWholesaleQty = wholesaleItemsAll.reduce((sum, item) => sum + (Number(item.quantity) || 1), 0);
+    const grandCardsAmount = totRetailAmount + totWholesaleAmount;
 
     const getMetricConfig = () => {
         switch (metricType) {
@@ -102,8 +122,14 @@ export const EmployeeMetricDetailModal: React.FC<EmployeeMetricDetailModalProps>
     const config = getMetricConfig();
     const MetricIcon = config.icon;
 
-    // Filter items based on search term
+    // Filter items based on search term and cardFilterType
     const filteredItems = items.filter(item => {
+        if (isCardMetric && cardFilterType !== 'all') {
+            const isWholesale = item.saleType === 'wholesale' || item.saleType === 'distributor' || Boolean(item.distributorId);
+            if (cardFilterType === 'wholesale' && !isWholesale) return false;
+            if (cardFilterType === 'retail' && isWholesale) return false;
+        }
+
         if (!searchTerm.trim()) return true;
         const term = searchTerm.trim().toLowerCase();
         const invNum = (item.invoiceNumber || item.id || '').toString().toLowerCase();
@@ -318,20 +344,64 @@ export const EmployeeMetricDetailModal: React.FC<EmployeeMetricDetailModalProps>
                     </div>
                 </div>
 
-                {/* Sub-Header Controls (Search) */}
-                <div className="px-3 py-2 border-b border-slate-100 dark:border-slate-800/80 bg-white dark:bg-slate-900 flex items-center justify-between gap-2 shrink-0">
-                    <div className="relative flex-1 max-w-xs sm:max-w-sm">
-                        <Search size={13} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                        <input
-                            type="text"
-                            placeholder="بحث برقم الفاتورة أو الاسم..."
-                            value={searchTerm}
-                            onChange={(e) => setSearchTerm(e.target.value)}
-                            className="w-full pr-7 pl-2 py-1 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-medium outline-none focus:border-indigo-500 text-slate-900 dark:text-slate-100"
-                        />
+                {/* Sub-Header Controls (Search & Card Category Sub-filters) */}
+                <div className="px-3 py-2 border-b border-slate-100 dark:border-slate-800/80 bg-white dark:bg-slate-900 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shrink-0">
+                    <div className="flex items-center gap-2 flex-1">
+                        <div className="relative flex-1 max-w-xs sm:max-w-sm">
+                            <Search size={13} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                            <input
+                                type="text"
+                                placeholder="بحث برقم الفاتورة أو الاسم..."
+                                value={searchTerm}
+                                onChange={(e) => setSearchTerm(e.target.value)}
+                                className="w-full pr-7 pl-2 py-1 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-medium outline-none focus:border-indigo-500 text-slate-900 dark:text-slate-100"
+                            />
+                        </div>
+
+                        {/* Card Sub-Filters (الكل / قطاعي / جملة) */}
+                        {isCardMetric && (
+                            <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-0.5 rounded-lg shrink-0">
+                                <button
+                                    type="button"
+                                    onClick={() => setCardFilterType('all')}
+                                    className={`px-2 py-1 rounded-md text-[11px] font-extrabold transition cursor-pointer ${
+                                        cardFilterType === 'all'
+                                            ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs'
+                                            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                                    }`}
+                                >
+                                    الكل ({items.length})
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setCardFilterType('retail')}
+                                    className={`px-2 py-1 rounded-md text-[11px] font-extrabold transition cursor-pointer flex items-center gap-1 ${
+                                        cardFilterType === 'retail'
+                                            ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
+                                            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                                    }`}
+                                >
+                                    <span>قطاعي ({retailItemsAll.length})</span>
+                                    <span className="text-[9px] px-1 py-0.2 bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 rounded font-mono">10%</span>
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setCardFilterType('wholesale')}
+                                    className={`px-2 py-1 rounded-md text-[11px] font-extrabold transition cursor-pointer flex items-center gap-1 ${
+                                        cardFilterType === 'wholesale'
+                                            ? 'bg-white dark:bg-slate-900 text-purple-600 dark:text-purple-400 shadow-xs'
+                                            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                                    }`}
+                                >
+                                    <span>جملة ({wholesaleItemsAll.length})</span>
+                                    <span className="text-[9px] px-1 py-0.2 bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300 rounded font-mono">0%</span>
+                                </button>
+                            </div>
+                        )}
                     </div>
-                    <div className="text-xs font-extrabold text-slate-500 dark:text-slate-400 font-mono shrink-0">
-                        العدد: <span className="text-indigo-600 dark:text-indigo-400">{filteredItems.length}</span>
+
+                    <div className="text-xs font-extrabold text-slate-500 dark:text-slate-400 font-mono shrink-0 text-left">
+                        العدد المعروض: <span className="text-indigo-600 dark:text-indigo-400">{filteredItems.length}</span>
                     </div>
                 </div>
 
@@ -352,9 +422,9 @@ export const EmployeeMetricDetailModal: React.FC<EmployeeMetricDetailModalProps>
                                 </div>
  
                                 <div className="p-2 bg-white dark:bg-slate-900 rounded-lg border border-sky-100 dark:border-sky-900/60">
-                                    <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 block">+ العمولات المكتسبة</span>
+                                    <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 block">+ العمولات المكتسبة (قطاعي)</span>
                                     <span className="text-sm sm:text-base font-black text-emerald-600 dark:text-emerald-400 font-mono">
-                                        +{(summaryData.totalCommissions || 0).toLocaleString()} <span className="text-[10px] font-normal">ر.ي</span>
+                                        +{(summaryData.totalCommissions || totRetailCommissions || 0).toLocaleString()} <span className="text-[10px] font-normal">ر.ي</span>
                                     </span>
                                 </div>
  
@@ -393,14 +463,81 @@ export const EmployeeMetricDetailModal: React.FC<EmployeeMetricDetailModalProps>
                             </div>
                         )}
 
-                        {/* Special Total Header for Sales Metrics */}
-                        {['gen_cash', 'gen_credit', 'card_cash', 'card_credit'].includes(metricType) && (
+                        {/* Special SEPARATED Total Header for Card Sales Metrics */}
+                        {['card_cash', 'card_credit'].includes(metricType) && (
+                            <div className="space-y-2">
+                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                                    {/* 1. مبيعات القطاعي */}
+                                    <div className="p-2.5 bg-emerald-50/80 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/70 rounded-xl flex flex-col justify-between">
+                                        <div className="flex items-center justify-between gap-1 mb-1">
+                                            <span className="text-[11px] font-extrabold text-emerald-800 dark:text-emerald-300">
+                                                مبيعات القطاعي ({totRetailQty} كرت)
+                                            </span>
+                                            <span className="text-[10px] font-black px-1.5 py-0.5 bg-emerald-100 dark:bg-emerald-900 text-emerald-700 dark:text-emerald-300 rounded">
+                                                عمولة 10%
+                                            </span>
+                                        </div>
+                                        <div className="flex items-baseline justify-between gap-1">
+                                            <span className="text-sm sm:text-base font-black text-emerald-700 dark:text-emerald-400 font-mono">
+                                                {totRetailAmount.toLocaleString()} ر.ي
+                                            </span>
+                                            <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 font-mono">
+                                                عمولة: +{totRetailCommissions.toLocaleString()} ر.ي
+                                            </span>
+                                        </div>
+                                    </div>
+
+                                    {/* 2. مبيعات الجملة */}
+                                    <div className="p-2.5 bg-purple-50/80 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800/70 rounded-xl flex flex-col justify-between">
+                                        <div className="flex items-center justify-between gap-1 mb-1">
+                                            <span className="text-[11px] font-extrabold text-purple-800 dark:text-purple-300">
+                                                مبيعات الجملة ({totWholesaleQty} كرت)
+                                            </span>
+                                            <span className="text-[10px] font-black px-1.5 py-0.5 bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300 rounded">
+                                                بدون عمولة 0%
+                                            </span>
+                                        </div>
+                                        <div className="flex items-baseline justify-between gap-1">
+                                            <span className="text-sm sm:text-base font-black text-purple-700 dark:text-purple-400 font-mono">
+                                                {totWholesaleAmount.toLocaleString()} ر.ي
+                                            </span>
+                                            <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 font-mono">
+                                                (0% عمولة)
+                                            </span>
+                                        </div>
+                                    </div>
+
+                                    {/* 3. إجمالي قيمة التقرير الشاملة */}
+                                    <div className="p-2.5 bg-indigo-50/80 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/70 rounded-xl flex flex-col justify-between">
+                                        <div className="flex items-center justify-between gap-1 mb-1">
+                                            <span className="text-[11px] font-extrabold text-indigo-900 dark:text-indigo-200">
+                                                إجمالي قيمة التقرير ({config.title})
+                                            </span>
+                                            <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 font-mono">
+                                                {totRetailQty + totWholesaleQty} كرت
+                                            </span>
+                                        </div>
+                                        <div className="flex items-baseline justify-between gap-1">
+                                            <span className="text-base sm:text-lg font-black text-indigo-700 dark:text-indigo-300 font-mono">
+                                                {grandCardsAmount.toLocaleString()} ر.ي
+                                            </span>
+                                            <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 font-mono">
+                                                إجمالي العمولة: +{totRetailCommissions.toLocaleString()} ر.ي
+                                            </span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Special Total Header for General Sales Metrics */}
+                        {['gen_cash', 'gen_credit'].includes(metricType) && (
                             <div className="flex items-center justify-between p-2.5 bg-emerald-50/70 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-lg">
                                 <span className="text-xs font-bold text-emerald-800 dark:text-emerald-300">
                                     إجمالي قيمة التقرير ({config.title}):
                                 </span>
                                 <span className="text-base sm:text-lg font-black text-emerald-700 dark:text-emerald-400 font-mono">
-                                    {summaryData.totalAmount.toLocaleString()} {['card_cash', 'card_credit'].includes(metricType) ? 'ر.ي' : 'ر.س'}
+                                    {summaryData.totalAmount.toLocaleString()} ر.س
                                 </span>
                             </div>
                         )}
@@ -412,19 +549,17 @@ export const EmployeeMetricDetailModal: React.FC<EmployeeMetricDetailModalProps>
                             </div>
                         ) : (
                             <div className="overflow-x-auto">
-                                <table className="w-full text-right text-xs">
+                                <table className="w-full min-w-max text-right text-xs whitespace-nowrap">
                                     <thead>
-                                        <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 font-extrabold bg-slate-50 dark:bg-slate-950">
-                                            <th className="py-2.5 px-3">#</th>
-                                            <th className="py-2.5 px-3">الرقم / البيان</th>
-                                            <th className="py-2.5 px-3">التاريخ والوقت</th>
-                                            <th className="py-2.5 px-3">التفاصيل / الجهة</th>
-                                            {metricType === 'withdrawals' && <th className="py-2.5 px-3">الملاحظات</th>}
-                                            {metricType === 'salary_comm' && <th className="py-2.5 px-3">العمولة المكتسبة</th>}
-                                            <th className="py-2.5 px-3">المبلغ الإجمالي</th>
-                                            {onPreviewInvoice && metricType !== 'withdrawals' && metricType !== 'salary_comm' && (
-                                                <th className="py-2.5 px-3 text-center no-print-btn">معاينة</th>
-                                            )}
+                                        <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 font-extrabold bg-slate-50 dark:bg-slate-950 whitespace-nowrap">
+                                            <th className="py-2.5 px-3 whitespace-nowrap">#</th>
+                                            <th className="py-2.5 px-3 whitespace-nowrap">رقم الفاتورة</th>
+                                            <th className="py-2.5 px-3 whitespace-nowrap">التاريخ والوقت</th>
+                                            <th className="py-2.5 px-3 whitespace-nowrap">البيان</th>
+                                            {isCardMetric && <th className="py-2.5 px-3 whitespace-nowrap">نوع البيع والعمولة</th>}
+                                            {metricType === 'withdrawals' && <th className="py-2.5 px-3 whitespace-nowrap">الملاحظات</th>}
+                                            {metricType === 'salary_comm' && <th className="py-2.5 px-3 whitespace-nowrap">العمولة المكتسبة</th>}
+                                            <th className="py-2.5 px-3 whitespace-nowrap">المبلغ الإجمالي</th>
                                         </tr>
                                     </thead>
                                     <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80 font-medium">
@@ -434,6 +569,8 @@ export const EmployeeMetricDetailModal: React.FC<EmployeeMetricDetailModalProps>
                                             const rawDate = item.createdAt || item.date || item.dateTime;
                                             const dateFormatted = rawDate ? (typeof rawDate === 'number' ? format(rawDate, 'yyyy/MM/dd HH:mm') : String(rawDate)) : '-';
                                             const partyOrCategory = item.categoryName ? `${item.categoryName} (${item.quantity || 1} كرت)` : (item.customerName || item.userName || item.notes || 'عميل عام');
+                                            const isWholesale = item.saleType === 'wholesale' || item.saleType === 'distributor' || Boolean(item.distributorId);
+                                            const cardComm = isWholesale ? 0 : (typeof item.commissionAmount === 'number' ? item.commissionAmount : ((Number(item.totalAmount) || 0) * (typeof item.commissionPercent === 'number' ? item.commissionPercent / 100 : 0.1)));
                                             
                                             let totalVal = 0;
                                             if (metricType === 'withdrawals') {
@@ -444,84 +581,97 @@ export const EmployeeMetricDetailModal: React.FC<EmployeeMetricDetailModalProps>
                                                 totalVal = Number(item.total) || 0;
                                             }
 
+                                            const isClickable = Boolean(onPreviewInvoice && metricType !== 'withdrawals' && metricType !== 'salary_comm');
+
                                             return (
-                                                <tr key={item.id || index} className="hover:bg-slate-50 dark:hover:bg-slate-950/50">
-                                                    <td className="py-2.5 px-3 font-mono text-slate-400 text-[11px]">{index + 1}</td>
-                                                    <td className="py-2.5 px-3 font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                                                <tr 
+                                                    key={item.id || index} 
+                                                    onClick={() => {
+                                                        if (!isClickable || !onPreviewInvoice) return;
+                                                        if (isCard) {
+                                                            onPreviewInvoice(
+                                                                {
+                                                                    ...item,
+                                                                    invoiceNumber: invNum,
+                                                                    date: typeof rawDate === 'number' ? rawDate : Date.now(),
+                                                                    customerName: item.userName || 'مشتري بطاقات',
+                                                                    total: totalVal,
+                                                                    paidAmount: totalVal,
+                                                                    paymentType: metricType === 'card_credit' ? 'credit' : 'cash',
+                                                                    sellerName: employeeName
+                                                                },
+                                                                'card_sale',
+                                                                [{
+                                                                    name: item.categoryName || 'بطاقة شبكة',
+                                                                    quantity: item.quantity || 1,
+                                                                    price: totalVal ? (totalVal / (item.quantity || 1)) : 0,
+                                                                    total: totalVal
+                                                                }]
+                                                            );
+                                                        } else {
+                                                            onPreviewInvoice(
+                                                                {
+                                                                    ...item,
+                                                                    invoiceNumber: invNum,
+                                                                    date: typeof rawDate === 'number' ? rawDate : Date.now(),
+                                                                    customerName: item.customerName || 'عميل عام',
+                                                                    total: totalVal,
+                                                                    paidAmount: item.paidAmount || totalVal,
+                                                                    paymentType: item.paymentType || 'cash',
+                                                                    sellerName: employeeName
+                                                                },
+                                                                'sale',
+                                                                item.items || []
+                                                            );
+                                                        }
+                                                    }}
+                                                    className={`whitespace-nowrap transition ${
+                                                        isClickable 
+                                                            ? 'hover:bg-indigo-50/70 dark:hover:bg-indigo-950/40 cursor-pointer group' 
+                                                            : 'hover:bg-slate-50 dark:hover:bg-slate-950/50'
+                                                    }`}
+                                                    title={isClickable ? 'انقر لمعاينة الفاتورة' : undefined}
+                                                >
+                                                    <td className="py-2.5 px-3 font-mono text-slate-400 text-[11px] whitespace-nowrap">{index + 1}</td>
+                                                    <td className="py-2.5 px-3 font-mono font-bold text-indigo-600 dark:text-indigo-400 whitespace-nowrap">
                                                         {invNum}
                                                     </td>
-                                                    <td className="py-2.5 px-3 font-mono text-slate-500 text-[11px]">
+                                                    <td className="py-2.5 px-3 font-mono text-slate-500 text-[11px] whitespace-nowrap">
                                                         {dateFormatted}
                                                     </td>
-                                                    <td className="py-2.5 px-3 text-slate-800 dark:text-slate-200 font-extrabold">
+                                                    <td className="py-2.5 px-3 text-slate-800 dark:text-slate-200 font-extrabold whitespace-nowrap">
                                                         {partyOrCategory}
                                                     </td>
 
+                                                    {isCardMetric && (
+                                                        <td className="py-2.5 px-3 whitespace-nowrap">
+                                                            {isWholesale ? (
+                                                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800 text-[10px] font-black">
+                                                                    جملة (بدون عمولة 0%)
+                                                                </span>
+                                                            ) : (
+                                                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 text-[10px] font-black font-mono">
+                                                                    قطاعي (عمولة: +{cardComm.toFixed(2)} ر.ي)
+                                                                </span>
+                                                            )}
+                                                        </td>
+                                                    )}
+
                                                     {metricType === 'withdrawals' && (
-                                                        <td className="py-2.5 px-3 text-slate-600 dark:text-slate-300">
+                                                        <td className="py-2.5 px-3 text-slate-600 dark:text-slate-300 whitespace-nowrap">
                                                             {item.notes || 'سحب سلفة'}
                                                         </td>
                                                     )}
 
                                                     {metricType === 'salary_comm' && (
-                                                        <td className="py-2.5 px-3 font-mono font-bold text-emerald-600 dark:text-emerald-400">
-                                                            +{(Number(item.commissionAmount) || 0).toFixed(2)} ر.ي
+                                                        <td className="py-2.5 px-3 font-mono font-bold text-emerald-600 dark:text-emerald-400 whitespace-nowrap">
+                                                            +{(cardComm).toFixed(2)} ر.ي
                                                         </td>
                                                     )}
 
-                                                    <td className="py-2.5 px-3 font-black font-mono text-slate-900 dark:text-white">
+                                                    <td className="py-2.5 px-3 font-black font-mono text-slate-900 dark:text-white whitespace-nowrap">
                                                         {totalVal.toLocaleString()} {['card_cash', 'card_credit', 'salary_comm', 'withdrawals'].includes(metricType) ? 'ر.ي' : 'ر.س'}
                                                     </td>
-
-                                                    {onPreviewInvoice && metricType !== 'withdrawals' && metricType !== 'salary_comm' && (
-                                                        <td className="py-2.5 px-3 text-center no-print-btn">
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => {
-                                                                    if (isCard) {
-                                                                        onPreviewInvoice(
-                                                                            {
-                                                                                ...item,
-                                                                                invoiceNumber: invNum,
-                                                                                date: typeof rawDate === 'number' ? rawDate : Date.now(),
-                                                                                customerName: item.userName || 'مشتري بطاقات',
-                                                                                total: totalVal,
-                                                                                paidAmount: totalVal,
-                                                                                paymentType: metricType === 'card_credit' ? 'credit' : 'cash',
-                                                                                sellerName: employeeName
-                                                                            },
-                                                                            'card_sale',
-                                                                            [{
-                                                                                name: item.categoryName || 'بطاقة شبكة',
-                                                                                quantity: item.quantity || 1,
-                                                                                price: totalVal ? (totalVal / (item.quantity || 1)) : 0,
-                                                                                total: totalVal
-                                                                            }]
-                                                                        );
-                                                                    } else {
-                                                                        onPreviewInvoice(
-                                                                            {
-                                                                                ...item,
-                                                                                invoiceNumber: invNum,
-                                                                                date: typeof rawDate === 'number' ? rawDate : Date.now(),
-                                                                                customerName: item.customerName || 'عميل عام',
-                                                                                total: totalVal,
-                                                                                paidAmount: item.paidAmount || totalVal,
-                                                                                paymentType: item.paymentType || 'cash',
-                                                                                sellerName: employeeName
-                                                                            },
-                                                                            'sale',
-                                                                            item.items || []
-                                                                        );
-                                                                    }
-                                                                }}
-                                                                className="px-2.5 py-1 bg-indigo-50 dark:bg-indigo-950 hover:bg-indigo-100 text-indigo-600 dark:text-indigo-400 rounded-lg text-[11px] font-bold inline-flex items-center gap-1 cursor-pointer transition"
-                                                            >
-                                                                <Eye size={12} />
-                                                                معاينة
-                                                            </button>
-                                                        </td>
-                                                    )}
                                                 </tr>
                                             );
                                         })}

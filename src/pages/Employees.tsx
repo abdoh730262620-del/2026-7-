@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { collection, query, where, onSnapshot, doc, addDoc, updateDoc, getDocs, deleteDoc, orderBy } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { LocalCache } from '../lib/localCache';
 import { useAuthStore, AppRole } from '../store/authStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { logUserAction } from '../lib/logger';
@@ -10,7 +11,7 @@ import {
     Search, ArrowLeft, ArrowRight, Wallet, TrendingDown, Receipt, Save, RefreshCw,
     Shield, Briefcase, Wifi, Package, ShoppingBag, Edit3, Coins,
     Filter, FileText, Printer, Share2, Calendar, Trash2, Calculator, CheckCircle2,
-    AlertTriangle, CreditCard, Eye, Download, ArrowRightLeft, FileSpreadsheet
+    AlertTriangle, CreditCard, Eye, Download, ArrowRightLeft, FileSpreadsheet, ShieldAlert
 } from 'lucide-react';
 import { InvoicePreviewModal } from '../components/InvoicePreviewModal';
 import { EmployeeMetricDetailModal, MetricType } from '../components/EmployeeMetricDetailModal';
@@ -29,6 +30,8 @@ interface EmployeeUser {
 
 interface WithdrawalRecord {
     id: string;
+    withdrawalNumber?: number;
+    voucherNumber?: string;
     employeeId: string;
     employeeName: string;
     employeeRole: string;
@@ -40,6 +43,9 @@ interface WithdrawalRecord {
     withdrawnFromEmployeeId?: string;
     withdrawnFromEmployeeName?: string;
     withdrawnFromEmployeeRole?: string;
+    linkedCardCashboxId?: string;
+    linkedVoucherId?: string;
+    linkedCashId?: string;
 }
 
 interface CardSaleRecord {
@@ -87,6 +93,24 @@ interface GeneralSaleRecord {
     status?: string;
 }
 
+interface ManagerClearanceRecord {
+    id: string;
+    clearanceNumber?: number;
+    voucherNumber?: string;
+    employeeId: string;
+    employeeName: string;
+    employeeRole?: string;
+    managerId: string;
+    managerName: string;
+    boxType: 'general_cashbox' | 'card_cashbox';
+    amount: number;
+    currency: 'ر.س' | 'ر.ي';
+    notes: string;
+    date: number;
+    createdAt: number;
+    tenantId: string;
+}
+
 export default function Employees() {
     const { appUser } = useAuthStore();
     const tenantId = appUser?.tenantId || 'single_store';
@@ -96,6 +120,7 @@ export default function Employees() {
     const [withdrawals, setWithdrawals] = useState<WithdrawalRecord[]>([]);
     const [cardSales, setCardSales] = useState<CardSaleRecord[]>([]);
     const [generalSales, setGeneralSales] = useState<GeneralSaleRecord[]>([]);
+    const [managerClearances, setManagerClearances] = useState<ManagerClearanceRecord[]>([]);
     
     const [selectedEmployee, setSelectedEmployee] = useState<EmployeeUser | null>(null);
     const [searchTerm, setSearchTerm] = useState('');
@@ -105,7 +130,8 @@ export default function Employees() {
     const [filterType, setFilterType] = useState<'all' | 'withdrawals' | 'commissions'>('all');
     const [detailSearchTerm, setDetailSearchTerm] = useState<string>('');
     const [activeSalesCategory, setActiveSalesCategory] = useState<'general' | 'cards' | 'credit_general' | 'credit_cards'>('general');
-    const [activeMainTableTab, setActiveMainTableTab] = useState<'sales' | 'withdrawals'>('sales');
+    const [activeMainTableTab, setActiveMainTableTab] = useState<'sales' | 'withdrawals' | 'manager_clearance'>('sales');
+    const [activeManagerMainTableTab, setActiveManagerMainTableTab] = useState<'balances' | 'clearance_history'>('balances');
     const [selectedInvoicePreview, setSelectedInvoicePreview] = useState<{
         isOpen: boolean;
         invoice: any;
@@ -113,13 +139,27 @@ export default function Employees() {
         items: any[];
     } | null>(null);
 
+    // Manager Clearance modal states
+    const [isManagerClearanceModalOpen, setIsManagerClearanceModalOpen] = useState(false);
+    const [isManagerOverviewOpen, setIsManagerOverviewOpen] = useState(false);
+    const [clearanceBoxType, setClearanceBoxType] = useState<'general_cashbox' | 'card_cashbox'>('general_cashbox');
+    const [clearanceAmount, setClearanceAmount] = useState('');
+    const [clearanceNotes, setClearanceNotes] = useState('');
+    const [isSubmittingClearance, setIsSubmittingClearance] = useState(false);
+    const [selectedClearanceVoucher, setSelectedClearanceVoucher] = useState<ManagerClearanceRecord | null>(null);
+
     const [activeMetricModal, setActiveMetricModal] = useState<MetricType | null>(null);
-    const canViewAllEmployees = appUser?.role === 'admin' || (appUser?.role as string) === 'manager' || appUser?.permissions?.users?.view === true;
+    const canViewAllEmployees = appUser?.role === 'admin' || (appUser?.role as string) === 'manager' || appUser?.permissions?.users?.view === true || appUser?.permissions?.employees?.edit === true;
+    const hasEmployeesViewPermission = appUser?.role === 'admin' || appUser?.permissions?.employees?.view !== false;
 
     // Auto-select logged in employee if they lack permission to view all employees
     useEffect(() => {
         if (!canViewAllEmployees && appUser) {
-            const foundSelf = employees.find(e => e.id === appUser.uid || (e.email && appUser.email && e.email.toLowerCase() === appUser.email.toLowerCase()));
+            const foundSelf = employees.find(e => 
+                e.id === appUser.uid || 
+                (e.email && appUser.email && e.email.toLowerCase() === appUser.email.toLowerCase()) ||
+                (e.name && appUser.name && e.name.trim().toLowerCase() === appUser.name.trim().toLowerCase())
+            );
             if (foundSelf) {
                 if (!selectedEmployee || selectedEmployee.id !== foundSelf.id) {
                     setSelectedEmployee(foundSelf);
@@ -162,7 +202,22 @@ export default function Employees() {
 
     // Register top header and phone back button action to exit modals or single employee profile view
     useEffect(() => {
-        if (isWithdrawalsReportModalOpen) {
+        if (selectedClearanceVoucher) {
+            (window as any).onHeaderBack = () => {
+                setSelectedClearanceVoucher(null);
+                return true;
+            };
+        } else if (isManagerClearanceModalOpen) {
+            (window as any).onHeaderBack = () => {
+                setIsManagerClearanceModalOpen(false);
+                return true;
+            };
+        } else if (isManagerOverviewOpen) {
+            (window as any).onHeaderBack = () => {
+                setIsManagerOverviewOpen(false);
+                return true;
+            };
+        } else if (isWithdrawalsReportModalOpen) {
             (window as any).onHeaderBack = () => {
                 setIsWithdrawalsReportModalOpen(false);
                 return true;
@@ -193,7 +248,7 @@ export default function Employees() {
         return () => {
             (window as any).onHeaderBack = null;
         };
-    }, [selectedEmployee, canViewAllEmployees, isWithdrawModalOpen, isWithdrawOtherModalOpen, isSalaryModalOpen, isWithdrawalsReportModalOpen]);
+    }, [selectedEmployee, canViewAllEmployees, isWithdrawModalOpen, isWithdrawOtherModalOpen, isSalaryModalOpen, isWithdrawalsReportModalOpen, isManagerClearanceModalOpen, selectedClearanceVoucher]);
 
     useEffect(() => {
         if (!appUser?.uid) return;
@@ -271,11 +326,26 @@ export default function Employees() {
             setGeneralSales(list);
         }, (err) => handleFirestoreError(err, OperationType.GET, 'sales-employees'));
 
+        // 5. Listen to manager clearances (صندوق المدير / تصفية صناديق الموظفين)
+        const qManagerClearances = query(
+            collection(db, 'manager_clearances'),
+            where('tenantId', '==', tenantId)
+        );
+        const unsubManagerClearances = onSnapshot(qManagerClearances, (snap) => {
+            const list: ManagerClearanceRecord[] = [];
+            snap.forEach((docSnap) => {
+                list.push({ id: docSnap.id, ...docSnap.data() } as ManagerClearanceRecord);
+            });
+            list.sort((a, b) => (b.date || 0) - (a.date || 0));
+            setManagerClearances(list);
+        }, (err) => handleFirestoreError(err, OperationType.GET, 'manager_clearances'));
+
         return () => {
             unsubUsers();
             unsubWithdrawals();
             unsubSales();
             unsubGeneralSales();
+            unsubManagerClearances();
         };
     }, [appUser, tenantId]);
 
@@ -369,9 +439,17 @@ export default function Employees() {
         return format(tsNum, 'yyyy-MM') === selectedMonth;
     };
 
+    const getItemCommission = (s: any) => {
+        if (s.saleType === 'wholesale' || s.saleType === 'distributor' || Boolean(s.distributorId)) return 0;
+        if (typeof s.commissionAmount === 'number') return s.commissionAmount;
+        const total = Number(s.totalAmount || s.totalPrice || s.amount || 0);
+        const percent = typeof s.commissionPercent === 'number' ? s.commissionPercent : 10;
+        return (total * percent) / 100;
+    };
+
     const getTotalCommissions = (emp: EmployeeUser) => {
         const empSales = getEmployeeCardSales(emp);
-        return empSales.reduce((sum, s) => sum + (parseFloat(String(s.commissionAmount)) || 0), 0);
+        return empSales.reduce((sum, s) => sum + getItemCommission(s), 0);
     };
 
     // Arabic Month Helper
@@ -462,14 +540,300 @@ export default function Employees() {
         return list;
     };
 
-    // Delete Withdrawal
-    const handleDeleteWithdrawal = async (withdrawalId: string, amount: number) => {
-        if (!window.confirm(`هل أنت تأكد من إلغاء وحذف عملية السحب بمبلغ ${amount.toLocaleString()} ر.ي؟`)) {
+    // Manager Clearance Calculations for Employee Funds
+    const getEmployeeGeneralCashSalesTotal = (emp: EmployeeUser) => {
+        if (!emp) return 0;
+        const sales = getEmployeeGeneralSales(emp);
+        const cashSales = sales.filter(inv => inv.paymentType !== 'credit' && inv.paymentType !== 'deferred' && inv.paymentType !== 'اجل');
+        return cashSales.reduce((sum, inv) => sum + (Number(inv.total) || 0), 0);
+    };
+
+    const getEmployeeGeneralFundClearancesTotal = (emp: EmployeeUser) => {
+        if (!emp) return 0;
+        return managerClearances
+            .filter(c => c.employeeId === emp.id && c.boxType === 'general_cashbox')
+            .reduce((sum, c) => sum + (Number(c.amount) || 0), 0);
+    };
+
+    const getEmployeeGeneralFundDisbursedWithdrawalsTotal = (emp: EmployeeUser) => {
+        if (!emp) return 0;
+        return withdrawals
+            .filter(w => w.withdrawnFromEmployeeId === emp.id && w.sourceFund === 'general_cashbox')
+            .reduce((sum, w) => sum + (Number(w.amount) || 0), 0);
+    };
+
+    const getEmployeeGeneralFundNetBalance = (emp: EmployeeUser) => {
+        const totalSales = getEmployeeGeneralCashSalesTotal(emp);
+        const totalClearances = getEmployeeGeneralFundClearancesTotal(emp);
+        const totalDisbursed = getEmployeeGeneralFundDisbursedWithdrawalsTotal(emp);
+        return Math.max(0, totalSales - totalClearances - totalDisbursed);
+    };
+
+    const getEmployeeCardCashSalesTotal = (emp: EmployeeUser) => {
+        if (!emp) return 0;
+        const cardSalesList = getEmployeeCardSales(emp);
+        const cardCashSales = cardSalesList.filter(cs => cs.saleType !== 'credit' && cs.paymentType !== 'credit' && cs.paymentType !== 'deferred');
+        return cardCashSales.reduce((sum, cs) => sum + (Number(cs.totalAmount || cs.totalPrice || cs.amount) || 0), 0);
+    };
+
+    const getEmployeeCardFundClearancesTotal = (emp: EmployeeUser) => {
+        if (!emp) return 0;
+        return managerClearances
+            .filter(c => c.employeeId === emp.id && c.boxType === 'card_cashbox')
+            .reduce((sum, c) => sum + (Number(c.amount) || 0), 0);
+    };
+
+    const getEmployeeCardFundDisbursedWithdrawalsTotal = (emp: EmployeeUser) => {
+        if (!emp) return 0;
+        return withdrawals
+            .filter(w => w.withdrawnFromEmployeeId === emp.id && w.sourceFund === 'network_cashbox')
+            .reduce((sum, w) => sum + (Number(w.amount) || 0), 0);
+    };
+
+    const getEmployeeCardFundNetBalance = (emp: EmployeeUser) => {
+        const totalSales = getEmployeeCardCashSalesTotal(emp);
+        const totalClearances = getEmployeeCardFundClearancesTotal(emp);
+        const totalDisbursed = getEmployeeCardFundDisbursedWithdrawalsTotal(emp);
+        return Math.max(0, totalSales - totalClearances - totalDisbursed);
+    };
+
+    // Create Manager Clearance Action
+    const handleCreateManagerClearance = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!selectedEmployee) return;
+
+        const amountNum = parseFloat(clearanceAmount);
+        if (isNaN(amountNum) || amountNum <= 0) {
+            alert('يرجى إدخال مبلغ صحيح لتصفية/استلام صندوق الموظف');
+            return;
+        }
+
+        setIsSubmittingClearance(true);
+        try {
+            const staffName = appUser?.name || appUser?.email || 'المدير';
+
+            let nextClearanceNum = 1;
+            try {
+                const qNum = query(
+                    collection(db, 'manager_clearances'),
+                    where('tenantId', '==', tenantId),
+                    orderBy('clearanceNumber', 'desc')
+                );
+                const snap = await getDocs(qNum);
+                if (!snap.empty) {
+                    const allNums = snap.docs.map(d => {
+                        const cn = d.data().clearanceNumber;
+                        if (typeof cn === 'number') return cn;
+                        if (typeof cn === 'string') {
+                            const digits = cn.replace(/\D/g, '');
+                            return digits ? parseInt(digits, 10) : 0;
+                        }
+                        return 0;
+                    }).filter(n => !isNaN(n) && n > 0);
+                    const maxNum = allNums.length > 0 ? Math.max(...allNums) : 0;
+                    nextClearanceNum = maxNum + 1;
+                }
+            } catch (err) {
+                console.error('Error fetching max clearance number:', err);
+            }
+
+            const currency: 'ر.س' | 'ر.ي' = clearanceBoxType === 'card_cashbox' ? 'ر.ي' : 'ر.س';
+            const boxLabel = clearanceBoxType === 'card_cashbox' ? 'صندوق الكروت' : 'صندوق المحل';
+            const defaultNote = `تصفية ${boxLabel} واستلام النقدية بواسطة المدير`;
+            const fullNote = clearanceNotes.trim() ? `${clearanceNotes.trim()} (${defaultNote})` : defaultNote;
+
+            const payload = {
+                tenantId,
+                clearanceNumber: nextClearanceNum,
+                voucherNumber: nextClearanceNum.toString(),
+                employeeId: selectedEmployee.id,
+                employeeName: selectedEmployee.name,
+                employeeRole: selectedEmployee.role,
+                managerId: appUser?.uid || 'manager',
+                managerName: staffName,
+                boxType: clearanceBoxType,
+                amount: amountNum,
+                currency,
+                notes: fullNote,
+                date: Date.now(),
+                createdAt: Date.now()
+            };
+
+            const docRef = await addDoc(collection(db, 'manager_clearances'), payload);
+
+            await logUserAction(
+                'تصفية صندوق موظف لصندوق المدير',
+                `تم استلام وتصفية مبلغ ${amountNum} ${currency} من ${boxLabel} للموظف ${selectedEmployee.name} بواسطة المدير ${staffName} (سند رقم #${nextClearanceNum})`
+            );
+
+            setIsManagerClearanceModalOpen(false);
+            setClearanceAmount('');
+            setClearanceNotes('');
+
+            const createdRecord: ManagerClearanceRecord = { id: docRef.id, ...payload };
+            setSelectedClearanceVoucher(createdRecord);
+
+            alert(`تمت تصفية صندوق الموظف واستلام المبلغ بنجاح!\n• رقم السند: #${nextClearanceNum}\n• الموظف: ${selectedEmployee.name}\n• المبلغ المستلم: ${amountNum.toLocaleString()} ${currency}\n• تم خصم المبلغ من صندوق الموظف دون التأثير على الصناديق الرئيسية للمحل.`);
+        } catch (err) {
+            console.error('Error creating manager clearance:', err);
+            alert('حدث خطأ أثناء حفظ سند التصفية');
+        } finally {
+            setIsSubmittingClearance(false);
+        }
+    };
+
+    // Delete Manager Clearance Record
+    const handleDeleteManagerClearance = async (c: ManagerClearanceRecord) => {
+        const vNum = c.clearanceNumber || c.voucherNumber || '';
+        if (!window.confirm(`هل أنت متأكد من إلغاء وحذف سند التصفية رقم #${vNum} بمبلغ ${c.amount.toLocaleString()} ${c.currency}؟\nسيتم إعادة المبلغ لصندوق الموظف.`)) {
             return;
         }
         try {
+            await deleteDoc(doc(db, 'manager_clearances', c.id));
+            await logUserAction('إلغاء سند تصفية صندوق مدير', `تم إلغاء السند رقم #${vNum} بمبلغ ${c.amount} ${c.currency} للموظف ${c.employeeName}`);
+            alert('تم حذف سند التصفية وإعادة المبلغ لصندوق الموظف بنجاح.');
+        } catch (err) {
+            console.error('Error deleting clearance:', err);
+            alert('حدث خطأ أثناء حذف السند');
+        }
+    };
+
+    // Print Manager Clearance Voucher
+    const handlePrintClearanceVoucher = (c: ManagerClearanceRecord) => {
+        const storeName = settings?.businessName || 'نظام إدارة المؤسسة والشبكات';
+        const storeLogo = settings?.businessLogoUrl || '';
+        const vNum = c.clearanceNumber || c.voucherNumber || '1';
+        const dateStr = c.date ? format(new Date(c.date), 'yyyy/MM/dd HH:mm') : format(new Date(), 'yyyy/MM/dd HH:mm');
+        const boxTitle = c.boxType === 'card_cashbox' ? 'صندوق مبيعات كروت الشبكة' : 'صندوق المبيعات العامة للمحل';
+
+        const printWin = window.open('', '_blank', 'width=800,height=700');
+        if (!printWin) {
+            alert('يرجى السماح بالنوافذ المنبثقة لطباعة سند التصفية');
+            return;
+        }
+
+        printWin.document.write(`
+            <!DOCTYPE html>
+            <html dir="rtl" lang="ar">
+            <head>
+                <meta charset="UTF-8">
+                <title>سند استلام وتصفية صندوق المدير #${vNum}</title>
+                <style>
+                    body { font-family: 'Segoe UI', Tahoma, sans-serif; direction: rtl; padding: 25px; color: #1e293b; background: #fff; }
+                    .header { text-align: center; border-bottom: 2px solid #6366f1; padding-bottom: 12px; margin-bottom: 20px; }
+                    .header h2 { margin: 0; color: #4338ca; font-size: 22px; }
+                    .header h3 { margin: 5px 0 0; color: #334155; font-size: 16px; }
+                    .voucher-card { border: 2px solid #e2e8f0; border-radius: 12px; padding: 20px; background: #fafafa; margin-bottom: 25px; }
+                    .row { display: flex; justify-content: space-between; margin-bottom: 12px; border-bottom: 1px dashed #cbd5e1; padding-bottom: 8px; font-size: 14px; }
+                    .row .label { font-weight: bold; color: #64748b; }
+                    .row .val { font-weight: bold; color: #0f172a; }
+                    .amount-box { background: #e0e7ff; border: 2px solid #6366f1; color: #3730a3; padding: 12px; border-radius: 10px; text-align: center; font-size: 20px; font-weight: 900; margin: 15px 0; }
+                    .signatures { display: flex; justify-content: space-between; margin-top: 40px; padding-top: 15px; border-top: 1px solid #cbd5e1; }
+                    .sig-box { text-align: center; width: 45%; }
+                    .sig-title { font-weight: bold; margin-bottom: 30px; color: #475569; }
+                    .sig-line { border-bottom: 1px solid #94a3b8; width: 80%; margin: 0 auto; }
+                    @media print {
+                        body { padding: 0; }
+                        .no-print { display: none; }
+                    }
+                </style>
+            </head>
+            <body>
+                <div class="header">
+                    ${storeLogo ? `<img src="${storeLogo}" style="max-height: 50px; margin-bottom: 8px;" />` : ''}
+                    <h2>${storeName}</h2>
+                    <h3>سند استلام مالي وتصفية صندوق المدير</h3>
+                </div>
+
+                <div class="voucher-card">
+                    <div class="row">
+                        <span class="label">رقم السند:</span>
+                        <span class="val">#${vNum}</span>
+                    </div>
+                    <div class="row">
+                        <span class="label">التاريخ والوقت:</span>
+                        <span class="val">${dateStr}</span>
+                    </div>
+                    <div class="row">
+                        <span class="label">اسم الموظف المصفى صندوقه:</span>
+                        <span class="val">${c.employeeName} (${roleConfig[c.employeeRole || '']?.label || c.employeeRole || 'موظف'})</span>
+                    </div>
+                    <div class="row">
+                        <span class="label">الصندوق المخصوم منه:</span>
+                        <span class="val">${boxTitle}</span>
+                    </div>
+                    <div class="row">
+                        <span class="label">المستلم (المدير / المسؤول):</span>
+                        <span class="val">${c.managerName}</span>
+                    </div>
+                    <div class="amount-box">
+                        المبلغ المستلم: ${c.amount.toLocaleString()} ${c.currency}
+                    </div>
+                    <div class="row" style="border-bottom: none;">
+                        <span class="label">البيان والملاحظات:</span>
+                        <span class="val">${c.notes || 'تصفية واستلام نقدية من صندوق الموظف إلى صندوق المدير'}</span>
+                    </div>
+                </div>
+
+                <div style="font-size: 11px; color: #64748b; text-align: center; margin-bottom: 20px;">
+                    * هذا السند يثبت تصفية واستلام المبلغ الموضح من صندوق الموظف الخاص دون تأثير على الصناديق العامة للمحل.
+                </div>
+
+                <div class="signatures">
+                    <div class="sig-box">
+                        <div class="sig-title">توقيع الموظف المصفى:</div>
+                        <div class="sig-line"></div>
+                    </div>
+                    <div class="sig-box">
+                        <div class="sig-title">توقيع المدير المستلم:</div>
+                        <div class="sig-line"></div>
+                    </div>
+                </div>
+
+                <div class="no-print" style="text-align: center; margin-top: 25px;">
+                    <button onclick="window.print()" style="background: #4f46e5; color: #fff; border: none; padding: 10px 20px; font-weight: bold; border-radius: 8px; cursor: pointer;">طباعة السند</button>
+                    <button onclick="window.close()" style="background: #e2e8f0; color: #334155; border: none; padding: 10px 20px; font-weight: bold; border-radius: 8px; cursor: pointer; margin-right: 10px;">إغلاق</button>
+                </div>
+            </body>
+            </html>
+        `);
+        printWin.document.close();
+    };
+
+    // Delete Withdrawal
+    const handleDeleteWithdrawal = async (w: WithdrawalRecord) => {
+        const vNum = w.withdrawalNumber || w.voucherNumber || '';
+        const numLabel = vNum ? `رقم #${vNum} ` : '';
+        if (!window.confirm(`هل أنت متأكد من إلغاء وحذف عملية السحب ${numLabel}بمبلغ ${w.amount.toLocaleString()} ر.ي؟`)) {
+            return;
+        }
+        try {
+            const withdrawalId = w.id;
+            if (w.linkedCardCashboxId) {
+                try {
+                    await deleteDoc(doc(db, 'card_cashbox', w.linkedCardCashboxId));
+                    await LocalCache.removeCachedItem('card_cashbox', tenantId, w.linkedCardCashboxId);
+                } catch (e) {
+                    console.warn('Failed to delete linked card cashbox entry:', e);
+                }
+            }
+            if (w.linkedVoucherId) {
+                try {
+                    await deleteDoc(doc(db, 'vouchers', w.linkedVoucherId));
+                } catch (e) {
+                    console.warn('Failed to delete linked voucher:', e);
+                }
+            }
+            if (w.linkedCashId) {
+                try {
+                    await deleteDoc(doc(db, 'cash', w.linkedCashId));
+                } catch (e) {
+                    console.warn('Failed to delete linked general cash entry:', e);
+                }
+            }
+
             await deleteDoc(doc(db, 'employee_withdrawals', withdrawalId));
-            await logUserAction('حذف مسحوبات موظف', `تم إلغاء وحذف عملية السحب رقم ${withdrawalId} بمبلغ ${amount} ر.ي`);
+            await logUserAction('حذف مسحوبات موظف', `تم إلغاء وحذف عملية السحب ${numLabel}بمبلغ ${w.amount} ر.ي`);
             alert('تم حذف عملية السحب بنجاح');
         } catch (err: any) {
             console.error('Error deleting withdrawal:', err);
@@ -490,13 +854,27 @@ export default function Employees() {
 
         // 2. Card Sales & Commissions
         const empCardSales = getFilteredCardSales(emp);
-        const totComm = empCardSales.reduce((sum, s) => sum + (parseFloat(String(s.commissionAmount)) || 0), 0);
+        const totComm = empCardSales.reduce((sum, s) => sum + getItemCommission(s), 0);
 
         const cardCashList = empCardSales.filter(cs => cs.saleType !== 'credit' && cs.paymentType !== 'credit' && cs.paymentType !== 'deferred');
-        const totCardCash = cardCashList.reduce((sum, cs) => sum + (Number(cs.totalPrice || cs.amount) || 0), 0);
+        const totCardCash = cardCashList.reduce((sum, cs) => sum + (Number(cs.totalPrice || cs.amount || cs.totalAmount) || 0), 0);
+
+        const cardCashRetailList = cardCashList.filter(cs => cs.saleType !== 'wholesale' && cs.saleType !== 'distributor' && !(cs as any).distributorId);
+        const totCardCashRetail = cardCashRetailList.reduce((sum, cs) => sum + (Number(cs.totalPrice || cs.amount || cs.totalAmount) || 0), 0);
+        const totCardCashRetailComm = cardCashRetailList.reduce((sum, cs) => sum + getItemCommission(cs), 0);
+
+        const cardCashWholesaleList = cardCashList.filter(cs => cs.saleType === 'wholesale' || cs.saleType === 'distributor' || Boolean((cs as any).distributorId));
+        const totCardCashWholesale = cardCashWholesaleList.reduce((sum, cs) => sum + (Number(cs.totalPrice || cs.amount || cs.totalAmount) || 0), 0);
 
         const cardCreditList = empCardSales.filter(cs => cs.saleType === 'credit' || cs.paymentType === 'credit' || cs.paymentType === 'deferred');
-        const totCardCredit = cardCreditList.reduce((sum, cs) => sum + (Number(cs.totalPrice || cs.amount) || 0), 0);
+        const totCardCredit = cardCreditList.reduce((sum, cs) => sum + (Number(cs.totalPrice || cs.amount || cs.totalAmount) || 0), 0);
+
+        const cardCreditRetailList = cardCreditList.filter(cs => cs.saleType !== 'wholesale' && cs.saleType !== 'distributor' && !(cs as any).distributorId);
+        const totCardCreditRetail = cardCreditRetailList.reduce((sum, cs) => sum + (Number(cs.totalPrice || cs.amount || cs.totalAmount) || 0), 0);
+        const totCardCreditRetailComm = cardCreditRetailList.reduce((sum, cs) => sum + getItemCommission(cs), 0);
+
+        const cardCreditWholesaleList = cardCreditList.filter(cs => cs.saleType === 'wholesale' || cs.saleType === 'distributor' || Boolean((cs as any).distributorId));
+        const totCardCreditWholesale = cardCreditWholesaleList.reduce((sum, cs) => sum + (Number(cs.totalPrice || cs.amount || cs.totalAmount) || 0), 0);
 
         // 3. General Invoices
         const empGenSales = getEmployeeGeneralSales(emp).filter(inv => matchesMonthFilter(inv.createdAt || inv.date));
@@ -522,7 +900,7 @@ export default function Employees() {
         // Table Rows HTML Builders
         const withdrawalsRows = empWithdrawals.map((w, idx) => `
             <tr>
-                <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: center;">${idx + 1}</td>
+                <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold;">#${w.withdrawalNumber || w.voucherNumber || (idx + 1)}</td>
                 <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: center;">${w.date ? format(new Date(w.date), 'yyyy/MM/dd HH:mm') : '-'}</td>
                 <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #dc2626;">${parseFloat(String(w.amount)).toLocaleString()} ر.ي</td>
                 <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: right;">${w.notes || 'سحب سلفة'}</td>
@@ -554,27 +932,51 @@ export default function Employees() {
             </tr>
         `).join('');
 
-        const cardCashRows = cardCashList.map((cs, idx) => `
+        const cardCashRetailRows = cardCashRetailList.map((cs, idx) => `
             <tr>
                 <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: center;">${idx + 1}</td>
-                <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: right; font-weight: bold;">${cs.categoryName || 'كروت شبكات'}</td>
+                <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: right; font-weight: bold;">${cs.categoryName || 'كروت شبكات'} <span style="font-size: 10px; color: #059669;">(قطاعي)</span></td>
                 <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: center;">${cs.createdAt || cs.date ? format(new Date(cs.createdAt || cs.date), 'yyyy/MM/dd HH:mm') : '-'}</td>
                 <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: center;">${cs.quantity || 1}</td>
                 <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: center;">${(Number(cs.unitPrice || cs.price) || 0).toLocaleString()} ر.ي</td>
-                <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #4f46e5;">${(Number(cs.totalPrice || cs.amount) || 0).toLocaleString()} ر.ي</td>
-                <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #16a34a;">+${(Number(cs.commissionAmount) || 0).toLocaleString()} ر.ي</td>
+                <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #059669;">${(Number(cs.totalPrice || cs.amount || cs.totalAmount) || 0).toLocaleString()} ر.ي</td>
+                <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #16a34a;">+${getItemCommission(cs).toFixed(2)} ر.ي (10%)</td>
             </tr>
         `).join('');
 
-        const cardCreditRows = cardCreditList.map((cs, idx) => `
+        const cardCashWholesaleRows = cardCashWholesaleList.map((cs, idx) => `
             <tr>
                 <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: center;">${idx + 1}</td>
-                <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: right; font-weight: bold;">${cs.categoryName || 'كروت شبكات (آجل)'}</td>
+                <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: right; font-weight: bold;">${cs.categoryName || 'كروت شبكات'} <span style="font-size: 10px; color: #7c3aed;">(جملة)</span></td>
+                <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: center;">${cs.createdAt || cs.date ? format(new Date(cs.createdAt || cs.date), 'yyyy/MM/dd HH:mm') : '-'}</td>
+                <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: center;">${cs.quantity || 1}</td>
+                <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: center;">${(Number(cs.unitPrice || cs.price) || 0).toLocaleString()} ر.ي</td>
+                <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #7c3aed;">${(Number(cs.totalPrice || cs.amount || cs.totalAmount) || 0).toLocaleString()} ر.ي</td>
+                <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: center; color: #64748b; font-weight: bold;">0.00 ر.ي (0%)</td>
+            </tr>
+        `).join('');
+
+        const cardCreditRetailRows = cardCreditRetailList.map((cs, idx) => `
+            <tr>
+                <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: center;">${idx + 1}</td>
+                <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: right; font-weight: bold;">${cs.categoryName || 'كروت شبكات (آجل)'} <span style="font-size: 10px; color: #059669;">(قطاعي)</span></td>
                 <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: center;">${cs.createdAt || cs.date ? format(new Date(cs.createdAt || cs.date), 'yyyy/MM/dd HH:mm') : '-'}</td>
                 <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: right;">${cs.customerName || cs.buyerName || 'عميل آجل'}</td>
                 <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: center;">${cs.quantity || 1}</td>
-                <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #7c3aed;">${(Number(cs.totalPrice || cs.amount) || 0).toLocaleString()} ر.ي</td>
-                <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #16a34a;">+${(Number(cs.commissionAmount) || 0).toLocaleString()} ر.ي</td>
+                <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #059669;">${(Number(cs.totalPrice || cs.amount || cs.totalAmount) || 0).toLocaleString()} ر.ي</td>
+                <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #16a34a;">+${getItemCommission(cs).toFixed(2)} ر.ي (10%)</td>
+            </tr>
+        `).join('');
+
+        const cardCreditWholesaleRows = cardCreditWholesaleList.map((cs, idx) => `
+            <tr>
+                <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: center;">${idx + 1}</td>
+                <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: right; font-weight: bold;">${cs.categoryName || 'كروت شبكات (آجل)'} <span style="font-size: 10px; color: #7c3aed;">(جملة)</span></td>
+                <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: center;">${cs.createdAt || cs.date ? format(new Date(cs.createdAt || cs.date), 'yyyy/MM/dd HH:mm') : '-'}</td>
+                <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: right;">${cs.customerName || cs.buyerName || 'عميل آجل'}</td>
+                <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: center;">${cs.quantity || 1}</td>
+                <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #7c3aed;">${(Number(cs.totalPrice || cs.amount || cs.totalAmount) || 0).toLocaleString()} ر.ي</td>
+                <td style="padding: 6px; border: 1px solid #cbd5e1; text-align: center; color: #64748b; font-weight: bold;">0.00 ر.ي (0%)</td>
             </tr>
         `).join('');
 
@@ -718,12 +1120,33 @@ export default function Employees() {
                     </table>
                 `}
 
-                <!-- 3. Card Cash Sales Table -->
+                <!-- 3. Card Cash Sales Tables (Separated Retail & Wholesale) -->
                 <div class="section-title">
-                    <span>3. سجل مبيعات الكروت النقدية (${cardCashList.length})</span>
-                    <span style="color: #4f46e5;">الإجمالي: ${totCardCash.toLocaleString()} ر.ي</span>
+                    <span>3.1 سجل مبيعات الكروت النقدية - قطاعي (${cardCashRetailList.length})</span>
+                    <span style="color: #059669;">الإجمالي: ${totCardCashRetail.toLocaleString()} ر.ي (عمولة: +${totCardCashRetailComm.toFixed(2)} ر.ي)</span>
                 </div>
-                ${cardCashList.length === 0 ? '<p style="text-align: center; color: #94a3b8; padding: 8px; font-size: 11px;">لا توجد مبيعات كروت نقدية مسجلة</p>' : `
+                ${cardCashRetailList.length === 0 ? '<p style="text-align: center; color: #94a3b8; padding: 8px; font-size: 11px;">لا توجد مبيعات كروت نقدية بالقطاعي</p>' : `
+                    <table>
+                        <thead>
+                            <tr>
+                                <th style="width: 30px;">#</th>
+                                <th>الفئة / الشبكة</th>
+                                <th>التاريخ والوقت</th>
+                                <th>الكمية</th>
+                                <th>السعر</th>
+                                <th>إجمالي المبيعات</th>
+                                <th>العمولة المكتسبة (10%)</th>
+                            </tr>
+                        </thead>
+                        <tbody>${cardCashRetailRows}</tbody>
+                    </table>
+                `}
+
+                <div class="section-title">
+                    <span>3.2 سجل مبيعات الكروت النقدية - جملة (${cardCashWholesaleList.length})</span>
+                    <span style="color: #7c3aed;">الإجمالي: ${totCardCashWholesale.toLocaleString()} ر.ي (بدون عمولة)</span>
+                </div>
+                ${cardCashWholesaleList.length === 0 ? '<p style="text-align: center; color: #94a3b8; padding: 8px; font-size: 11px;">لا توجد مبيعات كروت نقدية بالجملة</p>' : `
                     <table>
                         <thead>
                             <tr>
@@ -736,16 +1159,37 @@ export default function Employees() {
                                 <th>العمولة المكتسبة</th>
                             </tr>
                         </thead>
-                        <tbody>${cardCashRows}</tbody>
+                        <tbody>${cardCashWholesaleRows}</tbody>
                     </table>
                 `}
 
-                <!-- 4. Card Credit Sales Table -->
+                <!-- 4. Card Credit Sales Tables (Separated Retail & Wholesale) -->
                 <div class="section-title">
-                    <span>4. سجل مبيعات الكروت الآجل (${cardCreditList.length})</span>
-                    <span style="color: #7c3aed;">الإجمالي: ${totCardCredit.toLocaleString()} ر.ي</span>
+                    <span>4.1 سجل مبيعات الكروت الآجل - قطاعي (${cardCreditRetailList.length})</span>
+                    <span style="color: #059669;">الإجمالي: ${totCardCreditRetail.toLocaleString()} ر.ي (عمولة: +${totCardCreditRetailComm.toFixed(2)} ر.ي)</span>
                 </div>
-                ${cardCreditList.length === 0 ? '<p style="text-align: center; color: #94a3b8; padding: 8px; font-size: 11px;">لا توجد مبيعات كروت آجل مسجلة</p>' : `
+                ${cardCreditRetailList.length === 0 ? '<p style="text-align: center; color: #94a3b8; padding: 8px; font-size: 11px;">لا توجد مبيعات كروت آجل بالقطاعي</p>' : `
+                    <table>
+                        <thead>
+                            <tr>
+                                <th style="width: 30px;">#</th>
+                                <th>الفئة / الشبكة</th>
+                                <th>التاريخ والوقت</th>
+                                <th>العميل / المدين</th>
+                                <th>الكمية</th>
+                                <th>إجمالي المبيعات</th>
+                                <th>العمولة المكتسبة (10%)</th>
+                            </tr>
+                        </thead>
+                        <tbody>${cardCreditRetailRows}</tbody>
+                    </table>
+                `}
+
+                <div class="section-title">
+                    <span>4.2 سجل مبيعات الكروت الآجل - جملة (${cardCreditWholesaleList.length})</span>
+                    <span style="color: #7c3aed;">الإجمالي: ${totCardCreditWholesale.toLocaleString()} ر.ي (بدون عمولة)</span>
+                </div>
+                ${cardCreditWholesaleList.length === 0 ? '<p style="text-align: center; color: #94a3b8; padding: 8px; font-size: 11px;">لا توجد مبيعات كروت آجل بالجملة</p>' : `
                     <table>
                         <thead>
                             <tr>
@@ -758,7 +1202,7 @@ export default function Employees() {
                                 <th>العمولة المكتسبة</th>
                             </tr>
                         </thead>
-                        <tbody>${cardCreditRows}</tbody>
+                        <tbody>${cardCreditWholesaleRows}</tbody>
                     </table>
                 `}
 
@@ -845,33 +1289,70 @@ export default function Employees() {
             const rate = settings.yemeniExchangeRate || 140;
             const convertedSarAmount = parseFloat((amountNum / rate).toFixed(2));
 
-            // 1. Create employee_withdrawals record (stores original YER amount)
-            await addDoc(collection(db, 'employee_withdrawals'), {
-                tenantId,
-                employeeId: selectedEmployee.id,
-                employeeName: selectedEmployee.name,
-                employeeRole: selectedEmployee.role,
-                amount: amountNum,
-                notes: noteText,
-                date: Date.now(),
-                createdBy: appUser?.name || appUser?.email || 'المسؤول',
-                sourceFund
-            });
+            const now = new Date();
+            const dateStr = format(now, 'yyyy-MM-dd');
+            const timeStr = now.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
+            const staffName = appUser?.name || appUser?.email || 'المسؤول';
 
-            // 2. Deduct from corresponding cash box
+            // Determine strictly numeric sequential withdrawal/voucher number
+            let nextWithdrawalNum = 1;
+            try {
+                const qW = query(
+                    collection(db, 'employee_withdrawals'),
+                    where('tenantId', '==', tenantId)
+                );
+                const snapW = await getDocs(qW);
+                if (!snapW.empty) {
+                    const allWNums = snapW.docs.map(d => {
+                        const dat = d.data();
+                        const val = dat.withdrawalNumber || dat.voucherNumber;
+                        if (typeof val === 'number') return val;
+                        if (typeof val === 'string') {
+                            const digitsOnly = val.replace(/\D/g, '');
+                            return digitsOnly ? parseInt(digitsOnly, 10) : 0;
+                        }
+                        return 0;
+                    }).filter(n => !isNaN(n) && n > 0);
+                    if (allWNums.length > 0) {
+                        nextWithdrawalNum = Math.max(...allWNums) + 1;
+                    }
+                }
+            } catch (err) {
+                console.error('Error fetching max withdrawal number:', err);
+                nextWithdrawalNum = withdrawals.length + 1;
+            }
+            const withdrawalNumberStr = nextWithdrawalNum.toString();
+
+            let linkedCardCashboxId: string | null = null;
+            let linkedVoucherId: string | null = null;
+            let linkedCashId: string | null = null;
+
+            // 1. Deduct from corresponding cash box
             if (isNetworkWorker) {
                 // Deduct from network cards cashbox (card_cashbox) directly in Yemeni Rials (YER)
-                await addDoc(collection(db, 'card_cashbox'), {
+                const cashEntryPayload: any = {
                     tenantId,
                     type: 'manual_out',
-                    title: `مسحوبات الموظف: ${selectedEmployee.name}${noteText ? ` (${noteText})` : ''}`,
+                    voucherNumber: withdrawalNumberStr,
+                    title: `سند صرف مسحوبات #${withdrawalNumberStr} - الموظف: ${selectedEmployee.name}${noteText ? ` (${noteText})` : ''}`,
                     amount: amountNum,
-                    date: Date.now(),
+                    date: dateStr,
+                    dateTime: `${dateStr} ${timeStr}`,
+                    userName: staffName,
                     isIncome: false,
-                    createdBy: appUser?.name || appUser?.email || 'المسؤول'
-                });
+                    createdBy: staffName,
+                    referenceId: withdrawalNumberStr,
+                    disbursedByEmployeeId: selectedEmployee.id,
+                    disbursedByEmployeeName: selectedEmployee.name,
+                    recipientEmployeeId: selectedEmployee.id,
+                    recipientEmployeeName: selectedEmployee.name,
+                    createdAt: Date.now()
+                };
+                const cardCashRef = await addDoc(collection(db, 'card_cashbox'), cashEntryPayload);
+                linkedCardCashboxId = cardCashRef.id;
+                await LocalCache.updateCachedItem('card_cashbox', tenantId, { id: cardCashRef.id, ...cashEntryPayload });
             } else {
-                // Deduct from general cash box via payment voucher (vouchers) in Saudi Rials (SAR)
+                // Deduct from general cash box via payment voucher (vouchers) and cash entry in Saudi Rials (SAR)
                 let nextVNum = '1';
                 try {
                     const qNum = query(
@@ -881,7 +1362,15 @@ export default function Employees() {
                     );
                     const snap = await getDocs(qNum);
                     if (!snap.empty) {
-                        const allNums = snap.docs.map(d => parseInt(d.data().voucherNumber) || 0).filter(n => !isNaN(n));
+                        const allNums = snap.docs.map(d => {
+                            const vn = d.data().voucherNumber;
+                            if (typeof vn === 'number') return vn;
+                            if (typeof vn === 'string') {
+                                const digits = vn.replace(/\D/g, '');
+                                return digits ? parseInt(digits, 10) : 0;
+                            }
+                            return 0;
+                        }).filter(n => !isNaN(n) && n > 0);
                         const maxNum = allNums.length > 0 ? Math.max(...allNums) : 0;
                         nextVNum = (maxNum + 1).toString();
                     }
@@ -889,7 +1378,7 @@ export default function Employees() {
                     console.error('Error fetching max voucher number:', err);
                 }
 
-                await addDoc(collection(db, 'vouchers'), {
+                const voucherRef = await addDoc(collection(db, 'vouchers'), {
                     tenantId,
                     voucherNumber: nextVNum,
                     type: 'payment', // صرف من الصندوق العام
@@ -897,23 +1386,62 @@ export default function Employees() {
                     partyName: `مسحوبات الموظف: ${selectedEmployee.name}`,
                     partyId: selectedEmployee.id,
                     amount: convertedSarAmount,
-                    description: `مسحوبات وسلفة الموظف: ${selectedEmployee.name}${noteText ? ` - ${noteText}` : ''} (تم السحب بـ ${amountNum} ر.ي بسعر تحويل ${rate})`,
+                    description: `سند صرف #${nextVNum} - مسحوبات وسلفة الموظف: ${selectedEmployee.name}${noteText ? ` - ${noteText}` : ''} (تم السحب بـ ${amountNum} ر.ي بسعر تحويل ${rate})`,
                     date: Date.now(),
-                    createdBy: appUser?.name || appUser?.email || 'المسؤول'
+                    createdBy: staffName,
+                    disbursedByEmployeeId: selectedEmployee.id,
+                    disbursedByEmployeeName: selectedEmployee.name,
+                    recipientEmployeeId: selectedEmployee.id,
+                    recipientEmployeeName: selectedEmployee.name
                 });
+                linkedVoucherId = voucherRef.id;
+
+                // Also write to general store cash box collection 'cash'
+                const cashRef = await addDoc(collection(db, 'cash'), {
+                    tenantId,
+                    voucherNumber: nextVNum,
+                    date: dateStr,
+                    amount: convertedSarAmount,
+                    type: 'out',
+                    category: 'out_payment',
+                    description: `سند صرف #${nextVNum} - مسحوبات الموظف: ${selectedEmployee.name}${noteText ? ` - ${noteText}` : ''} (${amountNum} ر.ي)`,
+                    referenceId: voucherRef.id,
+                    createdBy: appUser?.uid || staffName,
+                    createdAt: Date.now(),
+                    affectsCash: true
+                });
+                linkedCashId = cashRef.id;
             }
+
+            // 2. Create employee_withdrawals record (stores original YER amount and numeric voucher number)
+            await addDoc(collection(db, 'employee_withdrawals'), {
+                tenantId,
+                withdrawalNumber: nextWithdrawalNum,
+                voucherNumber: withdrawalNumberStr,
+                employeeId: selectedEmployee.id,
+                employeeName: selectedEmployee.name,
+                employeeRole: selectedEmployee.role,
+                amount: amountNum,
+                notes: noteText,
+                date: Date.now(),
+                createdBy: staffName,
+                sourceFund,
+                linkedCardCashboxId,
+                linkedVoucherId,
+                linkedCashId
+            });
 
             await logUserAction(
                 'إضافة سحب للموظف',
                 isNetworkWorker 
-                    ? `تم سحب مبلغ ${amountNum} ر.ي للموظف ${selectedEmployee.name} والخصم من صندوق الشبكات مباشرة${maxLimit > 0 && newTotal > maxLimit ? ' (تجاوز سقف السلف)' : ''}`
-                    : `تم سحب مبلغ ${amountNum} ر.ي (يعادل ${convertedSarAmount} ر.س) للموظف ${selectedEmployee.name} والخصم من الصندوق العام${maxLimit > 0 && newTotal > maxLimit ? ' (تجاوز سقف السلف)' : ''}`
+                    ? `تم سحب مبلغ ${amountNum} ر.ي (سند رقم #${withdrawalNumberStr}) للموظف ${selectedEmployee.name} والخصم من صندوق الشبكات مباشرة${maxLimit > 0 && newTotal > maxLimit ? ' (تجاوز سقف السلف)' : ''}`
+                    : `تم سحب مبلغ ${amountNum} ر.ي (سند رقم #${withdrawalNumberStr} يعادل ${convertedSarAmount} ر.س) للموظف ${selectedEmployee.name} والخصم من الصندوق العام${maxLimit > 0 && newTotal > maxLimit ? ' (تجاوز سقف السلف)' : ''}`
             );
 
             if (isNetworkWorker) {
-                alert(`تم تسجيل الخصم والسحب بنجاح بمبلغ ${amountNum.toLocaleString()} ر.ي من صندوق الشبكات مباشرة.`);
+                alert(`تم تسجيل سند السحب رقم #${withdrawalNumberStr} بنجاح بمبلغ ${amountNum.toLocaleString()} ر.ي والخصم من صندوق الشبكات مباشرة.`);
             } else {
-                alert(`تم تسجيل الخصم والسحب بنجاح بمبلغ ${amountNum.toLocaleString()} ر.ي (يعادل ${convertedSarAmount.toLocaleString()} ر.س تم خصمها من الصندوق العام بسعر صرف ${rate}).`);
+                alert(`تم تسجيل سند السحب رقم #${withdrawalNumberStr} بنجاح بمبلغ ${amountNum.toLocaleString()} ر.ي (يعادل ${convertedSarAmount.toLocaleString()} ر.س تم خصمها من الصندوق العام بسعر صرف ${rate}).`);
             }
             setWithdrawAmount('');
             setWithdrawNotes('');
@@ -980,38 +1508,68 @@ export default function Employees() {
             const rate = settings.yemeniExchangeRate || 140;
             const convertedSarAmount = parseFloat((amountNum / rate).toFixed(2));
 
-            // 1. Create employee_withdrawals record for the TARGET EMPLOYEE (registered on target employee only)
-            await addDoc(collection(db, 'employee_withdrawals'), {
-                tenantId,
-                employeeId: targetEmp.id,
-                employeeName: targetEmp.name,
-                employeeRole: targetEmp.role,
-                amount: amountNum,
-                notes: fullNote,
-                date: Date.now(),
-                createdBy: appUser?.name || appUser?.email || 'المسؤول',
-                sourceFund,
-                withdrawnFromEmployeeId: selectedEmployee.id,
-                withdrawnFromEmployeeName: selectedEmployee.name,
-                withdrawnFromEmployeeRole: selectedEmployee.role
-            });
+            const now = new Date();
+            const dateStr = format(now, 'yyyy-MM-dd');
+            const timeStr = now.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
+            const staffName = appUser?.name || appUser?.email || 'المسؤول';
 
-            // 2. Deduct from the CURRENT EMPLOYEE's corresponding cash box
+            // Determine strictly numeric sequential withdrawal/voucher number
+            let nextWithdrawalNum = 1;
+            try {
+                const qW = query(
+                    collection(db, 'employee_withdrawals'),
+                    where('tenantId', '==', tenantId)
+                );
+                const snapW = await getDocs(qW);
+                if (!snapW.empty) {
+                    const allWNums = snapW.docs.map(d => {
+                        const dat = d.data();
+                        const val = dat.withdrawalNumber || dat.voucherNumber;
+                        if (typeof val === 'number') return val;
+                        if (typeof val === 'string') {
+                            const digitsOnly = val.replace(/\D/g, '');
+                            return digitsOnly ? parseInt(digitsOnly, 10) : 0;
+                        }
+                        return 0;
+                    }).filter(n => !isNaN(n) && n > 0);
+                    if (allWNums.length > 0) {
+                        nextWithdrawalNum = Math.max(...allWNums) + 1;
+                    }
+                }
+            } catch (err) {
+                console.error('Error fetching max withdrawal number:', err);
+                nextWithdrawalNum = withdrawals.length + 1;
+            }
+            const withdrawalNumberStr = nextWithdrawalNum.toString();
+
+            let linkedCardCashboxId: string | null = null;
+            let linkedVoucherId: string | null = null;
+            let linkedCashId: string | null = null;
+
+            // 1. Deduct from the CURRENT EMPLOYEE's corresponding cash box
             if (isNetworkWorker) {
                 // Deduct from network cards cashbox in YER
-                await addDoc(collection(db, 'card_cashbox'), {
+                const cashEntryPayload: any = {
                     tenantId,
                     type: 'manual_out',
-                    title: `سحب للموظف: ${targetEmp.name} (صُرف من صندوق: ${selectedEmployee.name})${userNote ? ` - ${userNote}` : ''}`,
+                    voucherNumber: withdrawalNumberStr,
+                    title: `سند صرف #${withdrawalNumberStr} للموظف: ${targetEmp.name} (صُرف من صندوق: ${selectedEmployee.name})${userNote ? ` - ${userNote}` : ''}`,
                     amount: amountNum,
-                    date: Date.now(),
+                    date: dateStr,
+                    dateTime: `${dateStr} ${timeStr}`,
+                    userName: staffName,
                     isIncome: false,
-                    createdBy: appUser?.name || appUser?.email || 'المسؤول',
+                    createdBy: staffName,
+                    referenceId: withdrawalNumberStr,
                     disbursedByEmployeeId: selectedEmployee.id,
                     disbursedByEmployeeName: selectedEmployee.name,
                     recipientEmployeeId: targetEmp.id,
-                    recipientEmployeeName: targetEmp.name
-                });
+                    recipientEmployeeName: targetEmp.name,
+                    createdAt: Date.now()
+                };
+                const cardCashRef = await addDoc(collection(db, 'card_cashbox'), cashEntryPayload);
+                linkedCardCashboxId = cardCashRef.id;
+                await LocalCache.updateCachedItem('card_cashbox', tenantId, { id: cardCashRef.id, ...cashEntryPayload });
             } else {
                 // Deduct from general store cash box via payment voucher in SAR
                 let nextVNum = '1';
@@ -1023,7 +1581,15 @@ export default function Employees() {
                     );
                     const snap = await getDocs(qNum);
                     if (!snap.empty) {
-                        const allNums = snap.docs.map(d => parseInt(d.data().voucherNumber) || 0).filter(n => !isNaN(n));
+                        const allNums = snap.docs.map(d => {
+                            const vn = d.data().voucherNumber;
+                            if (typeof vn === 'number') return vn;
+                            if (typeof vn === 'string') {
+                                const digits = vn.replace(/\D/g, '');
+                                return digits ? parseInt(digits, 10) : 0;
+                            }
+                            return 0;
+                        }).filter(n => !isNaN(n) && n > 0);
                         const maxNum = allNums.length > 0 ? Math.max(...allNums) : 0;
                         nextVNum = (maxNum + 1).toString();
                     }
@@ -1031,7 +1597,7 @@ export default function Employees() {
                     console.error('Error fetching max voucher number:', err);
                 }
 
-                await addDoc(collection(db, 'vouchers'), {
+                const voucherRef = await addDoc(collection(db, 'vouchers'), {
                     tenantId,
                     voucherNumber: nextVNum,
                     type: 'payment',
@@ -1039,24 +1605,62 @@ export default function Employees() {
                     partyName: `سحب للموظف: ${targetEmp.name} (صندوق ${selectedEmployee.name})`,
                     partyId: targetEmp.id,
                     amount: convertedSarAmount,
-                    description: `سحب للموظف: ${targetEmp.name} صُرف من صندوق ${selectedEmployee.name}${userNote ? ` - ${userNote}` : ''} (سحب ${amountNum} ر.ي بسعر صرف ${rate})`,
+                    description: `سند صرف #${nextVNum} - سحب للموظف: ${targetEmp.name} صُرف من صندوق ${selectedEmployee.name}${userNote ? ` - ${userNote}` : ''} (سحب ${amountNum} ر.ي بسعر صرف ${rate})`,
                     date: Date.now(),
-                    createdBy: appUser?.name || appUser?.email || 'المسؤول',
+                    createdBy: staffName,
                     disbursedByEmployeeId: selectedEmployee.id,
                     disbursedByEmployeeName: selectedEmployee.name,
                     recipientEmployeeId: targetEmp.id,
                     recipientEmployeeName: targetEmp.name
                 });
+                linkedVoucherId = voucherRef.id;
+
+                // Also write to general store cash box collection 'cash'
+                const cashRef = await addDoc(collection(db, 'cash'), {
+                    tenantId,
+                    voucherNumber: nextVNum,
+                    date: dateStr,
+                    amount: convertedSarAmount,
+                    type: 'out',
+                    category: 'out_payment',
+                    description: `سند صرف #${nextVNum} - سحب للموظف: ${targetEmp.name} (صُرف من صندوق ${selectedEmployee.name})`,
+                    referenceId: voucherRef.id,
+                    createdBy: appUser?.uid || staffName,
+                    createdAt: Date.now(),
+                    affectsCash: true
+                });
+                linkedCashId = cashRef.id;
             }
+
+            // 2. Create employee_withdrawals record for the TARGET EMPLOYEE (registered on target employee only)
+            await addDoc(collection(db, 'employee_withdrawals'), {
+                tenantId,
+                withdrawalNumber: nextWithdrawalNum,
+                voucherNumber: withdrawalNumberStr,
+                employeeId: targetEmp.id,
+                employeeName: targetEmp.name,
+                employeeRole: targetEmp.role,
+                amount: amountNum,
+                notes: fullNote,
+                date: Date.now(),
+                createdBy: staffName,
+                sourceFund,
+                withdrawnFromEmployeeId: selectedEmployee.id,
+                withdrawnFromEmployeeName: selectedEmployee.name,
+                withdrawnFromEmployeeRole: selectedEmployee.role,
+                linkedCardCashboxId,
+                linkedVoucherId,
+                linkedCashId
+            });
 
             await logUserAction(
                 'سحب لموظف آخر من صندوق موظف',
                 isNetworkWorker
-                    ? `تم صرف سحب بمبلغ ${amountNum} ر.ي للموظف ${targetEmp.name} من صندوق كروت الشبكة للموظف ${selectedEmployee.name}`
-                    : `تم صرف سحب بمبلغ ${amountNum} ر.ي (يعادل ${convertedSarAmount} ر.س) للموظف ${targetEmp.name} من الصندوق العام للموظف ${selectedEmployee.name}`
+                    ? `تم صرف سحب رقم #${withdrawalNumberStr} بمبلغ ${amountNum} ر.ي للموظف ${targetEmp.name} من صندوق كروت الشبكة للموظف ${selectedEmployee.name}`
+                    : `تم صرف سحب رقم #${withdrawalNumberStr} بمبلغ ${amountNum} ر.ي (يعادل ${convertedSarAmount} ر.س) للموظف ${targetEmp.name} من الصندوق العام للموظف ${selectedEmployee.name}`
             );
 
-            alert(`تمت عملية السحب بنجاح!\n• الموظف المستفيد: ${targetEmp.name}\n• المبلغ المسجل عليه: ${amountNum.toLocaleString()} ر.ي\n• تم الخصم المالي من صندوق: ${selectedEmployee.name} (${isNetworkWorker ? 'صندوق كروت الشبكة' : 'الصندوق العام'}) دون إضافة سلفة على رصيده.`);
+            alert(`تمت عملية السحب بنجاح (سند رقم #${withdrawalNumberStr})!\n• الموظف المستفيد: ${targetEmp.name}\n• المبلغ المسجل عليه: ${amountNum.toLocaleString()} ر.ي\n• تم الخصم المالي من صندوق: ${selectedEmployee.name} (${isNetworkWorker ? 'صندوق كروت الشبكة' : 'الصندوق العام'}) دون إضافة سلفة على رصيده.`);
 
             setTargetEmployeeId('');
             setWithdrawOtherAmount('');
@@ -1102,6 +1706,22 @@ export default function Employees() {
         }
     };
 
+    if (!hasEmployeesViewPermission) {
+        return (
+            <div className="p-8 text-center" dir="rtl">
+                <div className="max-w-md mx-auto bg-white dark:bg-slate-900 border border-red-200 dark:border-red-900/50 rounded-2xl p-6 shadow-sm">
+                    <div className="w-12 h-12 bg-red-100 dark:bg-red-950/60 text-red-600 dark:text-red-400 rounded-full flex items-center justify-center mx-auto mb-3">
+                        <ShieldAlert size={24} />
+                    </div>
+                    <h3 className="text-base font-bold text-slate-900 dark:text-white mb-1">غير مصرح بالدخول</h3>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                        ليس لديك صلاحية لعرض قسم الموظفين وبيانات الحساب. يرجى التواصل مع إدارة النظام لتفعيل الصلاحية.
+                    </p>
+                </div>
+            </div>
+        );
+    }
+
     return (
         <div className="p-2 sm:p-3 space-y-3 max-w-7xl mx-auto pb-12 text-right w-full overflow-x-hidden" dir="rtl">
             {/* MAIN CONTENT AREA */}
@@ -1145,59 +1765,503 @@ export default function Employees() {
                         </div>
                     </div>
 
-                    {filteredEmployees.length === 0 ? (
-                        <div className="bg-white dark:bg-slate-900 rounded-xl p-8 text-center border border-slate-200 dark:border-slate-800">
-                            <Users size={40} className="mx-auto text-slate-300 dark:text-slate-700 mb-2 stroke-[1.5]" />
-                            <h3 className="font-bold text-sm text-slate-700 dark:text-slate-300 mb-1">لا يوجد موظفين مطابقين</h3>
-                            <p className="text-xs text-slate-500 dark:text-slate-400">
-                                يمكنك تعيين دور (كاشير، أمين مخزن، أو عامل شبكة) لأي مستخدم من قسم إعدادات المستخدمين ليظهر هنا تلقائياً.
-                            </p>
-                        </div>
-                    ) : (
-                        <div className="grid grid-cols-2 gap-2 sm:gap-2.5">
-                            {filteredEmployees.map((emp) => {
-                                const roleInfo = roleConfig[emp.role] || {
-                                    label: emp.role,
-                                    icon: UserCheck,
-                                    color: 'text-slate-600',
-                                    bg: 'bg-slate-100',
-                                    border: 'border-slate-200'
-                                };
-                                const RoleIcon = roleInfo.icon;
-                                const totalWithdraw = getTotalWithdrawals(emp);
-                                const totalComm = getTotalCommissions(emp);
-
-                                return (
+                    {!isManagerOverviewOpen ? (
+                        filteredEmployees.length === 0 ? (
+                            <div className="bg-white dark:bg-slate-900 rounded-xl p-8 text-center border border-slate-200 dark:border-slate-800">
+                                <Users size={40} className="mx-auto text-slate-300 dark:text-slate-700 mb-2 stroke-[1.5]" />
+                                <h3 className="font-bold text-sm text-slate-700 dark:text-slate-300 mb-1">لا يوجد موظفين مطابقين</h3>
+                                <p className="text-xs text-slate-500 dark:text-slate-400">
+                                    يمكنك تعيين دور (كاشير، أمين مخزن، أو عامل شبكة) لأي مستخدم من قسم إعدادات المستخدمين ليظهر هنا تلقائياً.
+                                </p>
+                            </div>
+                        ) : (
+                            <div className="grid grid-cols-2 gap-2 sm:gap-2.5">
+                                {/* SPECIAL INTEGRATED CARD: MANAGER CASHBOX / EMPLOYEE FUNDS MANAGER */}
+                                {appUser?.role === 'admin' && (
                                     <div
-                                        key={emp.id}
-                                        onClick={() => setSelectedEmployee(emp)}
-                                        className="group bg-white dark:bg-slate-900 rounded-xl border border-slate-200/90 dark:border-slate-800/90 p-3 shadow-2xs hover:shadow-md hover:border-indigo-400 dark:hover:border-indigo-600 transition-all cursor-pointer flex flex-col justify-between space-y-3"
+                                        onClick={() => {
+                                            setSelectedEmployee(null);
+                                            setIsManagerOverviewOpen(true);
+                                        }}
+                                        className="group bg-gradient-to-br from-purple-500/10 via-purple-600/5 to-indigo-500/10 dark:from-purple-950/40 dark:to-indigo-950/30 rounded-xl border-2 border-purple-500/80 dark:border-purple-600 p-3 shadow-2xs hover:shadow-md hover:border-purple-600 transition-all cursor-pointer flex flex-col justify-between space-y-3"
                                     >
-                                        {/* Card Header */}
                                         <div className="flex items-start justify-between gap-2">
-                                            <div className="flex items-center gap-2.5">
-                                                <div className={`p-2.5 rounded-xl ${roleInfo.bg} ${roleInfo.color} ${roleInfo.border} border shrink-0`}>
-                                                    <RoleIcon size={20} className="stroke-[2.2]" />
+                                            <div className="flex items-center gap-2.5 min-w-0">
+                                                <div className="p-2.5 rounded-xl bg-purple-600 text-white font-black shadow-2xs shrink-0">
+                                                    <Coins size={20} />
                                                 </div>
                                                 <div className="min-w-0">
-                                                    <h3 className="font-black text-slate-900 dark:text-white text-sm truncate group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition">
-                                                        {emp.name}
+                                                    <h3 className="font-black text-slate-900 dark:text-white text-sm truncate group-hover:text-purple-600 dark:group-hover:text-purple-400 transition">
+                                                        صناديق الموظفين (صندوق المدير)
                                                     </h3>
-                                                    <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md mt-0.5 ${roleInfo.bg} ${roleInfo.color}`}>
-                                                        {roleInfo.label}
+                                                    <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md mt-0.5 bg-purple-100 text-purple-700 dark:bg-purple-900/60 dark:text-purple-300">
+                                                        قسم صندوق المدير المالي
                                                     </span>
                                                 </div>
                                             </div>
                                         </div>
 
-                                        {/* View Details Action Link */}
-                                        <div className="flex items-center justify-between text-xs font-bold text-indigo-600 dark:text-indigo-400 pt-2 border-t border-slate-100 dark:border-slate-800/80 group-hover:underline">
-                                            <span>فتح ملف الموظف والمسحوبات</span>
+                                        {/* Summary Numbers */}
+                                        <div className="grid grid-cols-2 gap-1.5 pt-2 border-t border-purple-200/80 dark:border-purple-900/50 text-[10px] font-bold">
+                                            <div className="text-purple-700 dark:text-purple-300 truncate">
+                                                <span className="block text-slate-500 dark:text-slate-400 text-[9px]">قائم مبيعات المحل:</span>
+                                                <span className="font-mono text-xs">{employees.reduce((acc, emp) => acc + getEmployeeGeneralFundNetBalance(emp), 0).toLocaleString()} ر.س</span>
+                                            </div>
+                                            <div className="text-indigo-600 dark:text-indigo-400 truncate">
+                                                <span className="block text-slate-500 dark:text-slate-400 text-[9px]">قائم مبيعات الكروت:</span>
+                                                <span className="font-mono text-xs">{employees.reduce((acc, emp) => acc + getEmployeeCardFundNetBalance(emp), 0).toLocaleString()} ر.ي</span>
+                                            </div>
+                                        </div>
+
+                                        <div className="flex items-center justify-between text-xs font-bold text-purple-600 dark:text-purple-400 pt-1 group-hover:underline">
+                                            <span>دخول قسم مدير الصناديق</span>
                                             <ArrowLeft size={14} />
                                         </div>
                                     </div>
-                                );
-                            })}
+                                )}
+
+                                {filteredEmployees.map((emp) => {
+                                    const roleInfo = roleConfig[emp.role] || {
+                                        label: emp.role,
+                                        icon: UserCheck,
+                                        color: 'text-slate-600',
+                                        bg: 'bg-slate-100',
+                                        border: 'border-slate-200'
+                                    };
+                                    const RoleIcon = roleInfo.icon;
+
+                                    return (
+                                        <div
+                                            key={emp.id}
+                                            onClick={() => {
+                                                setIsManagerOverviewOpen(false);
+                                                setSelectedEmployee(emp);
+                                            }}
+                                            className="group bg-white dark:bg-slate-900 rounded-xl border border-slate-200/90 dark:border-slate-800/90 p-3 shadow-2xs hover:shadow-md hover:border-indigo-400 dark:hover:border-indigo-600 transition-all cursor-pointer flex flex-col justify-between space-y-3"
+                                        >
+                                            {/* Card Header */}
+                                            <div className="flex items-start justify-between gap-2">
+                                                <div className="flex items-center gap-2.5">
+                                                    <div className={`p-2.5 rounded-xl ${roleInfo.bg} ${roleInfo.color} ${roleInfo.border} border shrink-0`}>
+                                                        <RoleIcon size={20} className="stroke-[2.2]" />
+                                                    </div>
+                                                    <div className="min-w-0">
+                                                        <h3 className="font-black text-slate-900 dark:text-white text-sm truncate group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition">
+                                                            {emp.name}
+                                                        </h3>
+                                                        <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md mt-0.5 ${roleInfo.bg} ${roleInfo.color}`}>
+                                                            {roleInfo.label}
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            {/* View Details Action Link */}
+                                            <div className="flex items-center justify-between text-xs font-bold text-indigo-600 dark:text-indigo-400 pt-2 border-t border-slate-100 dark:border-slate-800/80 group-hover:underline">
+                                                <span>فتح ملف الموظف والمسحوبات</span>
+                                                <ArrowLeft size={14} />
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )
+                    ) : (
+                        /* FULL INTEGRATED SECTION FOR MANAGER CASHBOX / EMPLOYEE FUNDS */
+                        <div className="space-y-4 animate-in fade-in duration-200">
+                            {/* Worker / Manager Banner Info */}
+                            <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200/90 dark:border-slate-800 p-3 sm:p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3 shadow-2xs">
+                                <div className="flex items-center gap-3 min-w-0">
+                                    <div className="p-2.5 rounded-xl bg-purple-600 text-white font-black shadow-xs shrink-0">
+                                        <Coins size={22} />
+                                    </div>
+                                    <div className="min-w-0">
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                            <h2 className="text-base sm:text-lg font-black text-slate-900 dark:text-white">قسم مدير صناديق الموظفين وتصفية المبالغ</h2>
+                                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-purple-100 dark:bg-purple-950/80 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800">
+                                                صندوق المدير
+                                            </span>
+                                        </div>
+                                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                                            إدارة وتصفية المبالغ المتبقية لدى كافة الموظفين وتوريدها لصندوق المدير عبر نظام السندات دون أي تأثير على الصناديق العامة.
+                                        </p>
+                                    </div>
+                                </div>
+
+                                <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setClearanceBoxType('general_cashbox');
+                                            setClearanceAmount('');
+                                            setClearanceNotes('');
+                                            setIsManagerClearanceModalOpen(true);
+                                        }}
+                                        className="h-9 px-3 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-lg text-xs flex items-center gap-1.5 shadow-xs transition cursor-pointer"
+                                    >
+                                        <Plus size={14} />
+                                        <span>إجراء تصفية / استلام مبلغ</span>
+                                    </button>
+
+                                    <button
+                                        type="button"
+                                        onClick={() => setIsWithdrawalsReportModalOpen(true)}
+                                        className="h-9 px-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs flex items-center gap-1.5 shadow-xs transition cursor-pointer"
+                                    >
+                                        <FileSpreadsheet size={14} />
+                                        <span>تقرير السحوبات</span>
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Top KPI Cards Summary across ALL Employees */}
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                {/* Total General Fund Remaining across all employees */}
+                                <div className="p-3.5 bg-purple-50/60 dark:bg-purple-950/30 border border-purple-200/80 dark:border-purple-900/40 rounded-xl space-y-1 shadow-2xs">
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-xs font-bold text-purple-900 dark:text-purple-300 flex items-center gap-1.5">
+                                            <ShoppingBag size={14} className="text-purple-600" />
+                                            إجمالي القائم لدى الموظفين (مبيعات المحل)
+                                        </span>
+                                        <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300">
+                                            ر.س
+                                        </span>
+                                    </div>
+                                    <div className="text-xl font-black font-mono text-purple-700 dark:text-purple-400 pt-1">
+                                        {employees.reduce((acc, emp) => acc + getEmployeeGeneralFundNetBalance(emp), 0).toLocaleString()} <span className="text-xs font-sans">ر.س</span>
+                                    </div>
+                                    <div className="text-[10px] text-slate-500 pt-1 border-t border-purple-100 dark:border-purple-900/50 flex justify-between">
+                                        <span>المجموع المصفى سابقاً لصندوق المدير:</span>
+                                        <span className="font-bold text-purple-700 dark:text-purple-300 font-mono">
+                                            {managerClearances.filter(c => c.boxType === 'general_cashbox').reduce((a, b) => a + Number(b.amount || 0), 0).toLocaleString()} ر.س
+                                        </span>
+                                    </div>
+                                </div>
+
+                                {/* Total Card Fund Remaining across all employees */}
+                                <div className="p-3.5 bg-indigo-50/60 dark:bg-indigo-950/30 border border-indigo-200/80 dark:border-indigo-900/40 rounded-xl space-y-1 shadow-2xs">
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-xs font-bold text-indigo-900 dark:text-indigo-300 flex items-center gap-1.5">
+                                            <Wifi size={14} className="text-indigo-600" />
+                                            إجمالي القائم لدى الموظفين (مبيعات الكروت)
+                                        </span>
+                                        <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300">
+                                            ر.ي
+                                        </span>
+                                    </div>
+                                    <div className="text-xl font-black font-mono text-indigo-700 dark:text-indigo-400 pt-1">
+                                        {employees.reduce((acc, emp) => acc + getEmployeeCardFundNetBalance(emp), 0).toLocaleString()} <span className="text-xs font-sans">ر.ي</span>
+                                    </div>
+                                    <div className="text-[10px] text-slate-500 pt-1 border-t border-indigo-100 dark:border-indigo-900/50 flex justify-between">
+                                        <span>المجموع المصفى سابقاً لصندوق المدير:</span>
+                                        <span className="font-bold text-indigo-700 dark:text-indigo-300 font-mono">
+                                            {managerClearances.filter(c => c.boxType === 'card_cashbox').reduce((a, b) => a + Number(b.amount || 0), 0).toLocaleString()} ر.ي
+                                        </span>
+                                    </div>
+                                </div>
+
+                                {/* Total Clearances Count & Manager Box Status */}
+                                <div className="p-3.5 bg-emerald-50/60 dark:bg-emerald-950/30 border border-emerald-200/80 dark:border-emerald-900/40 rounded-xl space-y-1 shadow-2xs">
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-xs font-bold text-emerald-900 dark:text-emerald-300 flex items-center gap-1.5">
+                                            <Receipt size={14} className="text-emerald-600" />
+                                            عدد سندات التصفية المكتملة
+                                        </span>
+                                        <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-100 dark:bg-emerald-900 text-emerald-700 dark:text-emerald-300">
+                                            سند
+                                        </span>
+                                    </div>
+                                    <div className="text-xl font-black font-mono text-emerald-700 dark:text-emerald-400 pt-1">
+                                        {managerClearances.length} <span className="text-xs font-sans">سند مالي</span>
+                                    </div>
+                                    <div className="text-[10px] text-emerald-700 dark:text-emerald-300 pt-1 border-t border-emerald-100 dark:border-emerald-900/50">
+                                        حالة صندوق المدير: <span className="font-bold">نشط ومُحدث آلياً</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Section A: Employee Funds Balances Table */}
+                            <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200/90 dark:border-slate-800 p-3.5 space-y-3 shadow-2xs">
+                                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2.5">
+                                    <h3 className="font-extrabold text-sm text-slate-900 dark:text-white flex items-center gap-2">
+                                        <Users size={16} className="text-purple-600" />
+                                        أرصدة صناديق الموظفين القائمة والإجراءات ({employees.length})
+                                    </h3>
+                                    <span className="text-[11px] text-slate-500 font-medium">
+                                        الخصم يتم من صندوق الموظف المختار فقط
+                                    </span>
+                                </div>
+
+                                <div className="hidden md:block overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-xl">
+                                    <table className="w-full min-w-max text-right text-xs whitespace-nowrap">
+                                        <thead>
+                                            <tr className="bg-slate-50 dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 font-extrabold text-[11px]">
+                                                <th className="py-3 px-4">الموظف والدور</th>
+                                                <th className="py-3 px-4">صندوق المحل المتبقي (ر.س)</th>
+                                                <th className="py-3 px-4">صندوق الكروت المتبقي (ر.ي)</th>
+                                                <th className="py-3 px-4">إجمالي ما تصفى للمدير سابقاً</th>
+                                                <th className="py-3 px-4 text-center">إجراء تصفية مالي مباشر</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-medium">
+                                            {employees.map((emp) => {
+                                                const generalNet = getEmployeeGeneralFundNetBalance(emp);
+                                                const cardNet = getEmployeeCardFundNetBalance(emp);
+                                                const empClearances = managerClearances.filter(c => c.employeeId === emp.id);
+                                                const totalSarCleared = empClearances.filter(c => c.boxType === 'general_cashbox').reduce((a, b) => a + Number(b.amount || 0), 0);
+                                                const totalYerCleared = empClearances.filter(c => c.boxType === 'card_cashbox').reduce((a, b) => a + Number(b.amount || 0), 0);
+                                                const hasFunds = generalNet > 0 || cardNet > 0;
+
+                                                return (
+                                                    <tr key={emp.id} className="hover:bg-slate-50/85 dark:hover:bg-slate-950/40 transition">
+                                                        <td className="py-3 px-4">
+                                                            <div className="flex items-center gap-2.5">
+                                                                <div className="w-7 h-7 rounded-lg bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 flex items-center justify-center font-extrabold text-xs">
+                                                                    {emp.name.charAt(0)}
+                                                                </div>
+                                                                <div>
+                                                                    <div className="font-extrabold text-slate-900 dark:text-white text-xs">{emp.name}</div>
+                                                                    <span className="text-[10px] text-slate-500 dark:text-slate-400 font-semibold">
+                                                                        {roleConfig[emp.role]?.label || emp.role}
+                                                                    </span>
+                                                                </div>
+                                                            </div>
+                                                        </td>
+                                                        <td className="py-3 px-4">
+                                                            {generalNet > 0 ? (
+                                                                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400 font-mono font-black text-xs border border-emerald-100 dark:border-emerald-900/40">
+                                                                    <Coins size={12} />
+                                                                    {generalNet.toLocaleString()} ر.س
+                                                                </span>
+                                                            ) : (
+                                                                <span className="text-slate-400 dark:text-slate-600 font-mono text-xs">0 ر.س</span>
+                                                            )}
+                                                        </td>
+                                                        <td className="py-3 px-4">
+                                                            {cardNet > 0 ? (
+                                                                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-400 font-mono font-black text-xs border border-indigo-100 dark:border-indigo-900/40">
+                                                                    <Wifi size={12} />
+                                                                    {cardNet.toLocaleString()} ر.ي
+                                                                </span>
+                                                            ) : (
+                                                                <span className="text-slate-400 dark:text-slate-600 font-mono text-xs">0 ر.ي</span>
+                                                            )}
+                                                        </td>
+                                                        <td className="py-3 px-4">
+                                                            <div className="text-slate-700 dark:text-slate-300 font-mono font-semibold text-[11px] space-y-0.5">
+                                                                {totalSarCleared > 0 && (
+                                                                    <div className="text-emerald-600 dark:text-emerald-400 font-bold">• {totalSarCleared.toLocaleString()} ر.س</div>
+                                                                )}
+                                                                {totalYerCleared > 0 && (
+                                                                    <div className="text-indigo-600 dark:text-indigo-400 font-bold">• {totalYerCleared.toLocaleString()} ر.ي</div>
+                                                                )}
+                                                                {totalSarCleared === 0 && totalYerCleared === 0 && (
+                                                                    <span className="text-slate-400 dark:text-slate-600">-</span>
+                                                                )}
+                                                            </div>
+                                                        </td>
+                                                        <td className="py-3 px-4 text-center">
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => {
+                                                                    setSelectedEmployee(emp);
+                                                                    setClearanceBoxType(generalNet > 0 ? 'general_cashbox' : 'card_cashbox');
+                                                                    setClearanceAmount(generalNet > 0 ? generalNet.toString() : (cardNet > 0 ? cardNet.toString() : ''));
+                                                                    setClearanceNotes('');
+                                                                    setIsManagerClearanceModalOpen(true);
+                                                                }}
+                                                                className={`px-3 py-1.5 font-bold rounded-lg text-xs shadow-xs transition flex items-center gap-1.5 mx-auto cursor-pointer ${
+                                                                    hasFunds 
+                                                                        ? 'bg-purple-600 hover:bg-purple-700 text-white' 
+                                                                        : 'bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 hover:bg-slate-200 dark:hover:bg-slate-700'
+                                                                }`}
+                                                            >
+                                                                <Coins size={13} />
+                                                                <span>{hasFunds ? 'تصفية صندوق الموظف' : 'الصندوق مصفّر'}</span>
+                                                            </button>
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+
+                                {/* Responsive Card Grid for Mobile */}
+                                <div className="block md:hidden space-y-3">
+                                    {employees.map((emp) => {
+                                        const generalNet = getEmployeeGeneralFundNetBalance(emp);
+                                        const cardNet = getEmployeeCardFundNetBalance(emp);
+                                        const empClearances = managerClearances.filter(c => c.employeeId === emp.id);
+                                        const totalSarCleared = empClearances.filter(c => c.boxType === 'general_cashbox').reduce((a, b) => a + Number(b.amount || 0), 0);
+                                        const totalYerCleared = empClearances.filter(c => c.boxType === 'card_cashbox').reduce((a, b) => a + Number(b.amount || 0), 0);
+                                        const hasFunds = generalNet > 0 || cardNet > 0;
+
+                                        return (
+                                            <div key={emp.id} className="bg-slate-50 dark:bg-slate-950/60 p-3 rounded-xl border border-slate-150 dark:border-slate-800/80 space-y-3">
+                                                {/* Header Info */}
+                                                <div className="flex items-center gap-2.5">
+                                                    <div className="w-8 h-8 rounded-lg bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300 flex items-center justify-center font-extrabold text-xs">
+                                                        {emp.name.charAt(0)}
+                                                    </div>
+                                                    <div>
+                                                        <div className="font-extrabold text-slate-900 dark:text-white text-xs">{emp.name}</div>
+                                                        <span className="text-[10px] text-slate-500 dark:text-slate-400 font-bold bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">
+                                                            {roleConfig[emp.role]?.label || emp.role}
+                                                        </span>
+                                                    </div>
+                                                </div>
+
+                                                {/* Grid Boxes for Balances */}
+                                                <div className="grid grid-cols-2 gap-2">
+                                                    {/* General Cash Balance */}
+                                                    <div className="p-2 bg-white dark:bg-slate-900 rounded-lg border border-slate-200/60 dark:border-slate-800/60">
+                                                        <div className="text-[9px] text-slate-400 font-bold mb-1">مبيعات المحل (ر.س)</div>
+                                                        {generalNet > 0 ? (
+                                                            <div className="text-xs font-black font-mono text-emerald-600 dark:text-emerald-400">
+                                                                {generalNet.toLocaleString()} ر.س
+                                                            </div>
+                                                        ) : (
+                                                            <div className="text-xs font-mono text-slate-400 dark:text-slate-600">مصفّر</div>
+                                                        )}
+                                                    </div>
+
+                                                    {/* Network Cards Balance */}
+                                                    <div className="p-2 bg-white dark:bg-slate-900 rounded-lg border border-slate-200/60 dark:border-slate-800/60">
+                                                        <div className="text-[9px] text-slate-400 font-bold mb-1">مبيعات الكروت (ر.ي)</div>
+                                                        {cardNet > 0 ? (
+                                                            <div className="text-xs font-black font-mono text-indigo-600 dark:text-indigo-400">
+                                                                {cardNet.toLocaleString()} ر.ي
+                                                            </div>
+                                                        ) : (
+                                                            <div className="text-xs font-mono text-slate-400 dark:text-slate-600">مصفّر</div>
+                                                        )}
+                                                    </div>
+                                                </div>
+
+                                                {/* History of Clearances Summary */}
+                                                {(totalSarCleared > 0 || totalYerCleared > 0) && (
+                                                    <div className="text-[10px] text-slate-500 dark:text-slate-400 bg-slate-150/40 dark:bg-slate-900/40 p-1.5 rounded-lg border border-slate-150 dark:border-slate-800/50 flex flex-wrap justify-between gap-1">
+                                                        <span>تصفية سابقة للمدير:</span>
+                                                        <div className="font-mono font-bold flex gap-2">
+                                                            {totalSarCleared > 0 && <span className="text-emerald-600">{totalSarCleared.toLocaleString()} ر.س</span>}
+                                                            {totalYerCleared > 0 && <span className="text-indigo-600">{totalYerCleared.toLocaleString()} ر.ي</span>}
+                                                        </div>
+                                                    </div>
+                                                )}
+
+                                                {/* Action Button */}
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        setSelectedEmployee(emp);
+                                                        setClearanceBoxType(generalNet > 0 ? 'general_cashbox' : 'card_cashbox');
+                                                        setClearanceAmount(generalNet > 0 ? generalNet.toString() : (cardNet > 0 ? cardNet.toString() : ''));
+                                                        setClearanceNotes('');
+                                                        setIsManagerClearanceModalOpen(true);
+                                                    }}
+                                                    className={`w-full py-2 font-bold rounded-lg text-xs shadow-xs transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                                                        hasFunds 
+                                                            ? 'bg-purple-600 hover:bg-purple-700 text-white' 
+                                                            : 'bg-slate-100 dark:bg-slate-800/80 text-slate-400 dark:text-slate-500 hover:bg-slate-200 dark:hover:bg-slate-700'
+                                                    }`}
+                                                >
+                                                    <Coins size={13} />
+                                                    <span>{hasFunds ? 'تصفية واستلام صندوق الموظف' : 'الصندوق مصفّر بالكامل'}</span>
+                                                </button>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+
+                            {/* Section B: All Clearance Vouchers History Table */}
+                            <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200/90 dark:border-slate-800 p-3.5 space-y-3 shadow-2xs">
+                                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2.5">
+                                    <h3 className="font-extrabold text-sm text-slate-900 dark:text-white flex items-center gap-2">
+                                        <Receipt size={16} className="text-purple-600" />
+                                        سجل سندات التصفية واستلام مبالغ الموظفين التاريخي ({managerClearances.length})
+                                    </h3>
+                                    <span className="text-[11px] text-slate-500 font-medium">
+                                        سندات رسمية مسجلة ومحفوظة
+                                    </span>
+                                </div>
+
+                                {managerClearances.length === 0 ? (
+                                    <div className="text-center py-8 text-slate-400 text-xs">
+                                        لا توجد سندات تصفية نقدية سابقة لصندوق المدير حتى الآن.
+                                    </div>
+                                ) : (
+                                    <div className="overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-xl">
+                                        <table className="w-full min-w-max text-right text-xs whitespace-nowrap">
+                                            <thead>
+                                                <tr className="bg-slate-50 dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 font-extrabold">
+                                                    <th className="py-3 px-3">رقم السند</th>
+                                                    <th className="py-3 px-3">التاريخ والوقت</th>
+                                                    <th className="py-3 px-3">الموظف المصفى</th>
+                                                    <th className="py-3 px-3">نوع الصندوق</th>
+                                                    <th className="py-3 px-3">المبلغ المصفى</th>
+                                                    <th className="py-3 px-3">البيان والملاحظات</th>
+                                                    <th className="py-3 px-3">المستلم (المدير)</th>
+                                                    <th className="py-3 px-3 text-center">إجراءات السند</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-medium">
+                                                {managerClearances.map((rec) => (
+                                                    <tr key={rec.id} className="hover:bg-slate-50 dark:hover:bg-slate-950/50 transition">
+                                                        <td className="py-2.5 px-3 font-mono font-bold text-purple-600 dark:text-purple-400">
+                                                            #{rec.clearanceNumber}
+                                                        </td>
+                                                        <td className="py-2.5 px-3 text-slate-500 font-mono text-[11px]">
+                                                            {rec.createdAt ? new Date(rec.createdAt).toLocaleString('ar-SA') : '-'}
+                                                        </td>
+                                                        <td className="py-2.5 px-3 font-extrabold text-slate-900 dark:text-white">
+                                                            {rec.employeeName}
+                                                        </td>
+                                                        <td className="py-2.5 px-3">
+                                                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${rec.boxType === 'card_cashbox' ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300' : 'bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300'}`}>
+                                                                {rec.boxType === 'card_cashbox' ? 'صندوق الكروت (ر.ي)' : 'صندوق المحل (ر.س)'}
+                                                            </span>
+                                                        </td>
+                                                        <td className="py-2.5 px-3 font-mono font-extrabold text-sm text-slate-900 dark:text-white">
+                                                            {rec.amount.toLocaleString()} <span className="text-xs font-sans font-bold">{rec.currency}</span>
+                                                        </td>
+                                                        <td className="py-2.5 px-3 text-slate-600 dark:text-slate-400 text-[11px] max-w-xs truncate" title={rec.notes}>
+                                                            {rec.notes || '-'}
+                                                        </td>
+                                                        <td className="py-2.5 px-3 text-slate-600 dark:text-slate-400 text-[11px]">
+                                                            {rec.managerName}
+                                                        </td>
+                                                        <td className="py-2.5 px-3 text-center">
+                                                            <div className="flex items-center justify-center gap-1.5">
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => setSelectedClearanceVoucher(rec)}
+                                                                    className="p-1.5 bg-purple-50 dark:bg-purple-950/60 hover:bg-purple-100 dark:hover:bg-purple-900 text-purple-700 dark:text-purple-300 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer"
+                                                                    title="معاينة وطباعة سند التصفية المالي"
+                                                                >
+                                                                    <Printer size={13} />
+                                                                    <span>السند</span>
+                                                                </button>
+                                                                {canViewAllEmployees && (
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => handleDeleteManagerClearance(rec)}
+                                                                        className="p-1.5 bg-red-50 dark:bg-red-950/60 hover:bg-red-100 dark:hover:bg-red-900 text-red-600 dark:text-red-400 rounded-lg text-xs font-bold transition cursor-pointer"
+                                                                        title="حذف هذا السند وإعادة ضبط رصيد الموظف التلقائي"
+                                                                    >
+                                                                        <Trash2 size={13} />
+                                                                    </button>
+                                                                )}
+                                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                )}
+                            </div>
                         </div>
                     )}
                 </div>
@@ -1255,6 +2319,24 @@ export default function Employees() {
                                 <ArrowRightLeft size={13} />
                                 <span>سحب لموظف آخر</span>
                             </button>
+
+                            {/* 3. تصفية صندوق الموظف (صندوق المدير) */}
+                            {canViewAllEmployees && (
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setClearanceBoxType('general_cashbox');
+                                        setClearanceAmount('');
+                                        setClearanceNotes('');
+                                        setIsManagerClearanceModalOpen(true);
+                                    }}
+                                    className="h-8 px-2.5 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-lg text-xs flex items-center gap-1.5 shadow-xs transition cursor-pointer shrink-0 whitespace-nowrap"
+                                    title="تصفية واستلام مبالغ من صندوق الموظف إلى صندوق المدير"
+                                >
+                                    <Coins size={13} />
+                                    <span>تصفية صندوق الموظف</span>
+                                </button>
+                            )}
 
                             {/* 3. أيقونة التنزيل (PDF) */}
                             <button
@@ -1570,6 +2652,19 @@ export default function Employees() {
                                 <TrendingDown size={14} />
                                 سجل المسحوبات والمديونيات ({getFilteredWithdrawals(selectedEmployee).length})
                             </button>
+
+                            <button
+                                type="button"
+                                onClick={() => setActiveMainTableTab('manager_clearance')}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap ${
+                                    activeMainTableTab === 'manager_clearance'
+                                        ? 'bg-purple-600 text-white shadow-2xs'
+                                        : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                                }`}
+                            >
+                                <Coins size={14} />
+                                تصفية صندوق الموظف (صندوق المدير) ({managerClearances.filter(c => c.employeeId === selectedEmployee.id).length})
+                            </button>
                         </div>
 
                         {/* TABLE 1: SALES & INVOICES */}
@@ -1661,15 +2756,14 @@ export default function Employees() {
 
                                     return (
                                         <div className="overflow-x-auto">
-                                            <table className="w-full text-right text-xs">
+                                            <table className="w-full min-w-max text-right text-xs whitespace-nowrap">
                                                 <thead>
-                                                    <tr className="border-b border-slate-100 dark:border-slate-800 text-slate-400 font-bold">
-                                                        <th className="py-2.5 px-2">رقم الفاتورة / الحركة</th>
-                                                        <th className="py-2.5 px-2">التاريخ والوقت</th>
-                                                        <th className="py-2.5 px-2">البيان / العميل / الفئة</th>
-                                                        <th className="py-2.5 px-2">طريقة الدفع</th>
-                                                        <th className="py-2.5 px-2">الإجمالي</th>
-                                                        <th className="py-2.5 px-2 text-center">إجراء</th>
+                                                    <tr className="border-b border-slate-100 dark:border-slate-800 text-slate-400 font-bold whitespace-nowrap">
+                                                        <th className="py-2.5 px-3">رقم الفاتورة</th>
+                                                        <th className="py-2.5 px-3">التاريخ والوقت</th>
+                                                        <th className="py-2.5 px-3">البيان</th>
+                                                        <th className="py-2.5 px-3">طريقة الدفع</th>
+                                                        <th className="py-2.5 px-3">الإجمالي</th>
                                                     </tr>
                                                 </thead>
                                                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 font-medium">
@@ -1683,18 +2777,62 @@ export default function Employees() {
                                                         const totalAmt = isCard ? (Number(item.totalAmount) || 0) : (Number(item.total) || 0);
 
                                                         return (
-                                                            <tr key={item.id || idx} className="hover:bg-slate-50 dark:hover:bg-slate-950/50 transition">
-                                                                <td className="py-2.5 px-2 font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                                                            <tr 
+                                                                key={item.id || idx} 
+                                                                onClick={() => {
+                                                                    if (isCard) {
+                                                                        setSelectedInvoicePreview({
+                                                                            isOpen: true,
+                                                                            invoice: {
+                                                                                ...item,
+                                                                                invoiceNumber: invNum,
+                                                                                date: typeof rawDate === 'number' ? rawDate : Date.now(),
+                                                                                customerName: item.userName || 'مشتري بطاقات',
+                                                                                total: totalAmt,
+                                                                                paidAmount: totalAmt,
+                                                                                paymentType: isCredit ? 'credit' : 'cash',
+                                                                                sellerName: selectedEmployee.name
+                                                                            },
+                                                                            type: 'card_sale',
+                                                                            items: [{
+                                                                                name: item.categoryName || 'بطاقة شبكة',
+                                                                                quantity: item.quantity || 1,
+                                                                                price: totalAmt ? (totalAmt / (item.quantity || 1)) : 0,
+                                                                                total: totalAmt
+                                                                            }]
+                                                                        });
+                                                                    } else {
+                                                                        setSelectedInvoicePreview({
+                                                                            isOpen: true,
+                                                                            invoice: {
+                                                                                ...item,
+                                                                                invoiceNumber: invNum,
+                                                                                date: typeof rawDate === 'number' ? rawDate : Date.now(),
+                                                                                customerName: item.customerName || 'عميل عام',
+                                                                                total: totalAmt,
+                                                                                paidAmount: item.paidAmount || totalAmt,
+                                                                                paymentType: item.paymentType || 'cash',
+                                                                                sellerName: selectedEmployee.name
+                                                                            },
+                                                                            type: 'sale',
+                                                                            items: item.items || []
+                                                                        });
+                                                                    }
+                                                                }}
+                                                                className="hover:bg-indigo-50/60 dark:hover:bg-indigo-950/40 transition cursor-pointer whitespace-nowrap group"
+                                                                title="انقر لمعاينة الفاتورة"
+                                                            >
+                                                                <td className="py-2.5 px-3 font-mono font-bold text-indigo-600 dark:text-indigo-400 whitespace-nowrap">
                                                                     {invNum}
                                                                 </td>
-                                                                <td className="py-2.5 px-2 font-mono text-slate-500">
+                                                                <td className="py-2.5 px-3 font-mono text-slate-500 whitespace-nowrap">
                                                                     {dateFormatted}
                                                                 </td>
-                                                                <td className="py-2.5 px-2 text-slate-800 dark:text-slate-200 font-extrabold">
+                                                                <td className="py-2.5 px-3 text-slate-800 dark:text-slate-200 font-extrabold whitespace-nowrap">
                                                                     {partyOrCategory}
                                                                 </td>
-                                                                <td className="py-2.5 px-2">
-                                                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                                                <td className="py-2.5 px-3 whitespace-nowrap">
+                                                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold whitespace-nowrap ${
                                                                         isCredit 
                                                                             ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300' 
                                                                             : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
@@ -1702,58 +2840,8 @@ export default function Employees() {
                                                                         {isCredit ? 'آجل' : 'نقدي'}
                                                                     </span>
                                                                 </td>
-                                                                <td className="py-2.5 px-2 font-black font-mono text-slate-900 dark:text-white">
+                                                                <td className="py-2.5 px-3 font-black font-mono text-slate-900 dark:text-white whitespace-nowrap">
                                                                     {totalAmt.toLocaleString()} {isCard ? 'ر.ي' : 'ر.س'}
-                                                                </td>
-                                                                <td className="py-2.5 px-2 text-center">
-                                                                    <button
-                                                                        type="button"
-                                                                        onClick={() => {
-                                                                            if (isCard) {
-                                                                                setSelectedInvoicePreview({
-                                                                                    isOpen: true,
-                                                                                    invoice: {
-                                                                                        ...item,
-                                                                                        invoiceNumber: invNum,
-                                                                                        date: typeof rawDate === 'number' ? rawDate : Date.now(),
-                                                                                        customerName: item.userName || 'مشتري بطاقات',
-                                                                                        total: totalAmt,
-                                                                                        paidAmount: totalAmt,
-                                                                                        paymentType: isCredit ? 'credit' : 'cash',
-                                                                                        sellerName: selectedEmployee.name
-                                                                                    },
-                                                                                    type: 'card_sale',
-                                                                                    items: [{
-                                                                                        name: item.categoryName || 'بطاقة شبكة',
-                                                                                        quantity: item.quantity || 1,
-                                                                                        price: totalAmt ? (totalAmt / (item.quantity || 1)) : 0,
-                                                                                        total: totalAmt
-                                                                                    }]
-                                                                                });
-                                                                            } else {
-                                                                                setSelectedInvoicePreview({
-                                                                                    isOpen: true,
-                                                                                    invoice: {
-                                                                                        ...item,
-                                                                                        invoiceNumber: invNum,
-                                                                                        date: typeof rawDate === 'number' ? rawDate : Date.now(),
-                                                                                        customerName: item.customerName || 'عميل عام',
-                                                                                        total: totalAmt,
-                                                                                        paidAmount: item.paidAmount || totalAmt,
-                                                                                        paymentType: item.paymentType || 'cash',
-                                                                                        sellerName: selectedEmployee.name
-                                                                                    },
-                                                                                    type: 'sale',
-                                                                                    items: item.items || []
-                                                                                });
-                                                                            }
-                                                                        }}
-                                                                        className="px-2.5 py-1 bg-indigo-50 dark:bg-indigo-950/80 hover:bg-indigo-100 text-indigo-600 dark:text-indigo-300 rounded-lg text-[11px] font-bold flex items-center gap-1 mx-auto transition cursor-pointer"
-                                                                        title="معاينة الفاتورة"
-                                                                    >
-                                                                        <Eye size={12} />
-                                                                        معاينة
-                                                                    </button>
                                                                 </td>
                                                             </tr>
                                                         );
@@ -1844,38 +2932,42 @@ export default function Employees() {
                                             </div>
                                         ) : (
                                             <div className="overflow-x-auto">
-                                                <table className="w-full text-right text-xs">
+                                                <table className="w-full min-w-max text-right text-xs whitespace-nowrap">
                                                     <thead>
-                                                        <tr className="border-b border-slate-100 dark:border-slate-800 text-slate-400 font-bold">
-                                                            <th className="py-2 px-2">التاريخ والوقت</th>
-                                                            <th className="py-2 px-2">المبلغ</th>
-                                                            <th className="py-2 px-2">البيان / الملاحظات</th>
-                                                            <th className="py-2 px-2">مصدر الخصم</th>
-                                                            <th className="py-2 px-2">بواسطة</th>
-                                                            <th className="py-2 px-2 text-center">إجراء</th>
+                                                        <tr className="border-b border-slate-100 dark:border-slate-800 text-slate-400 font-bold whitespace-nowrap">
+                                                            <th className="py-2.5 px-3">رقم السند</th>
+                                                            <th className="py-2.5 px-3">التاريخ والوقت</th>
+                                                            <th className="py-2.5 px-3">المبلغ</th>
+                                                            <th className="py-2.5 px-3">البيان / الملاحظات</th>
+                                                            <th className="py-2.5 px-3">مصدر الخصم</th>
+                                                            <th className="py-2.5 px-3">بواسطة</th>
+                                                            <th className="py-2.5 px-3 text-center">حذف</th>
                                                         </tr>
                                                     </thead>
                                                     <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 font-medium">
-                                                        {personalWithdrawals.map((w) => (
-                                                            <tr key={w.id} className="hover:bg-slate-50 dark:hover:bg-slate-950/50">
-                                                                <td className="py-2.5 px-2 font-mono text-slate-500">
+                                                        {personalWithdrawals.map((w, idx) => (
+                                                            <tr key={w.id} className="hover:bg-slate-50 dark:hover:bg-slate-950/50 whitespace-nowrap">
+                                                                <td className="py-2.5 px-3 font-bold font-mono text-slate-900 dark:text-white whitespace-nowrap">
+                                                                    #{w.withdrawalNumber || w.voucherNumber || (idx + 1)}
+                                                                </td>
+                                                                <td className="py-2.5 px-3 font-mono text-slate-500 whitespace-nowrap">
                                                                     {w.date ? format(w.date, 'yyyy/MM/dd HH:mm') : '-'}
                                                                 </td>
-                                                                <td className="py-2.5 px-2 font-bold font-mono text-red-600 dark:text-red-400">
+                                                                <td className="py-2.5 px-3 font-bold font-mono text-red-600 dark:text-red-400 whitespace-nowrap">
                                                                     {parseFloat(String(w.amount)).toLocaleString()} ر.ي
                                                                 </td>
-                                                                <td className="py-2.5 px-2 text-slate-700 dark:text-slate-300">
-                                                                    <div className="flex flex-col gap-0.5">
-                                                                        <span>{w.notes || 'سحب سلفة'}</span>
+                                                                <td className="py-2.5 px-3 text-slate-700 dark:text-slate-300 whitespace-nowrap">
+                                                                    <div className="flex items-center gap-1.5 whitespace-nowrap">
+                                                                        <span className="whitespace-nowrap">{w.notes || 'سحب سلفة'}</span>
                                                                         {w.withdrawnFromEmployeeName && (
-                                                                            <span className="text-[10px] text-amber-600 dark:text-amber-400 font-bold">
-                                                                                (صُرف من صندوق الموظف: {w.withdrawnFromEmployeeName})
+                                                                            <span className="text-[10px] text-amber-600 dark:text-amber-400 font-bold whitespace-nowrap">
+                                                                                (صُرف من: {w.withdrawnFromEmployeeName})
                                                                             </span>
                                                                         )}
                                                                     </div>
                                                                 </td>
-                                                                <td className="py-2.5 px-2">
-                                                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                                                <td className="py-2.5 px-3 whitespace-nowrap">
+                                                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold whitespace-nowrap ${
                                                                         w.sourceFund === 'network_cashbox'
                                                                             ? 'bg-indigo-50 text-indigo-600 dark:bg-indigo-950 dark:text-indigo-400'
                                                                             : 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950 dark:text-emerald-400'
@@ -1883,13 +2975,13 @@ export default function Employees() {
                                                                         {w.sourceFund === 'network_cashbox' ? 'صندوق الشبكات' : 'الصندوق العام'}
                                                                     </span>
                                                                 </td>
-                                                                <td className="py-2.5 px-2 text-slate-400 text-[11px]">
+                                                                <td className="py-2.5 px-3 text-slate-400 text-[11px] whitespace-nowrap">
                                                                     {w.createdBy || '-'}
                                                                 </td>
-                                                                <td className="py-2.5 px-2 text-center">
+                                                                <td className="py-2.5 px-3 text-center whitespace-nowrap">
                                                                     <button
                                                                         type="button"
-                                                                        onClick={() => handleDeleteWithdrawal(w.id, w.amount)}
+                                                                        onClick={() => handleDeleteWithdrawal(w)}
                                                                         className="p-1 hover:bg-red-50 dark:hover:bg-red-950/50 rounded text-slate-400 hover:text-red-600 transition cursor-pointer"
                                                                         title="حذف عملية السحب"
                                                                     >
@@ -1912,40 +3004,44 @@ export default function Employees() {
                                             </div>
                                         ) : (
                                             <div className="overflow-x-auto">
-                                                <table className="w-full text-right text-xs">
+                                                <table className="w-full min-w-max text-right text-xs whitespace-nowrap">
                                                     <thead>
-                                                        <tr className="border-b border-slate-100 dark:border-slate-800 text-slate-400 font-bold">
-                                                            <th className="py-2 px-2">التاريخ والوقت</th>
-                                                            <th className="py-2 px-2">الموظف المستفيد</th>
-                                                            <th className="py-2 px-2">المبلغ المصروف</th>
-                                                            <th className="py-2 px-2">البيان والملاحظات</th>
-                                                            <th className="py-2 px-2">الصندوق المخصوم منه</th>
-                                                            <th className="py-2 px-2">بواسطة</th>
-                                                            <th className="py-2 px-2 text-center">إجراء</th>
+                                                        <tr className="border-b border-slate-100 dark:border-slate-800 text-slate-400 font-bold whitespace-nowrap">
+                                                            <th className="py-2.5 px-3">رقم السند</th>
+                                                            <th className="py-2.5 px-3">التاريخ والوقت</th>
+                                                            <th className="py-2.5 px-3">الموظف المستفيد</th>
+                                                            <th className="py-2.5 px-3">المبلغ المصروف</th>
+                                                            <th className="py-2.5 px-3">البيان والملاحظات</th>
+                                                            <th className="py-2.5 px-3">الصندوق المخصوم منه</th>
+                                                            <th className="py-2.5 px-3">بواسطة</th>
+                                                            <th className="py-2.5 px-3 text-center">حذف</th>
                                                         </tr>
                                                     </thead>
                                                     <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 font-medium">
-                                                        {disbursementsFromThisFund.map((w) => (
-                                                            <tr key={w.id} className="hover:bg-slate-50 dark:hover:bg-slate-950/50">
-                                                                <td className="py-2.5 px-2 font-mono text-slate-500">
+                                                        {disbursementsFromThisFund.map((w, idx) => (
+                                                            <tr key={w.id} className="hover:bg-slate-50 dark:hover:bg-slate-950/50 whitespace-nowrap">
+                                                                <td className="py-2.5 px-3 font-bold font-mono text-slate-900 dark:text-white whitespace-nowrap">
+                                                                    #{w.withdrawalNumber || w.voucherNumber || (idx + 1)}
+                                                                </td>
+                                                                <td className="py-2.5 px-3 font-mono text-slate-500 whitespace-nowrap">
                                                                     {w.date ? format(w.date, 'yyyy/MM/dd HH:mm') : '-'}
                                                                 </td>
-                                                                <td className="py-2.5 px-2 font-bold text-slate-800 dark:text-slate-200">
-                                                                    <div className="flex items-center gap-1.5">
-                                                                        <span>{w.employeeName}</span>
-                                                                        <span className="text-[10px] font-normal px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-500">
+                                                                <td className="py-2.5 px-3 font-bold text-slate-800 dark:text-slate-200 whitespace-nowrap">
+                                                                    <div className="flex items-center gap-1.5 whitespace-nowrap">
+                                                                        <span className="whitespace-nowrap">{w.employeeName}</span>
+                                                                        <span className="text-[10px] font-normal px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-500 whitespace-nowrap">
                                                                             {roleConfig[w.employeeRole as AppRole]?.label || w.employeeRole}
                                                                         </span>
                                                                     </div>
                                                                 </td>
-                                                                <td className="py-2.5 px-2 font-bold font-mono text-amber-600 dark:text-amber-400">
+                                                                <td className="py-2.5 px-3 font-bold font-mono text-amber-600 dark:text-amber-400 whitespace-nowrap">
                                                                     {parseFloat(String(w.amount)).toLocaleString()} ر.ي
                                                                 </td>
-                                                                <td className="py-2.5 px-2 text-slate-700 dark:text-slate-300">
-                                                                    {w.notes || 'سحب سلفة صُرفت من صندوق الموظف'}
+                                                                <td className="py-2.5 px-3 text-slate-700 dark:text-slate-300 whitespace-nowrap">
+                                                                    <span className="whitespace-nowrap">{w.notes || 'سحب سلفة صُرفت من صندوق الموظف'}</span>
                                                                 </td>
-                                                                <td className="py-2.5 px-2">
-                                                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                                                <td className="py-2.5 px-3 whitespace-nowrap">
+                                                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold whitespace-nowrap ${
                                                                         w.sourceFund === 'network_cashbox'
                                                                             ? 'bg-indigo-50 text-indigo-600 dark:bg-indigo-950 dark:text-indigo-400'
                                                                             : 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950 dark:text-emerald-400'
@@ -1953,13 +3049,13 @@ export default function Employees() {
                                                                         {w.sourceFund === 'network_cashbox' ? 'صندوق كروت الشبكة' : 'الصندوق العام للمحل'}
                                                                     </span>
                                                                 </td>
-                                                                <td className="py-2.5 px-2 text-slate-400 text-[11px]">
+                                                                <td className="py-2.5 px-3 text-slate-400 text-[11px] whitespace-nowrap">
                                                                     {w.createdBy || '-'}
                                                                 </td>
-                                                                <td className="py-2.5 px-2 text-center">
+                                                                <td className="py-2.5 px-3 text-center whitespace-nowrap">
                                                                     <button
                                                                         type="button"
-                                                                        onClick={() => handleDeleteWithdrawal(w.id, w.amount)}
+                                                                        onClick={() => handleDeleteWithdrawal(w)}
                                                                         className="p-1 hover:bg-red-50 dark:hover:bg-red-950/50 rounded text-slate-400 hover:text-red-600 transition cursor-pointer"
                                                                         title="حذف عملية السحب"
                                                                     >
@@ -1976,6 +3072,174 @@ export default function Employees() {
                                 </div>
                             );
                         })()}
+
+                        {/* TABLE 3: MANAGER CLEARANCE / EMPLOYEE FUND SETTLEMENT */}
+                        {activeMainTableTab === 'manager_clearance' && selectedEmployee && (
+                            <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-3.5 space-y-4">
+                                {/* Header Title and Action */}
+                                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-3">
+                                    <div>
+                                        <h3 className="font-extrabold text-sm text-slate-800 dark:text-slate-200 flex items-center gap-2">
+                                            <Coins size={17} className="text-purple-600 dark:text-purple-400" />
+                                            تصفية صناديق الموظف واستلام مبالغ لصندوق المدير
+                                        </h3>
+                                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                                            تصفية مبالغ المبيعات القائمة لدى الموظف دون أي تأثير على الصناديق العامة للمحل.
+                                        </p>
+                                    </div>
+                                    
+                                    {canViewAllEmployees && (
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setClearanceBoxType('general_cashbox');
+                                                setClearanceAmount('');
+                                                setClearanceNotes('');
+                                                setIsManagerClearanceModalOpen(true);
+                                            }}
+                                            className="px-3 py-2 bg-purple-600 hover:bg-purple-700 text-white text-xs font-extrabold rounded-lg shadow-xs transition flex items-center gap-1.5 cursor-pointer shrink-0 whitespace-nowrap"
+                                        >
+                                            <Plus size={14} />
+                                            إجراء تصفية / استلام مبلغ إلى صندوق المدير
+                                        </button>
+                                    )}
+                                </div>
+
+                                {/* Balance Cards Summary */}
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    {/* General Fund Box Card */}
+                                    <div className="p-3 bg-purple-50/50 dark:bg-purple-950/20 border border-purple-200/80 dark:border-purple-900/40 rounded-xl space-y-2">
+                                        <div className="flex items-center justify-between">
+                                            <span className="text-xs font-bold text-purple-900 dark:text-purple-300 flex items-center gap-1.5">
+                                                <ShoppingBag size={14} className="text-purple-600" />
+                                                صندوق مبيعات المحل (بالريال السعودي ر.س)
+                                            </span>
+                                            <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300">
+                                                ر.س
+                                            </span>
+                                        </div>
+                                        <div className="flex items-baseline justify-between pt-1">
+                                            <span className="text-xs text-slate-500">الرصيد المتبقي القائم لدى الموظف:</span>
+                                            <span className="text-lg font-black font-mono text-purple-700 dark:text-purple-400">
+                                                {getEmployeeGeneralFundNetBalance(selectedEmployee).toLocaleString()} <span className="text-xs">ر.س</span>
+                                            </span>
+                                        </div>
+                                        <div className="text-[10px] text-slate-500 space-y-0.5 border-t border-purple-100 dark:border-purple-900/50 pt-2 grid grid-cols-2 gap-1">
+                                            <div>إجمالي المبيعات النقدية: <span className="font-bold text-slate-700 dark:text-slate-300">{getEmployeeGeneralCashSalesTotal(selectedEmployee).toLocaleString()}</span></div>
+                                            <div>المصروف لموظفين آخرين: <span className="font-bold text-slate-700 dark:text-slate-300">{getEmployeeGeneralFundDisbursedWithdrawalsTotal(selectedEmployee).toLocaleString()}</span></div>
+                                            <div className="col-span-2">المورّد لصندوق المدير: <span className="font-bold text-purple-600 dark:text-purple-400">{getEmployeeGeneralFundClearancesTotal(selectedEmployee).toLocaleString()} ر.س</span></div>
+                                        </div>
+                                    </div>
+
+                                    {/* Card Sales Fund Box Card */}
+                                    <div className="p-3 bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-200/80 dark:border-indigo-900/40 rounded-xl space-y-2">
+                                        <div className="flex items-center justify-between">
+                                            <span className="text-xs font-bold text-indigo-900 dark:text-indigo-300 flex items-center gap-1.5">
+                                                <Wifi size={14} className="text-indigo-600" />
+                                                صندوق مبيعات الكروت (بالريال اليمني ر.ي)
+                                            </span>
+                                            <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300">
+                                                ر.ي
+                                            </span>
+                                        </div>
+                                        <div className="flex items-baseline justify-between pt-1">
+                                            <span className="text-xs text-slate-500">الرصيد المتبقي القائم لدى الموظف:</span>
+                                            <span className="text-lg font-black font-mono text-indigo-700 dark:text-indigo-400">
+                                                {getEmployeeCardFundNetBalance(selectedEmployee).toLocaleString()} <span className="text-xs">ر.ي</span>
+                                            </span>
+                                        </div>
+                                        <div className="text-[10px] text-slate-500 space-y-0.5 border-t border-indigo-100 dark:border-indigo-900/50 pt-2 grid grid-cols-2 gap-1">
+                                            <div>إجمالي المبيعات النقدية: <span className="font-bold text-slate-700 dark:text-slate-300">{getEmployeeCardCashSalesTotal(selectedEmployee).toLocaleString()}</span></div>
+                                            <div>المصروف لموظفين آخرين: <span className="font-bold text-slate-700 dark:text-slate-300">{getEmployeeCardFundDisbursedWithdrawalsTotal(selectedEmployee).toLocaleString()}</span></div>
+                                            <div className="col-span-2">المورّد لصندوق المدير: <span className="font-bold text-indigo-600 dark:text-indigo-400">{getEmployeeCardFundClearancesTotal(selectedEmployee).toLocaleString()} ر.ي</span></div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Clearances History Table */}
+                                <div className="space-y-2 pt-2">
+                                    <h4 className="font-bold text-xs text-slate-700 dark:text-slate-300">
+                                        سجل سندات تصفية واستلام مبالغ لصندوق المدير ({managerClearances.filter(c => c.employeeId === selectedEmployee.id).length})
+                                    </h4>
+
+                                    {managerClearances.filter(c => c.employeeId === selectedEmployee.id).length === 0 ? (
+                                        <div className="text-center py-8 text-slate-400 dark:text-slate-600 text-xs font-medium border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
+                                            لا توجد سندات تصفية أو توريد سابقة لصندوق المدير لهذا الموظف.
+                                        </div>
+                                    ) : (
+                                        <div className="overflow-x-auto">
+                                            <table className="w-full min-w-max text-right text-xs whitespace-nowrap">
+                                                <thead>
+                                                    <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 font-bold whitespace-nowrap">
+                                                        <th className="py-2.5 px-3">رقم السند</th>
+                                                        <th className="py-2.5 px-3">التاريخ والوقت</th>
+                                                        <th className="py-2.5 px-3">الصندوق المصفى</th>
+                                                        <th className="py-2.5 px-3">المبلغ المستلم</th>
+                                                        <th className="py-2.5 px-3">البيان والملاحظات</th>
+                                                        <th className="py-2.5 px-3">المستلم (المدير)</th>
+                                                        <th className="py-2.5 px-3 text-center">إجراءات</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-medium">
+                                                    {managerClearances
+                                                        .filter(c => c.employeeId === selectedEmployee.id)
+                                                        .map((c, idx) => (
+                                                            <tr key={c.id} className="hover:bg-slate-50 dark:hover:bg-slate-950/50 whitespace-nowrap">
+                                                                <td className="py-2.5 px-3 font-bold font-mono text-purple-600 dark:text-purple-400 whitespace-nowrap">
+                                                                    #{c.clearanceNumber || c.voucherNumber || (idx + 1)}
+                                                                </td>
+                                                                <td className="py-2.5 px-3 font-mono text-slate-500 whitespace-nowrap">
+                                                                    {c.date ? format(c.date, 'yyyy/MM/dd HH:mm') : '-'}
+                                                                </td>
+                                                                <td className="py-2.5 px-3 whitespace-nowrap">
+                                                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold whitespace-nowrap ${
+                                                                        c.boxType === 'card_cashbox'
+                                                                            ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300'
+                                                                            : 'bg-purple-50 text-purple-700 dark:bg-purple-950 dark:text-purple-300'
+                                                                    }`}>
+                                                                        {c.boxType === 'card_cashbox' ? 'صندوق الكروت (ر.ي)' : 'صندوق المحل (ر.س)'}
+                                                                    </span>
+                                                                </td>
+                                                                <td className="py-2.5 px-3 font-bold font-mono text-emerald-600 dark:text-emerald-400 whitespace-nowrap">
+                                                                    {Number(c.amount).toLocaleString()} {c.currency}
+                                                                </td>
+                                                                <td className="py-2.5 px-3 text-slate-700 dark:text-slate-300 whitespace-nowrap">
+                                                                    <span className="whitespace-nowrap">{c.notes || '-'}</span>
+                                                                </td>
+                                                                <td className="py-2.5 px-3 text-slate-500 text-[11px] whitespace-nowrap">
+                                                                    {c.managerName || 'المدير'}
+                                                                </td>
+                                                                <td className="py-2.5 px-3 text-center whitespace-nowrap">
+                                                                    <div className="flex items-center justify-center gap-1 whitespace-nowrap">
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={() => handlePrintClearanceVoucher(c)}
+                                                                            className="p-1 hover:bg-purple-50 dark:hover:bg-purple-950/50 rounded text-purple-600 transition cursor-pointer"
+                                                                            title="معاينة وطباعة سند التصفية"
+                                                                        >
+                                                                            <Printer size={13} />
+                                                                        </button>
+                                                                        {canViewAllEmployees && (
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={() => handleDeleteManagerClearance(c)}
+                                                                                className="p-1 hover:bg-red-50 dark:hover:bg-red-950/50 rounded text-slate-400 hover:text-red-600 transition cursor-pointer"
+                                                                                title="حذف سند التصفية"
+                                                                            >
+                                                                                <Trash2 size={13} />
+                                                                            </button>
+                                                                        )}
+                                                                    </div>
+                                                                </td>
+                                                            </tr>
+                                                        ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
             )}
@@ -2427,6 +3691,253 @@ export default function Employees() {
                     initialEmployeeId={selectedEmployee?.id || 'all'}
                 />
             )}
+
+            {/* MANAGER CLEARANCE CREATION MODAL */}
+            {isManagerClearanceModalOpen && selectedEmployee && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 transition-all">
+                    <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-md shadow-2xl p-6 border border-slate-200 dark:border-slate-800 space-y-4 animate-in fade-in zoom-in duration-200">
+                        <div className="flex justify-between items-center border-b border-slate-100 dark:border-slate-800 pb-3">
+                            <h3 className="font-bold text-base text-slate-900 dark:text-white flex items-center gap-2">
+                                <Coins size={18} className="text-purple-600 dark:text-purple-400" />
+                                تصفية صندوق الموظف واستلام مبالغ لصندوق المدير
+                            </h3>
+                            <button 
+                                onClick={() => setIsManagerClearanceModalOpen(false)} 
+                                className="p-1 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 transition cursor-pointer"
+                            >
+                                <X size={18} />
+                            </button>
+                        </div>
+
+                        <form onSubmit={handleCreateManagerClearance} className="space-y-4">
+                            {/* Employee Info */}
+                            <div className="p-3 bg-slate-50 dark:bg-slate-950 rounded-xl border border-slate-200 dark:border-slate-800 flex items-center justify-between">
+                                <div>
+                                    <span className="text-[10px] text-slate-400 block font-bold">الموظف المصفى صندوقه:</span>
+                                    <span className="font-extrabold text-xs text-slate-900 dark:text-white">{selectedEmployee.name}</span>
+                                </div>
+                                <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400">
+                                    {roleConfig[selectedEmployee.role]?.label || selectedEmployee.role}
+                                </span>
+                            </div>
+
+                            {/* Box Selector */}
+                            <div>
+                                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
+                                    اختر الصندوق المراد تصفيته واستلام المبالغ منه:
+                                </label>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setClearanceBoxType('general_cashbox');
+                                            const net = getEmployeeGeneralFundNetBalance(selectedEmployee);
+                                            if (net > 0 && !clearanceAmount) setClearanceAmount(net.toString());
+                                        }}
+                                        className={`p-2.5 rounded-xl border text-right transition cursor-pointer ${
+                                            clearanceBoxType === 'general_cashbox'
+                                                ? 'border-purple-600 bg-purple-50 dark:bg-purple-950/50 text-purple-900 dark:text-purple-200 ring-2 ring-purple-600/20'
+                                                : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300'
+                                        }`}
+                                    >
+                                        <div className="text-xs font-extrabold">صندوق المحل (ر.س)</div>
+                                        <div className="text-[10px] font-mono text-slate-500 mt-1">
+                                            القائم: {getEmployeeGeneralFundNetBalance(selectedEmployee).toLocaleString()} ر.س
+                                        </div>
+                                    </button>
+
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setClearanceBoxType('card_cashbox');
+                                            const net = getEmployeeCardFundNetBalance(selectedEmployee);
+                                            if (net > 0 && !clearanceAmount) setClearanceAmount(net.toString());
+                                        }}
+                                        className={`p-2.5 rounded-xl border text-right transition cursor-pointer ${
+                                            clearanceBoxType === 'card_cashbox'
+                                                ? 'border-indigo-600 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-900 dark:text-indigo-200 ring-2 ring-indigo-600/20'
+                                                : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300'
+                                        }`}
+                                    >
+                                        <div className="text-xs font-extrabold">صندوق الكروت (ر.ي)</div>
+                                        <div className="text-[10px] font-mono text-slate-500 mt-1">
+                                            القائم: {getEmployeeCardFundNetBalance(selectedEmployee).toLocaleString()} ر.ي
+                                        </div>
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Amount Input with "Fill Full Balance" button */}
+                            <div>
+                                <div className="flex items-center justify-between mb-1.5">
+                                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
+                                        المبلغ المورّد / المستلم بواسطة المدير ({clearanceBoxType === 'card_cashbox' ? 'ر.ي' : 'ر.س'}) *
+                                    </label>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            const net = clearanceBoxType === 'card_cashbox'
+                                                ? getEmployeeCardFundNetBalance(selectedEmployee)
+                                                : getEmployeeGeneralFundNetBalance(selectedEmployee);
+                                            setClearanceAmount(net.toString());
+                                        }}
+                                        className="text-[10px] font-bold text-purple-600 hover:text-purple-700 dark:text-purple-400 underline cursor-pointer"
+                                    >
+                                        تصفية الرصيد القائم بالكامل
+                                    </button>
+                                </div>
+                                <div className="relative">
+                                    <input
+                                        type="number"
+                                        step="any"
+                                        min="0.01"
+                                        required
+                                        placeholder="أدخل المبلغ..."
+                                        value={clearanceAmount}
+                                        onChange={(e) => setClearanceAmount(e.target.value)}
+                                        className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-sm font-bold text-slate-900 dark:text-slate-100 outline-none focus:border-purple-600"
+                                    />
+                                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-extrabold text-slate-400 pointer-events-none">
+                                        {clearanceBoxType === 'card_cashbox' ? 'ر.ي' : 'ر.س'}
+                                    </span>
+                                </div>
+                            </div>
+
+                            {/* Notes Input */}
+                            <div>
+                                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
+                                    البيان / الملاحظات:
+                                </label>
+                                <input
+                                    type="text"
+                                    placeholder="مثال: تصفية المبيعات اليومية واستلام النقدية بواسطة المدير..."
+                                    value={clearanceNotes}
+                                    onChange={(e) => setClearanceNotes(e.target.value)}
+                                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-medium text-slate-900 dark:text-slate-100 outline-none focus:border-purple-600"
+                                />
+                            </div>
+
+                            {/* Info Note */}
+                            <p className="text-[11px] text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-950/40 border border-purple-100 dark:border-purple-900/40 p-2.5 rounded-xl leading-relaxed">
+                                💡 <strong>تنبيه:</strong> هذا الإجراء يُخصم فقط من المبيعات المتبقية القائمة لدى هذا الموظف، ولا يُغير الصناديق الرئيسية العامة للمحل أو الكروت.
+                            </p>
+
+                            {/* Buttons */}
+                            <div className="flex items-center gap-2 pt-2">
+                                <button
+                                    type="submit"
+                                    disabled={isSubmittingClearance}
+                                    className="flex-1 py-2.5 bg-purple-600 hover:bg-purple-700 text-white font-extrabold text-xs rounded-xl shadow-xs transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                                >
+                                    {isSubmittingClearance ? (
+                                        <RefreshCw size={14} className="animate-spin" />
+                                    ) : (
+                                        <Save size={14} />
+                                    )}
+                                    <span>حفظ وإصدار سند التصفية</span>
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setIsManagerClearanceModalOpen(false)}
+                                    className="px-4 py-2.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold text-xs rounded-xl hover:bg-slate-200 dark:hover:bg-slate-700 transition cursor-pointer"
+                                >
+                                    إلغاء
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {/* CLEARANCE VOUCHER PREVIEW & PRINT MODAL */}
+            {selectedClearanceVoucher && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 transition-all">
+                    <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-lg shadow-2xl p-6 border border-slate-200 dark:border-slate-800 space-y-4 animate-in fade-in zoom-in duration-200">
+                        <div className="flex justify-between items-center border-b border-slate-100 dark:border-slate-800 pb-3">
+                            <h3 className="font-bold text-base text-slate-900 dark:text-white flex items-center gap-2">
+                                <Coins size={18} className="text-purple-600 dark:text-purple-400" />
+                                معاينة سند استلام وتصفية صندوق المدير
+                            </h3>
+                            <button 
+                                onClick={() => setSelectedClearanceVoucher(null)} 
+                                className="p-1 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 transition cursor-pointer"
+                            >
+                                <X size={18} />
+                            </button>
+                        </div>
+
+                        <div className="bg-slate-50 dark:bg-slate-950 p-4 rounded-xl border border-slate-200 dark:border-slate-800 space-y-3">
+                            <div className="flex justify-between items-center border-b border-slate-200 dark:border-slate-800 pb-2">
+                                <span className="text-xs text-slate-500 font-bold">رقم السند:</span>
+                                <span className="text-sm font-extrabold font-mono text-purple-600 dark:text-purple-400">
+                                    #{selectedClearanceVoucher.clearanceNumber || selectedClearanceVoucher.voucherNumber}
+                                </span>
+                            </div>
+
+                            <div className="flex justify-between items-center border-b border-slate-200 dark:border-slate-800 pb-2 text-xs">
+                                <span className="text-slate-500 font-bold">التاريخ والوقت:</span>
+                                <span className="font-mono text-slate-800 dark:text-slate-200">
+                                    {selectedClearanceVoucher.date ? format(selectedClearanceVoucher.date, 'yyyy/MM/dd HH:mm') : '-'}
+                                </span>
+                            </div>
+
+                            <div className="flex justify-between items-center border-b border-slate-200 dark:border-slate-800 pb-2 text-xs">
+                                <span className="text-slate-500 font-bold">الموظف المصفى:</span>
+                                <span className="font-extrabold text-slate-900 dark:text-white">
+                                    {selectedClearanceVoucher.employeeName}
+                                </span>
+                            </div>
+
+                            <div className="flex justify-between items-center border-b border-slate-200 dark:border-slate-800 pb-2 text-xs">
+                                <span className="text-slate-500 font-bold">الصندوق المخصوم منه:</span>
+                                <span className="font-bold text-slate-800 dark:text-slate-200">
+                                    {selectedClearanceVoucher.boxType === 'card_cashbox' ? 'صندوق الكروت (ر.ي)' : 'صندوق المحل (ر.س)'}
+                                </span>
+                            </div>
+
+                            <div className="flex justify-between items-center border-b border-slate-200 dark:border-slate-800 pb-2 text-xs">
+                                <span className="text-slate-500 font-bold">المستلم (المدير):</span>
+                                <span className="font-bold text-slate-800 dark:text-slate-200">
+                                    {selectedClearanceVoucher.managerName}
+                                </span>
+                            </div>
+
+                            <div className="bg-purple-100/80 dark:bg-purple-950/60 border border-purple-300 dark:border-purple-800 rounded-xl p-3 text-center">
+                                <div className="text-[11px] font-bold text-purple-800 dark:text-purple-300">المبلغ المستلم والمصفى:</div>
+                                <div className="text-xl font-black font-mono text-purple-900 dark:text-purple-200 mt-1">
+                                    {selectedClearanceVoucher.amount.toLocaleString()} {selectedClearanceVoucher.currency}
+                                </div>
+                            </div>
+
+                            <div className="text-xs">
+                                <span className="text-slate-500 font-bold block mb-1">البيان والملاحظات:</span>
+                                <p className="p-2.5 bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 leading-relaxed">
+                                    {selectedClearanceVoucher.notes || 'سند استلام وتصفية نقدية من صندوق الموظف إلى صندوق المدير'}
+                                </p>
+                            </div>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                            <button
+                                type="button"
+                                onClick={() => handlePrintClearanceVoucher(selectedClearanceVoucher)}
+                                className="flex-1 py-2.5 bg-purple-600 hover:bg-purple-700 text-white font-extrabold text-xs rounded-xl shadow-xs transition flex items-center justify-center gap-1.5 cursor-pointer"
+                            >
+                                <Printer size={15} />
+                                <span>طباعة سند التصفية</span>
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setSelectedClearanceVoucher(null)}
+                                className="px-4 py-2.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold text-xs rounded-xl hover:bg-slate-200 dark:hover:bg-slate-700 transition cursor-pointer"
+                            >
+                                إغلاق
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
         </div>
     );
 }

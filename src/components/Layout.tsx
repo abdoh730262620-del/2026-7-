@@ -150,7 +150,7 @@ export default function Layout() {
         { path: '/products', label: 'المنتجات', icon: Package, roles: ['admin', 'inventory', 'cashier'] },
         { path: '/purchases', label: 'المشتريات', icon: Truck, roles: ['admin', 'inventory'], onClick: () => useInvoiceStore.getState().setPurchasesActiveTab('add') },
         { path: '/customers', label: 'العملاء', icon: Users, roles: ['admin', 'cashier', 'salesman'] },
-        { path: '/employees', label: 'الموظفين', icon: Briefcase, roles: ['admin'] },
+        { path: '/employees', label: 'الموظفين', icon: Briefcase, roles: ['admin', 'cashier', 'inventory', 'salesman', 'network_worker'] },
         { path: '/loyalty', label: 'برنامج الولاء', icon: Gift, roles: ['admin', 'cashier'] },
         { path: '/suppliers', label: 'الموردين', icon: Users, roles: ['admin', 'inventory'] },
         { path: '/cash', label: 'الصندوق', icon: DollarSign, roles: ['admin', 'cashier'] },
@@ -178,6 +178,13 @@ export default function Layout() {
                 }
                 if (item.path === '/customers' || item.path === '/loyalty') {
                     if (p.customers?.view !== undefined) hasAccess = p.customers.view;
+                }
+                if (item.path === '/employees') {
+                    if (p.employees?.view !== undefined) {
+                        hasAccess = p.employees.view;
+                    } else {
+                        hasAccess = true;
+                    }
                 }
                 if (item.path === '/quotations') {
                     if (p.quotations?.view !== undefined) hasAccess = p.quotations.view;

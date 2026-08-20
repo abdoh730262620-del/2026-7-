@@ -474,11 +474,11 @@ export function CardReconciliationSection({
         const headers = [
             'رقم الفاتورة',
             'التاريخ والوقت',
-            'العميل / الموزع',
+            'العميل',
             'نوع البيع',
-            'فئة الكرت المحتواة',
-            'الكمية المباعة بالفاتورة',
-            'الكمية المخصومة من المخزن',
+            'فئة الكرت',
+            'المباع',
+            'المخصوم',
             'حالة الخصم',
             'إجمالي الفاتورة'
         ];
@@ -526,12 +526,12 @@ export function CardReconciliationSection({
 
         const title = `تقرير مطابقة مبيعات الفواتير وخصم المخزون - ${periodTitle}`;
         const headers = [
-            'فئة الكرت',
+            'الفئة',
             'فواتير المبيعات',
-            'الخصم من المخزن',
+            'المخصوم',
             'تطابق الخصم',
-            'فواتير المشتريات',
-            'المتبقي الفعلي بالمخزن',
+            'إجمالي المشتريات',
+            'المتبقي',
             'المتبقي المتوقع',
             'حالة الجرد'
         ];
@@ -960,17 +960,17 @@ export function CardReconciliationSection({
                                         <tr className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 font-black border-b border-slate-100 dark:border-slate-800 whitespace-nowrap">
                                             <th className="px-3.5 py-2.5 text-center">رقم الفاتورة</th>
                                             <th className="px-3 py-2.5">التاريخ والوقت</th>
-                                            <th className="px-3 py-2.5">نوع البيع والعميل / الموزع</th>
+                                            <th className="px-3 py-2.5">العميل</th>
                                             <th className="px-3.5 py-2.5">فئة الكرت</th>
                                             <th className="px-3 py-2.5 text-center bg-emerald-50/50 dark:bg-emerald-950/20 text-emerald-800 dark:text-emerald-300">
-                                                الكمية المباعة بالفاتورة
+                                                المباع
                                             </th>
                                             <th className="px-3 py-2.5 text-center bg-emerald-50/50 dark:bg-emerald-950/20 text-emerald-800 dark:text-emerald-300">
-                                                الكمية المخصومة من المخزن
+                                                المخصوم
                                             </th>
                                             <th className="px-3 py-2.5 text-center">حالة الخصم</th>
                                             <th className="px-3 py-2.5 text-center">إجمالي المبلغ</th>
-                                            <th className="px-3 py-2.5 text-center">المتبقي الحالي للصنف</th>
+                                            <th className="px-3 py-2.5 text-center">المتبقي</th>
                                         </tr>
                                     </thead>
                                     <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -1007,12 +1007,9 @@ export function CardReconciliationSection({
                                                     </div>
                                                 </td>
 
-                                                {/* Category Name & Price (Single Line) */}
+                                                {/* Category Name (Without price in parenthesis) */}
                                                 <td className="px-3.5 py-2">
-                                                    <div className="inline-flex items-center gap-1.5">
-                                                        <span className="text-violet-700 dark:text-violet-300 font-black">{inv.categoryName}</span>
-                                                        <span className="text-[10px] text-slate-400 font-bold">({inv.unitPrice} ر.س)</span>
-                                                    </div>
+                                                    <span className="text-violet-700 dark:text-violet-300 font-black">{inv.categoryName}</span>
                                                 </td>
 
                                                 {/* Quantity Sold in Invoice */}
@@ -1233,19 +1230,19 @@ export function CardReconciliationSection({
                             <table className="w-full text-right text-[11px] sm:text-xs">
                                 <thead>
                                     <tr className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 font-black border-b border-slate-100 dark:border-slate-800 whitespace-nowrap">
-                                        <th className="px-3.5 py-2.5">الصنف / الفئة</th>
+                                        <th className="px-3.5 py-2.5">الفئة</th>
                                         <th className="px-3 py-2.5 text-center bg-emerald-50/40 dark:bg-emerald-950/10">
                                             إجمالي كروت فواتير المبيعات
                                         </th>
                                         <th className="px-3 py-2.5 text-center bg-emerald-50/40 dark:bg-emerald-950/10">
-                                            إجمالي الخصم من المخزون
+                                            المخصوم
                                         </th>
                                         <th className="px-3 py-2.5 text-center">تطابق الخصم</th>
                                         <th className="px-3 py-2.5 text-center bg-blue-50/40 dark:bg-blue-950/10">
-                                            إجمالي الوارد (المشتريات)
+                                            إجمالي المشتريات
                                         </th>
                                         <th className="px-3 py-2.5 text-center bg-indigo-50/40 dark:bg-indigo-950/10">
-                                            المتبقي الفعلي بالمخزون
+                                            المتبقي
                                         </th>
                                         <th className="px-3 py-2.5 text-center">المتبقي المتوقع</th>
                                         <th className="px-3 py-2.5 text-center">فارق الجرد</th>
@@ -1256,10 +1253,7 @@ export function CardReconciliationSection({
                                     {displayedReconciliation.map((item) => (
                                         <tr key={item.category.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors whitespace-nowrap">
                                             <td className="px-3.5 py-2 font-black text-slate-900 dark:text-white">
-                                                <div className="inline-flex items-center gap-1.5">
-                                                    <span>{item.category.name}</span>
-                                                    <span className="text-[10px] text-slate-400 font-bold">({item.category.retailPrice} ر.س)</span>
-                                                </div>
+                                                <span>{item.category.name}</span>
                                             </td>
 
                                             {/* Total Invoiced Sales (Cash + Credit) */}
@@ -1684,23 +1678,23 @@ export function CardReconciliationSection({
 
             {/* Pagination Controls */}
             {totalPages > 1 && (
-                <div className="flex flex-col sm:flex-row items-center justify-between bg-white dark:bg-slate-900 p-3.5 sm:p-4 rounded-2xl border border-slate-200 dark:border-slate-800 text-xs font-bold gap-3 mt-4">
-                    <div className="text-slate-500 text-center sm:text-right">
+                <div className="flex flex-row items-center justify-between bg-white dark:bg-slate-900 px-3 py-1 my-0 mt-1 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-bold whitespace-nowrap gap-2">
+                    <div className="text-slate-500 whitespace-nowrap">
                         عرض الصفحة <span className="font-black text-violet-600">{currentPage}</span> من <span className="font-black">{totalPages}</span> (إجمالي {displayedReconciliation.length} فئة)
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1.5 whitespace-nowrap">
                         <button
                             onClick={() => setCurrentPage(p => Math.max(p - 1, 1))}
                             disabled={currentPage === 1}
-                            className="px-3 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-40 rounded-xl font-black text-slate-700 dark:text-slate-300 transition"
+                            className="px-2.5 py-1 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-40 rounded-lg font-black text-slate-700 dark:text-slate-300 transition cursor-pointer text-xs"
                         >
                             السابق
                         </button>
-                        <span className="font-mono font-black px-2">{currentPage} / {totalPages}</span>
+                        <span className="font-mono font-black px-1.5">{currentPage} / {totalPages}</span>
                         <button
                             onClick={() => setCurrentPage(p => Math.min(p + 1, totalPages))}
                             disabled={currentPage === totalPages}
-                            className="px-3 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-40 rounded-xl font-black text-slate-700 dark:text-slate-300 transition"
+                            className="px-2.5 py-1 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-40 rounded-lg font-black text-slate-700 dark:text-slate-300 transition cursor-pointer text-xs"
                         >
                             التالي
                         </button>

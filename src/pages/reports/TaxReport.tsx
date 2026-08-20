@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, onSnapshot, where } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../../lib/firebase';
+import { collection, query, where } from 'firebase/firestore';
+import { db } from '../../lib/firebase';
 import { Printer, Calculator, FileCheck, Landmark } from 'lucide-react';
 import { printReport } from '../../lib/printHelper';
+import { LocalCache } from '../../lib/localCache';
 
 import { useAuthStore } from '../../store/authStore';
 
@@ -22,42 +23,51 @@ export default function TaxReport({ dateRange }: { dateRange: { startDate: strin
         const start = new Date(dateRange.startDate).getTime();
         const end = new Date(dateRange.endDate).getTime() + 86400000;
 
-        let data = { salesTotal: 0, salesTax: 0, purchasesTotal: 0, purchasesTax: 0 };
+        const loadTaxData = async () => {
+            try {
+                // Fetch sales from cache/firestore
+                const qSales = query(collection(db, 'sales'), where('tenantId', '==', tenantId));
+                const salesResult = await LocalCache.fetchCollection<any>('sales', tenantId, qSales);
 
-        const unsubSales = onSnapshot(query(collection(db, 'sales'), where('tenantId', '==', tenantId)), (snap) => {
-            let sTotal = 0;
-            let sTax = 0;
-            snap.forEach(doc => {
-                const d = doc.data();
-                if (d.status !== 'cancelled' && d.createdAt >= start && d.createdAt <= end) {
-                    const total = d.totalAmount || d.total || 0;
-                    const tax = d.taxAmount || d.tax || 0;
-                    sTotal += (total - tax); // Net sales without tax
-                    sTax += tax;
-                }
-            });
-            data = { ...data, salesTotal: sTotal, salesTax: sTax };
-            setTaxData(data);
-        }, (error) => handleFirestoreError(error, OperationType.GET, 'sales'));
+                // Fetch purchases from cache/firestore
+                const qPurch = query(collection(db, 'purchases'), where('tenantId', '==', tenantId));
+                const purchasesResult = await LocalCache.fetchCollection<any>('purchases', tenantId, qPurch);
 
-        const unsubPurch = onSnapshot(query(collection(db, 'purchases'), where('tenantId', '==', tenantId)), (snap) => {
-            let pTotal = 0;
-            let pTax = 0;
-            snap.forEach(doc => {
-                const d = doc.data();
-                const ts = d.createdAt || d.date;
-                if (d.status !== 'cancelled' && ts >= start && ts <= end) {
-                    const total = d.totalAmount || d.total || 0;
-                    const tax = d.taxAmount || d.tax || 0;
-                    pTotal += (total - tax);
-                    pTax += tax;
-                }
-            });
-            data = { ...data, purchasesTotal: pTotal, purchasesTax: pTax };
-            setTaxData(data);
-        }, (error) => handleFirestoreError(error, OperationType.GET, 'purchases'));
+                let sTotal = 0;
+                let sTax = 0;
+                salesResult.data.forEach(d => {
+                    if (d.status !== 'cancelled' && d.createdAt >= start && d.createdAt <= end) {
+                        const total = d.totalAmount || d.total || 0;
+                        const tax = d.taxAmount || d.tax || 0;
+                        sTotal += (total - tax); // Net sales without tax
+                        sTax += tax;
+                    }
+                });
 
-        return () => { unsubSales(); unsubPurch(); };
+                let pTotal = 0;
+                let pTax = 0;
+                purchasesResult.data.forEach(d => {
+                    const ts = d.createdAt || d.date;
+                    if (d.status !== 'cancelled' && ts >= start && ts <= end) {
+                        const total = d.totalAmount || d.total || 0;
+                        const tax = d.taxAmount || d.tax || 0;
+                        pTotal += (total - tax);
+                        pTax += tax;
+                    }
+                });
+
+                setTaxData({
+                    salesTotal: sTotal,
+                    salesTax: sTax,
+                    purchasesTotal: pTotal,
+                    purchasesTax: pTax
+                });
+            } catch (err) {
+                console.error('Failed to load tax data from cache/firestore:', err);
+            }
+        };
+
+        loadTaxData();
     }, [dateRange, appUser]);
 
     const netTaxPayable = taxData.salesTax - taxData.purchasesTax;

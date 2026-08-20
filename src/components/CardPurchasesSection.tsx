@@ -653,23 +653,23 @@ export const CardPurchasesSection: React.FC<CardPurchasesSectionProps> = ({
 
                 {/* Pagination Controls */}
                 {totalPages > 1 && (
-                    <div className="flex items-center justify-between bg-white dark:bg-slate-900 p-3 sm:p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-bold mt-3">
-                        <div className="text-slate-500">
+                    <div className="flex flex-row items-center justify-between bg-white dark:bg-slate-900 px-3 py-1 my-0 mt-1 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-bold whitespace-nowrap gap-2">
+                        <div className="text-slate-500 whitespace-nowrap">
                             عرض الصفحة <span className="font-black text-blue-600">{currentPage}</span> من <span className="font-black">{totalPages}</span> (إجمالي {filteredInvoices.length} فاتورة)
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-1.5 whitespace-nowrap">
                             <button
                                 onClick={() => setCurrentPage(p => Math.max(p - 1, 1))}
                                 disabled={currentPage === 1}
-                                className="px-3 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-40 rounded-xl font-black text-slate-700 dark:text-slate-300 transition cursor-pointer"
+                                className="px-2.5 py-1 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-40 rounded-lg font-black text-slate-700 dark:text-slate-300 transition cursor-pointer text-xs"
                             >
                                 السابق
                             </button>
-                            <span className="font-mono font-black px-2">{currentPage} / {totalPages}</span>
+                            <span className="font-mono font-black px-1.5">{currentPage} / {totalPages}</span>
                             <button
                                 onClick={() => setCurrentPage(p => Math.min(p + 1, totalPages))}
                                 disabled={currentPage === totalPages}
-                                className="px-3 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-40 rounded-xl font-black text-slate-700 dark:text-slate-300 transition cursor-pointer"
+                                className="px-2.5 py-1 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-40 rounded-lg font-black text-slate-700 dark:text-slate-300 transition cursor-pointer text-xs"
                             >
                                 التالي
                             </button>
