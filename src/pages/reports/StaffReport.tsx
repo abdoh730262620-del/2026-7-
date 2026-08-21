@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, onSnapshot, where } from 'firebase/firestore';
+import { collection, query, onSnapshot, where, limit } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../../lib/firebase';
 import { Printer, UserCheck, TrendingUp, Award } from 'lucide-react';
 import { printReport } from '../../lib/printHelper';
@@ -17,7 +17,7 @@ export default function StaffReport({ dateRange }: { dateRange: { startDate: str
         const start = new Date(dateRange.startDate).getTime();
         const end = new Date(dateRange.endDate).getTime() + 86400000;
 
-        const unsubSales = onSnapshot(query(collection(db, 'sales'), where('tenantId', '==', tenantId)), (snap) => {
+        const unsubSales = onSnapshot(query(collection(db, 'sales'), where('tenantId', '==', tenantId), limit(1500)), (snap) => {
             const staffMap: Record<string, { name: string, totalSales: number, invoiceCount: number, avgInvoice: number }> = {};
             
             snap.forEach(doc => {

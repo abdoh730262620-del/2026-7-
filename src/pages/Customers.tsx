@@ -1668,12 +1668,11 @@ function OpeningBalanceModal({ customer, onClose }: { customer: Customer; onClos
         const tenantId = appUser.tenantId || 'single_store';
 
         // Load next voucher number from vouchers collection
-        const qNum = query(collection(db, 'vouchers'), where('tenantId', '==', tenantId), orderBy('voucherNumber', 'desc'));
+        const qNum = query(collection(db, 'vouchers'), where('tenantId', '==', tenantId), orderBy('voucherNumber', 'desc'), limit(1));
         const unsubscribe = onSnapshot(qNum, snap => {
             if (!snap.empty) {
-                const allNums = snap.docs.map(d => parseInt(d.data().voucherNumber) || 0);
-                const maxNum = Math.max(...allNums);
-                setVoucherNum((maxNum + 1).toString());
+                const latestNum = parseInt(snap.docs[0].data().voucherNumber) || 0;
+                setVoucherNum((latestNum + 1).toString());
             } else {
                 setVoucherNum('1');
             }

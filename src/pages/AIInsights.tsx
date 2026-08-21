@@ -92,7 +92,7 @@ export default function AIInsights() {
         if (!appUser) return;
         const tenantId = appUser.tenantId || 'single_store';
 
-        const unsub = onSnapshot(query(collection(db, 'sales'), where('tenantId', '==', tenantId), orderBy('createdAt', 'desc')), (snap) => {
+        const unsub = onSnapshot(query(collection(db, 'sales'), where('tenantId', '==', tenantId), orderBy('createdAt', 'desc'), limit(500)), (snap) => {
             const allSales: any[] = [];
             snap.forEach(doc => allSales.push({ id: doc.id, ...doc.data() }));
             

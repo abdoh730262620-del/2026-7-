@@ -3,7 +3,7 @@ import { useAuthStore } from '../store/authStore';
 import { useInvoiceStore } from '../store/invoiceStore';
 import { Link } from 'react-router-dom';
 import { ShoppingCart, Truck, Users, DollarSign, Receipt, Package, RefreshCw, Clock, Sparkles, Loader2, X, ShieldCheck, FileSpreadsheet, Printer, BrainCircuit, ArrowRight, ClipboardCheck, Gift, FileSignature, Coins, Wifi, Layers, Briefcase, Search } from 'lucide-react';
-import { collection, query, onSnapshot, getDocs, where } from 'firebase/firestore';
+import { collection, query, onSnapshot, getDocs, where, limit, orderBy } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { useSettingsStore } from '../store/settingsStore';
 import { printReport } from '../lib/printHelper';
@@ -11,6 +11,14 @@ import { getDaysSinceLastSync } from '../lib/syncTracker';
 import { useUIStore } from '../store/uiStore';
 import SyncProgressIndicator from '../components/SyncProgressIndicator';
 import { LocalCache } from '../lib/localCache';
+import { format } from 'date-fns';
+import { 
+    calculateGeneralFundNetBalance, 
+    calculateCardFundNetBalance, 
+    calculateGeneralCreditReceivables, 
+    calculateCardCreditReceivables,
+    calculateManagerCashbox
+} from '../lib/financialEngine';
 
 interface Product {
     id: string;
@@ -34,116 +42,145 @@ export default function Dashboard() {
     
     const [mainCash, setMainCash] = useState(0);
     const [mainCredit, setMainCredit] = useState(0);
+    const [mainCashDetails, setMainCashDetails] = useState({
+        ownSales: 0,
+        clearances: 0
+    });
+
     const [cardCash, setCardCash] = useState(0);
     const [cardCredit, setCardCredit] = useState(0);
+    const [cardCashDetails, setCardCashDetails] = useState({
+        ownSales: 0,
+        clearances: 0
+    });
 
     const [isRefreshing, setIsRefreshing] = useState(false);
     const [lastUpdated, setLastUpdated] = useState<number | null>(null);
 
+    const setDashboardLastUpdated = useUIStore((s) => s.setDashboardLastUpdated);
+    const setIsDashboardRefreshing = useUIStore((s) => s.setIsDashboardRefreshing);
+    const dashboardRefreshSignal = useUIStore((s) => s.dashboardRefreshSignal);
+
     const loadDashboardData = async (force = false) => {
         if (!appUser?.uid) return;
         const tenantId = appUser?.tenantId || 'single_store';
-        const isAdmin = appUser?.role === 'admin';
+        const isAdmin = appUser?.role === 'admin' || (appUser?.role as string) === 'manager';
 
         setIsRefreshing(true);
+        setIsDashboardRefreshing(true);
         try {
             const startOfMonth = new Date();
             startOfMonth.setDate(1);
             startOfMonth.setHours(0, 0, 0, 0);
-            const startOfMonthMs = startOfMonth.getTime();
+            const currentMonthStr = format(startOfMonth, 'yyyy-MM');
 
-            // 1. Fetch cash collection
-            const qMain = query(collection(db, 'cash'), where('tenantId', '==', tenantId));
-            const cashResult = await LocalCache.fetchCollection<any>('cash', tenantId, qMain, { forceRefresh: force });
-            
-            let balMain = 0;
-            cashResult.data.forEach(data => {
-                if (data.affectsCash === false) return;
-                const docTime = data.createdAt || (typeof data.date === 'number' ? data.date : (data.date ? new Date(data.date).getTime() : 0));
-                if (docTime < startOfMonthMs) return;
+            // Fetch primary operational records
+            const qSales = query(collection(db, 'sales'), where('tenantId', '==', tenantId), orderBy('createdAt', 'desc'), limit(1000));
+            const qCardSales = query(collection(db, 'card_sales'), where('tenantId', '==', tenantId), limit(1000));
+            const qClearances = query(collection(db, 'manager_clearances'), where('tenantId', '==', tenantId), limit(1000));
+            const qWithdrawals = query(collection(db, 'withdrawals'), where('tenantId', '==', tenantId), limit(1000));
+            const qVouchers = query(collection(db, 'vouchers'), where('tenantId', '==', tenantId), limit(1000));
 
-                const isUserDoc = data.createdBy === appUser.uid;
-                if (isAdmin || isUserDoc) {
-                    if (data.type === 'in') {
-                        balMain += (data.amount || 0);
-                    } else if (data.type === 'out') {
-                        balMain -= (data.amount || 0);
-                    }
-                }
-            });
-            setMainCash(balMain);
+            const [salesResult, cardSalesResult, clearancesResult, withdrawalsResult, vouchersResult] = await Promise.all([
+                LocalCache.fetchCollection<any>('sales', tenantId, qSales, { forceRefresh: force }),
+                LocalCache.fetchCollection<any>('card_sales', tenantId, qCardSales, { forceRefresh: force }),
+                LocalCache.fetchCollection<any>('manager_clearances', tenantId, qClearances, { forceRefresh: force }),
+                LocalCache.fetchCollection<any>('withdrawals', tenantId, qWithdrawals, { forceRefresh: force }),
+                LocalCache.fetchCollection<any>('vouchers', tenantId, qVouchers, { forceRefresh: force })
+            ]);
 
-            // 2. Fetch sales collection
-            const qSales = query(collection(db, 'sales'), where('tenantId', '==', tenantId));
-            const salesResult = await LocalCache.fetchCollection<any>('sales', tenantId, qSales, { forceRefresh: force });
-            
-            let balSales = 0;
-            salesResult.data.forEach(data => {
-                const docTime = data.createdAt || (typeof data.date === 'number' ? data.date : (data.date ? new Date(data.date).getTime() : 0));
-                if (docTime < startOfMonthMs) return;
+            const currentUserIdentity = {
+                id: appUser.uid,
+                name: appUser.name,
+                email: appUser.email
+            };
 
-                const isUserDoc = data.createdBy === appUser.uid;
-                if (isAdmin || isUserDoc) {
-                    if (data.paymentType === 'credit' && data.status !== 'returned' && data.status !== 'cancelled') {
-                        const outstanding = (data.total || 0) - (data.paidAmount || 0);
-                        if (outstanding > 0) {
-                            balSales += outstanding;
-                        }
-                    }
-                }
-            });
-            setMainCredit(balSales);
+            const dateFilter = { month: currentMonthStr };
 
-            // 3. Fetch card_cashbox collection
-            const qCard = query(collection(db, 'card_cashbox'), where('tenantId', '==', tenantId));
-            const cardResult = await LocalCache.fetchCollection<any>('card_cashbox', tenantId, qCard, { forceRefresh: force });
-            
-            let balCard = 0;
-            cardResult.data.forEach(data => {
-                const docTime = data.createdAt || (typeof data.date === 'number' ? data.date : (data.date ? new Date(data.date).getTime() : 0));
-                if (docTime < startOfMonthMs) return;
+            if (isAdmin) {
+                // Calculation for Manager's Cashbox (Own direct sales + total clearances received from employees)
+                const mgrData = calculateManagerCashbox(
+                    salesResult.data,
+                    cardSalesResult.data,
+                    clearancesResult.data,
+                    withdrawalsResult.data,
+                    vouchersResult.data,
+                    { manager: currentUserIdentity, dateFilter }
+                );
 
-                const isUserDoc = data.createdBy === appUser.uid || data.userName === appUser.name;
-                if (isAdmin || isUserDoc) {
-                    if (data.isIncome) {
-                        balCard += (data.amount || 0);
-                    } else {
-                        balCard -= (data.amount || 0);
-                    }
-                }
-            });
-            setCardCash(balCard);
+                setMainCash(mgrData.managerGeneralNetBalance);
+                setMainCredit(mgrData.managerGeneralCredit);
+                setMainCashDetails({
+                    ownSales: mgrData.managerGeneralCashSales,
+                    clearances: mgrData.receivedGeneralClearances
+                });
 
-            // 4. Fetch card_sales collection
-            const qCardSales = query(collection(db, 'card_sales'), where('tenantId', '==', tenantId));
-            const cardSalesResult = await LocalCache.fetchCollection<any>('card_sales', tenantId, qCardSales, { forceRefresh: force });
-            
-            let balCardSales = 0;
-            cardSalesResult.data.forEach(data => {
-                const docTime = data.createdAt || (typeof data.date === 'number' ? data.date : (data.date ? new Date(data.date).getTime() : 0));
-                if (docTime < startOfMonthMs) return;
+                setCardCash(mgrData.managerCardNetBalance);
+                setCardCredit(mgrData.managerCardCredit);
+                setCardCashDetails({
+                    ownSales: mgrData.managerCardCashSales,
+                    clearances: mgrData.receivedCardClearances
+                });
+            } else {
+                // Calculation for regular Employee's Cashbox (Employee sales minus clearances handed over to manager)
+                const genFund = calculateGeneralFundNetBalance(
+                    salesResult.data,
+                    clearancesResult.data,
+                    withdrawalsResult.data,
+                    vouchersResult.data,
+                    { employee: currentUserIdentity, dateFilter }
+                );
+                const genCredit = calculateGeneralCreditReceivables(
+                    salesResult.data,
+                    { employee: currentUserIdentity, dateFilter }
+                );
+                setMainCash(genFund.netBalance);
+                setMainCredit(genCredit);
+                setMainCashDetails({
+                    ownSales: genFund.grossCashSales,
+                    clearances: genFund.clearances
+                });
 
-                const isUserDoc = data.createdBy === appUser.uid || data.userName === appUser.name || data.sellerName === appUser.name || data.createdByName === appUser.name;
-                if (isAdmin || isUserDoc) {
-                    if (data.paymentType === 'credit' && data.status === 'completed') {
-                        balCardSales += (data.totalAmount || 0);
-                    }
-                }
-            });
-            setCardCredit(balCardSales);
+                const cardFund = calculateCardFundNetBalance(
+                    cardSalesResult.data,
+                    clearancesResult.data,
+                    withdrawalsResult.data,
+                    vouchersResult.data,
+                    { employee: currentUserIdentity, dateFilter }
+                );
+                const cardCreditVal = calculateCardCreditReceivables(
+                    cardSalesResult.data,
+                    { employee: currentUserIdentity, dateFilter }
+                );
+                setCardCash(cardFund.netBalance);
+                setCardCredit(cardCreditVal);
+                setCardCashDetails({
+                    ownSales: cardFund.grossCashSales,
+                    clearances: cardFund.clearances
+                });
+            }
 
-            const meta = await LocalCache.getMetadata('cash', tenantId);
-            setLastUpdated(meta?.lastUpdated || Date.now());
+            const meta = await LocalCache.getMetadata('sales', tenantId);
+            const updateTime = meta?.lastUpdated || Date.now();
+            setLastUpdated(updateTime);
+            setDashboardLastUpdated(updateTime);
         } catch (err) {
             console.error('Failed to load dashboard cash/sales counters:', err);
         } finally {
             setIsRefreshing(false);
+            setIsDashboardRefreshing(false);
         }
     };
 
     useEffect(() => {
         loadDashboardData(false);
     }, [appUser]);
+
+    useEffect(() => {
+        if (dashboardRefreshSignal > 0) {
+            loadDashboardData(true);
+        }
+    }, [dashboardRefreshSignal]);
     
     // Interactive Statement Flow
     const [aiQuery, setAiQuery] = useState('');
@@ -438,22 +475,8 @@ export default function Dashboard() {
     });
 
     return (
-        <div className="h-[calc(100vh-4rem)] md:h-[calc(100vh-1rem)] flex flex-col overflow-hidden pb-16 md:pb-2 pt-2">
+        <div className="flex-1 w-full min-h-0 overflow-y-auto pb-24 md:pb-8 pt-1 flex flex-col scrollbar-thin">
             <SyncProgressIndicator />
-            {/* Cache Status & Refresh Dashboard Button */}
-            <div className="flex items-center justify-between px-4 py-1.5 bg-indigo-50/50 dark:bg-slate-900/40 border-b border-indigo-100/50 dark:border-slate-800 shrink-0">
-                <span className="text-[10px] font-bold text-indigo-700 dark:text-indigo-400 flex items-center gap-1">
-                    <span>آخر تحديث للوحة التحكم: {lastUpdated ? new Date(lastUpdated).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }) : 'مؤخراً'}</span>
-                </span>
-                <button
-                    onClick={() => loadDashboardData(true)}
-                    disabled={isRefreshing}
-                    className="flex items-center gap-1.5 px-3 py-1 bg-white dark:bg-slate-800 border border-indigo-200 dark:border-slate-700 text-indigo-700 dark:text-indigo-400 disabled:opacity-50 text-[10px] font-black rounded-lg transition hover:bg-indigo-50 shadow-xs cursor-pointer"
-                >
-                    <RefreshCw size={12} className={`${isRefreshing ? 'animate-spin' : ''}`} />
-                    <span>{isRefreshing ? 'جاري التحديث...' : 'تحديث لوحة التحكم'}</span>
-                </button>
-            </div>
             {/* Intelligent Assistant Section - Hero Search */}
             <div className="mb-3 md:mb-4 shrink-0">
                 <div className="relative group max-w-2xl mx-auto">
@@ -513,73 +536,167 @@ export default function Dashboard() {
                         </div>
                     )}
 
-                    {/* Real-time Cashbox Balances */}
-                    <div className="grid grid-cols-2 gap-3 mt-4 w-full">
-                        {/* Main Cashbox Balance Card */}
-                        <div className="bg-card-bg dark:bg-slate-900 border border-border-main dark:border-slate-800 p-3 rounded-xl flex flex-col gap-2 shadow-xs relative overflow-hidden">
-                            <div className="flex items-center justify-between">
-                                <span className="text-[10px] font-black text-text-main/80 flex items-center gap-1.5 flex-wrap">
-                                    صندوق المحل
-                                    <span className={`text-[8px] px-1 py-0.5 rounded font-black ${appUser?.role === 'admin' ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400' : 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400'}`}>
-                                        {appUser?.role === 'admin' ? 'عام' : 'خاص بك'}
-                                    </span>
-                                    <span className="text-[8px] text-emerald-600 dark:text-emerald-400 font-bold">
-                                        (يتصفّر شهرياً 🔄)
-                                    </span>
-                                </span>
-                                <div className="w-7 h-7 rounded-full bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
-                                    <DollarSign size={14} />
-                                </div>
-                            </div>
-                            <div className="border-t border-dashed border-border-main dark:border-slate-800/60 my-0.5"></div>
-                            <div className="space-y-1.5">
-                                <div className="flex items-center justify-between text-[11px]">
-                                    <span className="text-text-main/50 font-bold">النقدي (الشهر):</span>
-                                    <span className="font-black text-emerald-600 dark:text-emerald-400 font-mono" dir="ltr">
-                                        {mainCash.toLocaleString()} ر.س
-                                    </span>
-                                </div>
-                                <div className="flex items-center justify-between text-[11px]">
-                                    <span className="text-text-main/50 font-bold">الآجل (الشهر):</span>
-                                    <span className="font-black text-amber-600 dark:text-amber-400 font-mono" dir="ltr">
-                                        {mainCredit.toLocaleString()} ر.س
-                                    </span>
-                                </div>
-                            </div>
-                        </div>
+                    {/* Real-time Cashbox Balances - Compact 4-in-a-Row Square Tiles */}
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-2.5 mt-3 w-full">
+                        {/* Main Store Cashbox Card */}
+                        {(() => {
+                            const isManagerUser = appUser?.role === 'admin' || (appUser?.role as string) === 'manager';
+                            return (
+                                <div className="bg-card-bg dark:bg-slate-900 border border-border-main dark:border-slate-800 p-2.5 rounded-2xl shadow-xs flex flex-col gap-2">
+                                    <div className="flex items-center justify-between px-1">
+                                        <div className="flex items-center gap-1.5 min-w-0">
+                                            <div className="w-5 h-5 rounded-md bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                                                <DollarSign size={12} />
+                                            </div>
+                                            <span className="text-[11px] font-black text-text-main/90 whitespace-nowrap">
+                                                صندوق المحل
+                                            </span>
+                                            <span className={`text-[8px] px-1.5 py-0.2 rounded font-black whitespace-nowrap ${isManagerUser ? 'bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300' : 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400'}`}>
+                                                {isManagerUser ? 'صندوق المدير' : 'خاص بك'}
+                                            </span>
+                                        </div>
+                                        <span className="text-[8px] text-emerald-600 dark:text-emerald-400 font-bold whitespace-nowrap shrink-0">
+                                            (يتصفّر شهرياً 🔄)
+                                        </span>
+                                    </div>
 
-                        {/* Cards Cashbox Balance Card */}
-                        <div className="bg-card-bg dark:bg-slate-900 border border-border-main dark:border-slate-800 p-3 rounded-xl flex flex-col gap-2 shadow-xs relative overflow-hidden">
-                            <div className="flex items-center justify-between">
-                                <span className="text-[10px] font-black text-text-main/80 flex items-center gap-1.5 flex-wrap">
-                                    صندوق الكروت
-                                    <span className={`text-[8px] px-1 py-0.5 rounded font-black ${appUser?.role === 'admin' ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400' : 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400'}`}>
-                                        {appUser?.role === 'admin' ? 'عام' : 'خاص بك'}
-                                    </span>
-                                    <span className="text-[8px] text-indigo-600 dark:text-indigo-400 font-bold">
-                                        (يتصفّر شهرياً 🔄)
-                                    </span>
-                                </span>
-                                <div className="w-7 h-7 rounded-full bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
-                                    <Wifi size={14} />
+                                    {/* 4 Square Tiles on the SAME row (grid-cols-4) with INLINE currency */}
+                                    <div className="grid grid-cols-4 gap-1 sm:gap-1.5">
+                                        {/* Square 1: Total Cash */}
+                                        <div className="bg-emerald-500/10 dark:bg-emerald-950/30 border border-emerald-200/60 dark:border-emerald-800/40 p-1.5 sm:p-2 rounded-xl flex flex-col items-center justify-center text-center min-w-0">
+                                            <span className="text-[7.5px] sm:text-[9.5px] font-bold text-emerald-800 dark:text-emerald-300 truncate w-full" title={isManagerUser ? 'إجمالي نقد المدير' : 'النقدي المتبقي'}>
+                                                {isManagerUser ? 'إجمالي النقد' : 'المتبقي'}
+                                            </span>
+                                            <div className="flex items-baseline justify-center gap-0.5 sm:gap-1 mt-0.5 w-full min-w-0" dir="ltr">
+                                                <span className="font-black text-emerald-700 dark:text-emerald-400 font-mono text-[10px] sm:text-[12.5px] truncate">
+                                                    {mainCash.toLocaleString()}
+                                                </span>
+                                                <span className="text-[7.5px] sm:text-[9px] font-bold text-emerald-600/80 dark:text-emerald-400/80 shrink-0">ر.س</span>
+                                            </div>
+                                        </div>
+
+                                        {/* Square 2: Direct Sales */}
+                                        <div className="bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/60 p-1.5 sm:p-2 rounded-xl flex flex-col items-center justify-center text-center min-w-0">
+                                            <span className="text-[7.5px] sm:text-[9.5px] font-bold text-slate-600 dark:text-slate-400 truncate w-full" title={isManagerUser ? 'مبيعات المدير النقدية' : 'مبيعاتك نقد'}>
+                                                {isManagerUser ? 'مبيعات نقدية' : 'مبيعاتك نقد'}
+                                            </span>
+                                            <div className="flex items-baseline justify-center gap-0.5 sm:gap-1 mt-0.5 w-full min-w-0" dir="ltr">
+                                                <span className="font-black text-slate-800 dark:text-slate-200 font-mono text-[10px] sm:text-[11.5px] truncate">
+                                                    {mainCashDetails.ownSales.toLocaleString()}
+                                                </span>
+                                                <span className="text-[7.5px] sm:text-[9px] font-bold text-slate-500 shrink-0">ر.س</span>
+                                            </div>
+                                        </div>
+
+                                        {/* Square 3: Clearances */}
+                                        <div className="bg-purple-50/70 dark:bg-purple-950/30 border border-purple-200/60 dark:border-purple-800/40 p-1.5 sm:p-2 rounded-xl flex flex-col items-center justify-center text-center min-w-0">
+                                            <span className="text-[7.5px] sm:text-[9.5px] font-bold text-purple-700 dark:text-purple-300 truncate w-full" title={isManagerUser ? 'مستلم من الموظفين' : 'المسلّم للمدير'}>
+                                                {isManagerUser ? 'مستلم تصفيات' : 'مسلّم للمدير'}
+                                            </span>
+                                            <div className="flex items-baseline justify-center gap-0.5 sm:gap-1 mt-0.5 w-full min-w-0" dir="ltr">
+                                                <span className="font-black text-purple-700 dark:text-purple-300 font-mono text-[10px] sm:text-[11.5px] truncate">
+                                                    {mainCashDetails.clearances.toLocaleString()}
+                                                </span>
+                                                <span className="text-[7.5px] sm:text-[9px] font-bold text-purple-500 shrink-0">ر.س</span>
+                                            </div>
+                                        </div>
+
+                                        {/* Square 4: Credit */}
+                                        <div className="bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-800/40 p-1.5 sm:p-2 rounded-xl flex flex-col items-center justify-center text-center min-w-0">
+                                            <span className="text-[7.5px] sm:text-[9.5px] font-bold text-amber-700 dark:text-amber-300 truncate w-full" title="المبيعات الآجلة">
+                                                مبيعات آجلة
+                                            </span>
+                                            <div className="flex items-baseline justify-center gap-0.5 sm:gap-1 mt-0.5 w-full min-w-0" dir="ltr">
+                                                <span className="font-black text-amber-700 dark:text-amber-300 font-mono text-[10px] sm:text-[11.5px] truncate">
+                                                    {mainCredit.toLocaleString()}
+                                                </span>
+                                                <span className="text-[7.5px] sm:text-[9px] font-bold text-amber-500 shrink-0">ر.س</span>
+                                            </div>
+                                        </div>
+                                    </div>
                                 </div>
-                            </div>
-                            <div className="border-t border-dashed border-border-main dark:border-slate-800/60 my-0.5"></div>
-                            <div className="space-y-1.5">
-                                <div className="flex items-center justify-between text-[11px]">
-                                    <span className="text-text-main/50 font-bold">النقدي (الشهر):</span>
-                                    <span className="font-black text-indigo-600 dark:text-indigo-400 font-mono" dir="ltr">
-                                        {cardCash.toLocaleString()} ر.ي
-                                    </span>
+                            );
+                        })()}
+
+                        {/* Cards Cashbox Card */}
+                        {(() => {
+                            const isManagerUser = appUser?.role === 'admin' || (appUser?.role as string) === 'manager';
+                            return (
+                                <div className="bg-card-bg dark:bg-slate-900 border border-border-main dark:border-slate-800 p-2.5 rounded-2xl shadow-xs flex flex-col gap-2">
+                                    <div className="flex items-center justify-between px-1">
+                                        <div className="flex items-center gap-1.5 min-w-0">
+                                            <div className="w-5 h-5 rounded-md bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
+                                                <Wifi size={12} />
+                                            </div>
+                                            <span className="text-[11px] font-black text-text-main/90 whitespace-nowrap">
+                                                صندوق الكروت
+                                            </span>
+                                            <span className={`text-[8px] px-1.5 py-0.2 rounded font-black whitespace-nowrap ${isManagerUser ? 'bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300' : 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400'}`}>
+                                                {isManagerUser ? 'صندوق المدير' : 'خاص بك'}
+                                            </span>
+                                        </div>
+                                        <span className="text-[8px] text-indigo-600 dark:text-indigo-400 font-bold whitespace-nowrap shrink-0">
+                                            (يتصفّر شهرياً 🔄)
+                                        </span>
+                                    </div>
+
+                                    {/* 4 Square Tiles on the SAME row (grid-cols-4) with INLINE currency */}
+                                    <div className="grid grid-cols-4 gap-1 sm:gap-1.5">
+                                        {/* Square 1: Total Cash */}
+                                        <div className="bg-indigo-500/10 dark:bg-indigo-950/30 border border-indigo-200/60 dark:border-indigo-800/40 p-1.5 sm:p-2 rounded-xl flex flex-col items-center justify-center text-center min-w-0">
+                                            <span className="text-[7.5px] sm:text-[9.5px] font-bold text-indigo-800 dark:text-indigo-300 truncate w-full" title={isManagerUser ? 'إجمالي نقد المدير' : 'النقدي المتبقي'}>
+                                                {isManagerUser ? 'إجمالي النقد' : 'المتبقي'}
+                                            </span>
+                                            <div className="flex items-baseline justify-center gap-0.5 sm:gap-1 mt-0.5 w-full min-w-0" dir="ltr">
+                                                <span className="font-black text-indigo-700 dark:text-indigo-400 font-mono text-[10px] sm:text-[12.5px] truncate">
+                                                    {cardCash.toLocaleString()}
+                                                </span>
+                                                <span className="text-[7.5px] sm:text-[9px] font-bold text-indigo-600/80 dark:text-indigo-400/80 shrink-0">ر.ي</span>
+                                            </div>
+                                        </div>
+
+                                        {/* Square 2: Direct Sales */}
+                                        <div className="bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/60 p-1.5 sm:p-2 rounded-xl flex flex-col items-center justify-center text-center min-w-0">
+                                            <span className="text-[7.5px] sm:text-[9.5px] font-bold text-slate-600 dark:text-slate-400 truncate w-full" title={isManagerUser ? 'مبيعات كروت نقدية' : 'مبيعاتك كروت'}>
+                                                {isManagerUser ? 'مبيعات كروت' : 'مبيعاتك كروت'}
+                                            </span>
+                                            <div className="flex items-baseline justify-center gap-0.5 sm:gap-1 mt-0.5 w-full min-w-0" dir="ltr">
+                                                <span className="font-black text-slate-800 dark:text-slate-200 font-mono text-[10px] sm:text-[11.5px] truncate">
+                                                    {cardCashDetails.ownSales.toLocaleString()}
+                                                </span>
+                                                <span className="text-[7.5px] sm:text-[9px] font-bold text-slate-500 shrink-0">ر.ي</span>
+                                            </div>
+                                        </div>
+
+                                        {/* Square 3: Clearances */}
+                                        <div className="bg-purple-50/70 dark:bg-purple-950/30 border border-purple-200/60 dark:border-purple-800/40 p-1.5 sm:p-2 rounded-xl flex flex-col items-center justify-center text-center min-w-0">
+                                            <span className="text-[7.5px] sm:text-[9.5px] font-bold text-purple-700 dark:text-purple-300 truncate w-full" title={isManagerUser ? 'مستلم من الموظفين' : 'المسلّم للمدير'}>
+                                                {isManagerUser ? 'مستلم تصفيات' : 'مسلّم للمدير'}
+                                            </span>
+                                            <div className="flex items-baseline justify-center gap-0.5 sm:gap-1 mt-0.5 w-full min-w-0" dir="ltr">
+                                                <span className="font-black text-purple-700 dark:text-purple-300 font-mono text-[10px] sm:text-[11.5px] truncate">
+                                                    {cardCashDetails.clearances.toLocaleString()}
+                                                </span>
+                                                <span className="text-[7.5px] sm:text-[9px] font-bold text-purple-500 shrink-0">ر.ي</span>
+                                            </div>
+                                        </div>
+
+                                        {/* Square 4: Credit */}
+                                        <div className="bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-800/40 p-1.5 sm:p-2 rounded-xl flex flex-col items-center justify-center text-center min-w-0">
+                                            <span className="text-[7.5px] sm:text-[9.5px] font-bold text-amber-700 dark:text-amber-300 truncate w-full" title="كروت آجلة">
+                                                كروت آجلة
+                                            </span>
+                                            <div className="flex items-baseline justify-center gap-0.5 sm:gap-1 mt-0.5 w-full min-w-0" dir="ltr">
+                                                <span className="font-black text-amber-700 dark:text-amber-300 font-mono text-[10px] sm:text-[11.5px] truncate">
+                                                    {cardCredit.toLocaleString()}
+                                                </span>
+                                                <span className="text-[7.5px] sm:text-[9px] font-bold text-amber-500 shrink-0">ر.ي</span>
+                                            </div>
+                                        </div>
+                                    </div>
                                 </div>
-                                <div className="flex items-center justify-between text-[11px]">
-                                    <span className="text-text-main/50 font-bold">الآجل (الشهر):</span>
-                                    <span className="font-black text-amber-600 dark:text-amber-400 font-mono" dir="ltr">
-                                        {cardCredit.toLocaleString()} ر.ي
-                                    </span>
-                                </div>
-                            </div>
-                        </div>
+                            );
+                        })()}
                     </div>
                 </div>
             </div>

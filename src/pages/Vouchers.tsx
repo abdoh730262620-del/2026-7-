@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { collection, query, getDocs, addDoc, doc, onSnapshot, orderBy, writeBatch, increment, where } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { usageMonitor } from '../lib/usageMonitor';
 import { useAuthStore } from '../store/authStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { logUserAction } from '../lib/logger';
@@ -228,6 +229,9 @@ export default function Vouchers() {
             });
             
             await batch.commit();
+            
+            // Track write usage
+            usageMonitor.trackWrite(1);
 
             logUserAction(`سند ${type === 'receipt' ? 'قبض' : 'صرف'}`, `مبلغ ${amount} ر.س (${partyType === 'customer' ? 'عميل' : 'مورد'})`).catch(()=>{});
             setAmount('');

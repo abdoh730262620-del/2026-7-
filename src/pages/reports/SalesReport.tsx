@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { collection, query, onSnapshot, getDocs, where } from 'firebase/firestore';
+import { collection, query, onSnapshot, getDocs, where, limit } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../../lib/firebase';
 import { Printer, ChevronDown, ChevronLeft, FileSpreadsheet, List, CheckCircle, XCircle, Undo2, Ban } from 'lucide-react';
 import { printReport, printInvoice } from '../../lib/printHelper';
@@ -126,7 +126,7 @@ export default function SalesReport({ dateRange }: { dateRange: { startDate: str
         const start = new Date(dateRange.startDate).getTime();
         const end = new Date(dateRange.endDate).getTime() + 86400000;
 
-        const unsubSales = onSnapshot(query(collection(db, 'sales'), where('tenantId', '==', tenantId)), (snap) => {
+        const unsubSales = onSnapshot(query(collection(db, 'sales'), where('tenantId', '==', tenantId), limit(1500)), (snap) => {
             const s: any[] = [];
             snap.forEach(doc => {
                 const data = doc.data();

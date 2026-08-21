@@ -32,6 +32,23 @@ class ErrorBoundary extends Component<Props, State> {
     );
   }
 
+  private handleHardRefresh = async () => {
+    try {
+      const { clearFirestoreCache } = await import("./lib/firebase");
+      await clearFirestoreCache();
+    } catch (e) {
+      console.warn("Failed to clear firestore cache during hard refresh:", e);
+    }
+    
+    // Clear other common stores
+    try {
+      localStorage.clear();
+      sessionStorage.clear();
+    } catch (e) {}
+    
+    window.location.reload();
+  };
+
   public render() {
     if (this.state.hasError) {
       return (
@@ -49,22 +66,30 @@ class ErrorBoundary extends Component<Props, State> {
               عذراً، حدث خطأ أثناء تحميل الصفحة
             </h2>
 
-            <p className="text-xs text-slate-300 font-bold bg-slate-950/70 p-3 rounded-2xl border border-slate-800 w-full mb-6 leading-relaxed dir-ltr text-left overflow-x-auto max-h-32">
+            <p className="text-xs text-slate-300 font-bold bg-slate-950/70 p-3 rounded-2xl border border-slate-800 w-full mb-4 leading-relaxed dir-ltr text-left overflow-x-auto max-h-32">
               {this.state.error?.message || 'Unknown runtime render error'}
             </p>
 
-            <div className="flex items-center gap-3 w-full">
+            <div className="flex flex-col gap-3 w-full">
               <button
                 onClick={() => window.location.reload()}
-                className="flex-1 py-3 bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-2 transition shadow-lg shadow-rose-600/30 cursor-pointer"
+                className="w-full py-3 bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-2 transition shadow-lg shadow-rose-600/30 cursor-pointer"
               >
                 <RefreshCw size={16} />
                 تحديث الصفحة
               </button>
+
+              <button
+                onClick={this.handleHardRefresh}
+                className="w-full py-3 bg-slate-800 hover:bg-slate-700 active:scale-95 text-rose-400 font-extrabold text-xs rounded-xl flex items-center justify-center gap-2 transition border border-rose-900/30 cursor-pointer"
+              >
+                <ShieldAlert size={16} />
+                مسح التخزين المؤقت وإعادة التحميل القسري
+              </button>
               
               <button
                 onClick={() => window.location.href = '/'}
-                className="py-3 px-4 bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 font-extrabold text-xs rounded-xl flex items-center justify-center gap-2 transition cursor-pointer"
+                className="w-full py-3 px-4 bg-slate-900 hover:bg-slate-800 active:scale-95 text-slate-400 font-extrabold text-xs rounded-xl flex items-center justify-center gap-2 transition border border-slate-800 cursor-pointer"
               >
                 <Home size={16} />
                 الرئيسية

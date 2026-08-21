@@ -1,6 +1,7 @@
-import { collection, getDocs, query, DocumentData, Query } from 'firebase/firestore';
+import { collection, getDocs, query, DocumentData, Query, onSnapshot } from 'firebase/firestore';
 import { db } from './firebase';
 import localforage from 'localforage';
+import { usageMonitor } from './usageMonitor';
 
 export interface CacheMetadata {
     lastUpdated: number; // timestamp in ms
@@ -141,6 +142,10 @@ export class LocalCache {
         try {
             console.log(`LocalCache: Fetching "${collectionName}" from Firestore for tenant "${tenantId}"...`);
             const snapshot = await getDocs(firestoreQuery);
+            
+            // Track usage (minimum 1 for the query itself)
+            usageMonitor.trackRead(Math.max(1, snapshot.size));
+
             const data: T[] = [];
             snapshot.forEach(docObj => {
                 data.push({ id: docObj.id, ...docObj.data() } as any);
@@ -199,5 +204,38 @@ export class LocalCache {
         if (!cached) return;
         const filtered = cached.filter(x => x.id !== itemId);
         await this.set(collectionName, tenantId, filtered);
+    }
+
+    /**
+     * Subscribe / sync a collection with real-time onSnapshot and local cache persistence
+     */
+    public static syncCollection<T extends { id?: string }>(
+        collectionName: string,
+        tenantId: string,
+        firestoreQuery: Query<DocumentData>,
+        callback: (data: T[]) => void
+    ): () => void {
+        // First, immediately load from local cache if available for instant UI render
+        this.get<T>(collectionName, tenantId).then(cached => {
+            if (cached && cached.length > 0) {
+                callback(cached);
+            }
+        }).catch(err => console.error(`LocalCache: syncCollection cache load failed:`, err));
+
+        // Then listen in real-time with onSnapshot
+        const unsubscribe = onSnapshot(firestoreQuery, (snapshot) => {
+            usageMonitor.trackRead(Math.max(1, snapshot.docChanges().length));
+            const list: T[] = [];
+            snapshot.forEach(docObj => {
+                list.push({ id: docObj.id, ...docObj.data() } as any);
+            });
+            // Update cache in background
+            this.set(collectionName, tenantId, list);
+            callback(list);
+        }, (error) => {
+            console.error(`LocalCache: onSnapshot error for ${collectionName}:`, error);
+        });
+
+        return unsubscribe;
     }
 }

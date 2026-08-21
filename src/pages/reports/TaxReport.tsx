@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, where } from 'firebase/firestore';
+import { collection, query, where, limit } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { Printer, Calculator, FileCheck, Landmark } from 'lucide-react';
 import { printReport } from '../../lib/printHelper';
@@ -26,11 +26,11 @@ export default function TaxReport({ dateRange }: { dateRange: { startDate: strin
         const loadTaxData = async () => {
             try {
                 // Fetch sales from cache/firestore
-                const qSales = query(collection(db, 'sales'), where('tenantId', '==', tenantId));
+                const qSales = query(collection(db, 'sales'), where('tenantId', '==', tenantId), limit(1500));
                 const salesResult = await LocalCache.fetchCollection<any>('sales', tenantId, qSales);
 
                 // Fetch purchases from cache/firestore
-                const qPurch = query(collection(db, 'purchases'), where('tenantId', '==', tenantId));
+                const qPurch = query(collection(db, 'purchases'), where('tenantId', '==', tenantId), limit(1500));
                 const purchasesResult = await LocalCache.fetchCollection<any>('purchases', tenantId, qPurch);
 
                 let sTotal = 0;

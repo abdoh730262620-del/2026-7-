@@ -14,6 +14,7 @@ import {
 } from 'firebase/firestore';
 import { db, auth } from './firebase';
 import { ErrorNotifier } from './errorNotifier';
+import { usageMonitor } from './usageMonitor';
 
 export type QueueOperationType = 'create' | 'update' | 'delete' | 'set';
 
@@ -268,6 +269,9 @@ export class SyncManager {
      */
     private static async executeFirestoreOperation(op: OfflineOperation): Promise<void> {
         const colRef = collection(db, op.collectionName);
+        
+        // Track write usage
+        usageMonitor.trackWrite(1);
 
         switch (op.type) {
             case 'create':
@@ -377,6 +381,9 @@ export class SyncManager {
             const q = query(collection(db, 'sales'), where('tenantId', '==', tenantId));
             const snapshot = await getDocs(q);
             
+            // Track read usage (minimum 1 for query)
+            usageMonitor.trackRead(Math.max(1, snapshot.size));
+
             const existingInvoiceNumbers = new Set<string>();
             snapshot.forEach(docSnap => {
                 const data = docSnap.data();
@@ -395,6 +402,9 @@ export class SyncManager {
                 message: `تم إنهاء المزامنة بنجاح. معالجة ${queueResult.processed} عمليات من قائمة الانتظار.`
             });
             await batch.commit();
+            
+            // Track batch write
+            usageMonitor.trackWrite(1);
 
             return {
                 success: true,

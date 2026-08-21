@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, where, onSnapshot, doc, addDoc, updateDoc, getDocs, deleteDoc, orderBy } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, doc, addDoc, updateDoc, getDocs, deleteDoc, orderBy, limit } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { LocalCache } from '../lib/localCache';
 import { useAuthStore, AppRole } from '../store/authStore';
@@ -16,6 +16,14 @@ import {
 import { InvoicePreviewModal } from '../components/InvoicePreviewModal';
 import { EmployeeMetricDetailModal, MetricType } from '../components/EmployeeMetricDetailModal';
 import { EmployeeWithdrawalsReportModal } from '../components/EmployeeWithdrawalsReportModal';
+import { 
+    calculateGeneralFundNetBalance, 
+    calculateCardFundNetBalance, 
+    calculateGeneralCreditReceivables, 
+    calculateCardCreditReceivables,
+    isVoucherForEmployee,
+    isCardVoucher
+} from '../lib/financialEngine';
 
 interface EmployeeUser {
     id: string;
@@ -111,6 +119,20 @@ interface ManagerClearanceRecord {
     tenantId: string;
 }
 
+interface VoucherRecord {
+    id: string;
+    voucherNumber: string;
+    date: number;
+    amount: number;
+    type: 'receipt' | 'payment';
+    partyId: string;
+    partyType: 'customer' | 'supplier';
+    partyName: string;
+    description: string;
+    createdBy: string;
+    tenantId: string;
+}
+
 export default function Employees() {
     const { appUser } = useAuthStore();
     const tenantId = appUser?.tenantId || 'single_store';
@@ -121,6 +143,8 @@ export default function Employees() {
     const [cardSales, setCardSales] = useState<CardSaleRecord[]>([]);
     const [generalSales, setGeneralSales] = useState<GeneralSaleRecord[]>([]);
     const [managerClearances, setManagerClearances] = useState<ManagerClearanceRecord[]>([]);
+    const [vouchers, setVouchers] = useState<VoucherRecord[]>([]);
+    const [allCashRecords, setAllCashRecords] = useState<any[]>([]);
     
     const [selectedEmployee, setSelectedEmployee] = useState<EmployeeUser | null>(null);
     const [searchTerm, setSearchTerm] = useState('');
@@ -147,6 +171,12 @@ export default function Employees() {
     const [clearanceNotes, setClearanceNotes] = useState('');
     const [isSubmittingClearance, setIsSubmittingClearance] = useState(false);
     const [selectedClearanceVoucher, setSelectedClearanceVoucher] = useState<ManagerClearanceRecord | null>(null);
+    const [clearanceModalMode, setClearanceModalMode] = useState<'view' | 'edit'>('view');
+    const [editClearanceAmount, setEditClearanceAmount] = useState('');
+    const [editClearanceBoxType, setEditClearanceBoxType] = useState<'general_cashbox' | 'card_cashbox'>('general_cashbox');
+    const [editClearanceNotes, setEditClearanceNotes] = useState('');
+    const [editClearanceDate, setEditClearanceDate] = useState('');
+    const [isSubmittingClearanceEdit, setIsSubmittingClearanceEdit] = useState(false);
 
     const [activeMetricModal, setActiveMetricModal] = useState<MetricType | null>(null);
     const canViewAllEmployees = appUser?.role === 'admin' || (appUser?.role as string) === 'manager' || appUser?.permissions?.users?.view === true || appUser?.permissions?.employees?.edit === true;
@@ -280,65 +310,90 @@ export default function Employees() {
             }
         }, (err) => handleFirestoreError(err, OperationType.GET, 'users-employees'));
 
-        // 2. Listen to withdrawals
+        // 2. Sync withdrawals
         const qWithdrawals = query(
             collection(db, 'employee_withdrawals'),
             where('tenantId', '==', tenantId)
         );
-        const unsubWithdrawals = onSnapshot(qWithdrawals, (snap) => {
-            const list: WithdrawalRecord[] = [];
-            snap.forEach((doc) => {
-                list.push({ id: doc.id, ...doc.data() } as WithdrawalRecord);
-            });
-            list.sort((a, b) => (b.date || 0) - (a.date || 0));
-            setWithdrawals(list);
-        }, (err) => handleFirestoreError(err, OperationType.GET, 'employee_withdrawals'));
+        const unsubWithdrawals = LocalCache.syncCollection<WithdrawalRecord>(
+            'employee_withdrawals',
+            tenantId,
+            qWithdrawals,
+            (list) => {
+                const sorted = [...list].sort((a, b) => (b.date || 0) - (a.date || 0));
+                setWithdrawals(sorted);
+            }
+        );
 
-        // 3. Listen to card sales for retail commissions
+        // 3. Sync card sales
         const qSales = query(
             collection(db, 'card_sales'),
             where('tenantId', '==', tenantId)
         );
-        const unsubSales = onSnapshot(qSales, (snap) => {
-            const list: CardSaleRecord[] = [];
-            snap.forEach((doc) => {
-                const data = doc.data();
-                if (data.status !== 'cancelled') {
-                    list.push({ id: doc.id, ...data } as CardSaleRecord);
-                }
-            });
-            setCardSales(list);
-        }, (err) => handleFirestoreError(err, OperationType.GET, 'card_sales-employees'));
+        const unsubSales = LocalCache.syncCollection<CardSaleRecord>(
+            'card_sales',
+            tenantId,
+            qSales,
+            (list) => {
+                const filtered = list.filter(s => s.status !== 'cancelled');
+                setCardSales(filtered);
+            }
+        );
 
-        // 4. Listen to general sales invoices
+        // 4. Sync general sales
         const qGeneralSales = query(
             collection(db, 'sales'),
-            where('tenantId', '==', tenantId)
+            where('tenantId', '==', tenantId),
+            orderBy('createdAt', 'desc')
         );
-        const unsubGeneralSales = onSnapshot(qGeneralSales, (snap) => {
-            const list: GeneralSaleRecord[] = [];
-            snap.forEach((docSnap) => {
-                const data = docSnap.data();
-                if (data.status !== 'cancelled') {
-                    list.push({ id: docSnap.id, ...data } as GeneralSaleRecord);
-                }
-            });
-            setGeneralSales(list);
-        }, (err) => handleFirestoreError(err, OperationType.GET, 'sales-employees'));
+        const unsubGeneralSales = LocalCache.syncCollection<GeneralSaleRecord>(
+            'sales',
+            tenantId,
+            qGeneralSales,
+            (list) => {
+                const filtered = list.filter(inv => inv.status !== 'cancelled');
+                setGeneralSales(filtered);
+            }
+        );
 
-        // 5. Listen to manager clearances (صندوق المدير / تصفية صناديق الموظفين)
+        // 5. Sync manager clearances
         const qManagerClearances = query(
             collection(db, 'manager_clearances'),
             where('tenantId', '==', tenantId)
         );
-        const unsubManagerClearances = onSnapshot(qManagerClearances, (snap) => {
-            const list: ManagerClearanceRecord[] = [];
-            snap.forEach((docSnap) => {
-                list.push({ id: docSnap.id, ...docSnap.data() } as ManagerClearanceRecord);
-            });
-            list.sort((a, b) => (b.date || 0) - (a.date || 0));
-            setManagerClearances(list);
-        }, (err) => handleFirestoreError(err, OperationType.GET, 'manager_clearances'));
+        const unsubManagerClearances = LocalCache.syncCollection<ManagerClearanceRecord>(
+            'manager_clearances',
+            tenantId,
+            qManagerClearances,
+            (list) => {
+                const sorted = [...list].sort((a, b) => (b.date || 0) - (a.date || 0));
+                setManagerClearances(sorted);
+            }
+        );
+
+        // 6. Sync vouchers
+        const qVouchers = query(
+            collection(db, 'vouchers'),
+            where('tenantId', '==', tenantId)
+        );
+        const unsubVouchers = LocalCache.syncCollection<VoucherRecord>(
+            'vouchers',
+            tenantId,
+            qVouchers,
+            (list) => setVouchers(list)
+        );
+
+        // 7. Sync cash collection for consistency with dashboard
+        const qCash = query(
+            collection(db, 'cash'),
+            where('tenantId', '==', tenantId)
+        );
+        const unsubCash = LocalCache.syncCollection<any>(
+            'cash',
+            tenantId,
+            qCash,
+            (list) => setAllCashRecords(list)
+        );
 
         return () => {
             unsubUsers();
@@ -346,6 +401,8 @@ export default function Employees() {
             unsubSales();
             unsubGeneralSales();
             unsubManagerClearances();
+            unsubVouchers();
+            unsubCash();
         };
     }, [appUser, tenantId]);
 
@@ -540,61 +597,75 @@ export default function Employees() {
         return list;
     };
 
-    // Manager Clearance Calculations for Employee Funds
+    // Manager Clearance Calculations for Employee Funds (SSOT)
     const getEmployeeGeneralCashSalesTotal = (emp: EmployeeUser) => {
         if (!emp) return 0;
-        const sales = getEmployeeGeneralSales(emp);
-        const cashSales = sales.filter(inv => inv.paymentType !== 'credit' && inv.paymentType !== 'deferred' && inv.paymentType !== 'اجل');
-        return cashSales.reduce((sum, inv) => sum + (Number(inv.total) || 0), 0);
+        return calculateGeneralFundNetBalance(generalSales, managerClearances, withdrawals, vouchers, {
+            employee: emp
+        }).grossCashSales;
     };
 
     const getEmployeeGeneralFundClearancesTotal = (emp: EmployeeUser) => {
         if (!emp) return 0;
-        return managerClearances
-            .filter(c => c.employeeId === emp.id && c.boxType === 'general_cashbox')
-            .reduce((sum, c) => sum + (Number(c.amount) || 0), 0);
+        return calculateGeneralFundNetBalance(generalSales, managerClearances, withdrawals, vouchers, {
+            employee: emp
+        }).clearances;
     };
 
     const getEmployeeGeneralFundDisbursedWithdrawalsTotal = (emp: EmployeeUser) => {
         if (!emp) return 0;
-        return withdrawals
-            .filter(w => w.withdrawnFromEmployeeId === emp.id && w.sourceFund === 'general_cashbox')
-            .reduce((sum, w) => sum + (Number(w.amount) || 0), 0);
+        return calculateGeneralFundNetBalance(generalSales, managerClearances, withdrawals, vouchers, {
+            employee: emp
+        }).disbursedWithdrawals;
+    };
+
+    const getEmployeeVouchersGeneralTotal = (emp: EmployeeUser) => {
+        if (!emp) return 0;
+        return calculateGeneralFundNetBalance(generalSales, managerClearances, withdrawals, vouchers, {
+            employee: emp
+        }).vouchers;
     };
 
     const getEmployeeGeneralFundNetBalance = (emp: EmployeeUser) => {
-        const totalSales = getEmployeeGeneralCashSalesTotal(emp);
-        const totalClearances = getEmployeeGeneralFundClearancesTotal(emp);
-        const totalDisbursed = getEmployeeGeneralFundDisbursedWithdrawalsTotal(emp);
-        return Math.max(0, totalSales - totalClearances - totalDisbursed);
+        if (!emp) return 0;
+        return calculateGeneralFundNetBalance(generalSales, managerClearances, withdrawals, vouchers, {
+            employee: emp
+        }).netBalance;
     };
 
     const getEmployeeCardCashSalesTotal = (emp: EmployeeUser) => {
         if (!emp) return 0;
-        const cardSalesList = getEmployeeCardSales(emp);
-        const cardCashSales = cardSalesList.filter(cs => cs.saleType !== 'credit' && cs.paymentType !== 'credit' && cs.paymentType !== 'deferred');
-        return cardCashSales.reduce((sum, cs) => sum + (Number(cs.totalAmount || cs.totalPrice || cs.amount) || 0), 0);
+        return calculateCardFundNetBalance(cardSales, managerClearances, withdrawals, vouchers, {
+            employee: emp
+        }).grossCashSales;
     };
 
     const getEmployeeCardFundClearancesTotal = (emp: EmployeeUser) => {
         if (!emp) return 0;
-        return managerClearances
-            .filter(c => c.employeeId === emp.id && c.boxType === 'card_cashbox')
-            .reduce((sum, c) => sum + (Number(c.amount) || 0), 0);
+        return calculateCardFundNetBalance(cardSales, managerClearances, withdrawals, vouchers, {
+            employee: emp
+        }).clearances;
     };
 
     const getEmployeeCardFundDisbursedWithdrawalsTotal = (emp: EmployeeUser) => {
         if (!emp) return 0;
-        return withdrawals
-            .filter(w => w.withdrawnFromEmployeeId === emp.id && w.sourceFund === 'network_cashbox')
-            .reduce((sum, w) => sum + (Number(w.amount) || 0), 0);
+        return calculateCardFundNetBalance(cardSales, managerClearances, withdrawals, vouchers, {
+            employee: emp
+        }).disbursedWithdrawals;
+    };
+
+    const getEmployeeCardVouchersTotal = (emp: EmployeeUser) => {
+        if (!emp) return 0;
+        return calculateCardFundNetBalance(cardSales, managerClearances, withdrawals, vouchers, {
+            employee: emp
+        }).vouchers;
     };
 
     const getEmployeeCardFundNetBalance = (emp: EmployeeUser) => {
-        const totalSales = getEmployeeCardCashSalesTotal(emp);
-        const totalClearances = getEmployeeCardFundClearancesTotal(emp);
-        const totalDisbursed = getEmployeeCardFundDisbursedWithdrawalsTotal(emp);
-        return Math.max(0, totalSales - totalClearances - totalDisbursed);
+        if (!emp) return 0;
+        return calculateCardFundNetBalance(cardSales, managerClearances, withdrawals, vouchers, {
+            employee: emp
+        }).netBalance;
     };
 
     // Create Manager Clearance Action
@@ -671,6 +742,7 @@ export default function Employees() {
             setClearanceNotes('');
 
             const createdRecord: ManagerClearanceRecord = { id: docRef.id, ...payload };
+            setManagerClearances(prev => [createdRecord, ...prev.filter(item => item.id !== docRef.id)]);
             setSelectedClearanceVoucher(createdRecord);
 
             alert(`تمت تصفية صندوق الموظف واستلام المبلغ بنجاح!\n• رقم السند: #${nextClearanceNum}\n• الموظف: ${selectedEmployee.name}\n• المبلغ المستلم: ${amountNum.toLocaleString()} ${currency}\n• تم خصم المبلغ من صندوق الموظف دون التأثير على الصناديق الرئيسية للمحل.`);
@@ -685,16 +757,119 @@ export default function Employees() {
     // Delete Manager Clearance Record
     const handleDeleteManagerClearance = async (c: ManagerClearanceRecord) => {
         const vNum = c.clearanceNumber || c.voucherNumber || '';
-        if (!window.confirm(`هل أنت متأكد من إلغاء وحذف سند التصفية رقم #${vNum} بمبلغ ${c.amount.toLocaleString()} ${c.currency}؟\nسيتم إعادة المبلغ لصندوق الموظف.`)) {
+        const boxName = c.boxType === 'card_cashbox' ? 'صندوق الكروت (ر.ي)' : 'صندوق المحل (ر.س)';
+        const confirmMsg = `⚠️ تأكيد حذف سند التصفية ⚠️\n\n• رقم السند: #${vNum}\n• الموظف: ${c.employeeName}\n• الصندوق: ${boxName}\n• المبلغ: ${c.amount.toLocaleString()} ${c.currency}\n\nهل أنت متأكد من حذف وإلغاء هذا السند نهائياً؟\n(سيتم إعادة المبلغ تلقائياً إلى صندوق الموظف).`;
+        
+        if (!window.confirm(confirmMsg)) {
             return;
         }
         try {
             await deleteDoc(doc(db, 'manager_clearances', c.id));
+            setManagerClearances(prev => prev.filter(item => item.id !== c.id));
+            if (selectedClearanceVoucher && selectedClearanceVoucher.id === c.id) {
+                setSelectedClearanceVoucher(null);
+            }
             await logUserAction('إلغاء سند تصفية صندوق مدير', `تم إلغاء السند رقم #${vNum} بمبلغ ${c.amount} ${c.currency} للموظف ${c.employeeName}`);
-            alert('تم حذف سند التصفية وإعادة المبلغ لصندوق الموظف بنجاح.');
+            alert(`تم حذف سند التصفية رقم #${vNum} بنجاح وإعادة المبلغ لصندوق الموظف.`);
         } catch (err) {
             console.error('Error deleting clearance:', err);
             alert('حدث خطأ أثناء حذف السند');
+        }
+    };
+
+    // Toggle Manager Clearance Box Type
+    const handleToggleClearanceBoxType = async (c: ManagerClearanceRecord) => {
+        const vNum = c.clearanceNumber || c.voucherNumber || '';
+        const currentBoxLabel = c.boxType === 'card_cashbox' ? 'صندوق الكروت (ر.ي)' : 'صندوق المحل (ر.س)';
+        const targetBoxLabel = c.boxType === 'card_cashbox' ? 'صندوق المحل (ر.س)' : 'صندوق الكروت (ر.ي)';
+
+        if (!window.confirm(`هل أنت متأكد من تحويل وتغيير نوع صندوق السند رقم #${vNum} من [${currentBoxLabel}] إلى [${targetBoxLabel}]؟`)) {
+            return;
+        }
+
+        try {
+            const newBoxType = c.boxType === 'card_cashbox' ? 'general_cashbox' : 'card_cashbox';
+            const newCurrency = newBoxType === 'card_cashbox' ? 'ر.ي' : 'ر.س';
+            
+            // Adjust notes accordingly
+            let updatedNotes = c.notes || '';
+            if (newBoxType === 'card_cashbox') {
+                updatedNotes = updatedNotes.replace(/صندوق المحل/g, 'صندوق الكروت').replace(/ر\.س/g, 'ر.ي');
+            } else {
+                updatedNotes = updatedNotes.replace(/صندوق الكروت/g, 'صندوق المحل').replace(/ر\.ي/g, 'ر.س');
+            }
+
+            await updateDoc(doc(db, 'manager_clearances', c.id), {
+                boxType: newBoxType,
+                currency: newCurrency,
+                notes: updatedNotes
+            });
+
+            setManagerClearances(prev => prev.map(item => item.id === c.id ? { ...item, boxType: newBoxType, currency: newCurrency, notes: updatedNotes } : item));
+            setSelectedClearanceVoucher(prev => prev && prev.id === c.id ? { ...prev, boxType: newBoxType, currency: newCurrency, notes: updatedNotes } : prev);
+
+            await logUserAction('تعديل صندوق سند تصفية', `تم تحويل صندوق السند رقم #${vNum} للموظف ${c.employeeName} من ${currentBoxLabel} إلى ${targetBoxLabel}`);
+            alert(`تم تغيير نوع صندوق السند رقم #${vNum} بنجاح إلى ${targetBoxLabel}.`);
+        } catch (err) {
+            console.error('Error toggling clearance box type:', err);
+            alert('حدث خطأ أثناء تغيير نوع الصندوق الخاص بالسند');
+        }
+    };
+
+    // Open Clearance Voucher Modal (View or Edit mode)
+    const openClearanceModal = (c: ManagerClearanceRecord, mode: 'view' | 'edit' = 'view') => {
+        setSelectedClearanceVoucher(c);
+        setClearanceModalMode(mode);
+        setEditClearanceAmount(c.amount.toString());
+        setEditClearanceBoxType(c.boxType);
+        setEditClearanceNotes(c.notes || '');
+        const d = c.date ? new Date(c.date) : new Date();
+        const pad = (n: number) => n < 10 ? '0' + n : n;
+        setEditClearanceDate(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`);
+    };
+
+    // Save Edited Manager Clearance Voucher
+    const handleSaveEditClearance = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!selectedClearanceVoucher) return;
+
+        const amt = parseFloat(editClearanceAmount);
+        if (isNaN(amt) || amt <= 0) {
+            alert('يرجى إدخال مبلغ تصفية صحيح أكبر من الصفر');
+            return;
+        }
+
+        try {
+            setIsSubmittingClearanceEdit(true);
+            const newCurrency: 'ر.س' | 'ر.ي' = editClearanceBoxType === 'card_cashbox' ? 'ر.ي' : 'ر.س';
+            const updatedDate = editClearanceDate ? new Date(editClearanceDate).getTime() : (selectedClearanceVoucher.date || Date.now());
+
+            const updatedData = {
+                amount: amt,
+                boxType: editClearanceBoxType,
+                currency: newCurrency,
+                notes: editClearanceNotes.trim(),
+                date: updatedDate,
+                updatedAt: Date.now(),
+                updatedBy: appUser?.uid || '',
+                updatedByName: appUser?.name || 'المدير'
+            };
+
+            await updateDoc(doc(db, 'manager_clearances', selectedClearanceVoucher.id), updatedData);
+
+            const updatedRecord: ManagerClearanceRecord = { ...selectedClearanceVoucher, ...updatedData };
+            setManagerClearances(prev => prev.map(item => item.id === selectedClearanceVoucher.id ? updatedRecord : item));
+            setSelectedClearanceVoucher(updatedRecord);
+            setClearanceModalMode('view');
+
+            const vNum = selectedClearanceVoucher.clearanceNumber || selectedClearanceVoucher.voucherNumber || '';
+            await logUserAction('تعديل سند تصفية صندوق المدير', `تم تعديل السند رقم #${vNum} بمبلغ ${amt} ${newCurrency} للموظف ${selectedClearanceVoucher.employeeName}`);
+            alert(`تم حفظ تعديلات سند التصفية رقم #${vNum} بنجاح.`);
+        } catch (err) {
+            console.error('Error updating clearance voucher:', err);
+            alert('حدث خطأ أثناء حفظ تعديلات السند');
+        } finally {
+            setIsSubmittingClearanceEdit(false);
         }
     };
 
@@ -2203,13 +2378,17 @@ export default function Employees() {
                                                     <th className="py-3 px-3">المبلغ المصفى</th>
                                                     <th className="py-3 px-3">البيان والملاحظات</th>
                                                     <th className="py-3 px-3">المستلم (المدير)</th>
-                                                    <th className="py-3 px-3 text-center">إجراءات السند</th>
                                                 </tr>
                                             </thead>
                                             <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-medium">
                                                 {managerClearances.map((rec) => (
-                                                    <tr key={rec.id} className="hover:bg-slate-50 dark:hover:bg-slate-950/50 transition">
-                                                        <td className="py-2.5 px-3 font-mono font-bold text-purple-600 dark:text-purple-400">
+                                                    <tr 
+                                                        key={rec.id} 
+                                                        onClick={() => openClearanceModal(rec, 'view')}
+                                                        className="hover:bg-purple-50/60 dark:hover:bg-purple-950/40 transition cursor-pointer group"
+                                                        title="انقر لعرض ومعاينة السند وتعديل أو حذف البيانات"
+                                                    >
+                                                        <td className="py-2.5 px-3 font-mono font-bold text-purple-600 dark:text-purple-400 group-hover:underline">
                                                             #{rec.clearanceNumber}
                                                         </td>
                                                         <td className="py-2.5 px-3 text-slate-500 font-mono text-[11px]">
@@ -2231,29 +2410,6 @@ export default function Employees() {
                                                         </td>
                                                         <td className="py-2.5 px-3 text-slate-600 dark:text-slate-400 text-[11px]">
                                                             {rec.managerName}
-                                                        </td>
-                                                        <td className="py-2.5 px-3 text-center">
-                                                            <div className="flex items-center justify-center gap-1.5">
-                                                                <button
-                                                                    type="button"
-                                                                    onClick={() => setSelectedClearanceVoucher(rec)}
-                                                                    className="p-1.5 bg-purple-50 dark:bg-purple-950/60 hover:bg-purple-100 dark:hover:bg-purple-900 text-purple-700 dark:text-purple-300 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer"
-                                                                    title="معاينة وطباعة سند التصفية المالي"
-                                                                >
-                                                                    <Printer size={13} />
-                                                                    <span>السند</span>
-                                                                </button>
-                                                                {canViewAllEmployees && (
-                                                                    <button
-                                                                        type="button"
-                                                                        onClick={() => handleDeleteManagerClearance(rec)}
-                                                                        className="p-1.5 bg-red-50 dark:bg-red-950/60 hover:bg-red-100 dark:hover:bg-red-900 text-red-600 dark:text-red-400 rounded-lg text-xs font-bold transition cursor-pointer"
-                                                                        title="حذف هذا السند وإعادة ضبط رصيد الموظف التلقائي"
-                                                                    >
-                                                                        <Trash2 size={13} />
-                                                                    </button>
-                                                                )}
-                                                            </div>
                                                         </td>
                                                     </tr>
                                                 ))}
@@ -2388,23 +2544,35 @@ export default function Employees() {
                         const monthCardSalesList = getFilteredCardSales(selectedEmployee).filter(cs => matchesMonthFilter(cs.createdAt || (cs.date ? new Date(cs.date).getTime() : 0)));
                         const filteredTotComm = monthCardSalesList.reduce((sum, s) => sum + (parseFloat(String(s.commissionAmount)) || 0), 0);
 
-                        const monthGenSalesList = getEmployeeGeneralSales(selectedEmployee).filter(inv => matchesMonthFilter(inv.createdAt || inv.date));
+                        const dateFilterObj = { month: selectedMonth };
 
-                        // 1. General Cash Sales
-                        const genCashItems = monthGenSalesList.filter(inv => inv.paymentType !== 'credit' && inv.paymentType !== 'deferred' && inv.paymentType !== 'اجل');
-                        const totGenCash = genCashItems.reduce((sum, inv) => sum + (Number(inv.total) || 0), 0);
+                        // 1. General Store Cash (صندوق المحل - نقدي)
+                        const genFundCalc = calculateGeneralFundNetBalance(generalSales, managerClearances, withdrawals, vouchers, {
+                            employee: selectedEmployee,
+                            dateFilter: dateFilterObj
+                        });
+                        const netGenCash = genFundCalc.netBalance;
+                        const totDeductionsGen = genFundCalc.totalDeductions;
 
-                        // 2. General Credit Sales
-                        const genCreditItems = monthGenSalesList.filter(inv => inv.paymentType === 'credit' || inv.paymentType === 'deferred' || inv.paymentType === 'اجل');
-                        const totGenCredit = genCreditItems.reduce((sum, inv) => sum + (Number(inv.total) || 0), 0);
+                        // 2. General Store Credit (صندوق المحل - آجل)
+                        const totGenCredit = calculateGeneralCreditReceivables(generalSales, {
+                            employee: selectedEmployee,
+                            dateFilter: dateFilterObj
+                        });
 
-                        // 3. Card Cash Sales
-                        const cardCashItems = monthCardSalesList.filter(cs => cs.saleType !== 'credit' && cs.paymentType !== 'credit' && cs.paymentType !== 'deferred');
-                        const totCardCash = cardCashItems.reduce((sum, cs) => sum + (Number(cs.totalAmount) || 0), 0);
+                        // 3. Card Fund Cash (صندوق الكروت - نقدي)
+                        const cardFundCalc = calculateCardFundNetBalance(cardSales, managerClearances, withdrawals, vouchers, {
+                            employee: selectedEmployee,
+                            dateFilter: dateFilterObj
+                        });
+                        const netCardCash = cardFundCalc.netBalance;
+                        const totDeductionsCard = cardFundCalc.totalDeductions;
 
-                        // 4. Card Credit Sales
-                        const cardCreditItems = monthCardSalesList.filter(cs => cs.saleType === 'credit' || cs.paymentType === 'credit' || cs.paymentType === 'deferred');
-                        const totCardCredit = cardCreditItems.reduce((sum, cs) => sum + (Number(cs.totalAmount) || 0), 0);
+                        // 4. Card Fund Credit (صندوق الكروت - آجل)
+                        const totCardCredit = calculateCardCreditReceivables(cardSales, {
+                            employee: selectedEmployee,
+                            dateFilter: dateFilterObj
+                        });
 
                         // 5. Salary + Commissions
                         const baseSalary = selectedEmployee.salary || 0;
@@ -2467,12 +2635,19 @@ export default function Employees() {
                                         </div>
                                         <div>
                                             <div className="text-sm sm:text-lg font-black text-emerald-600 dark:text-emerald-400 font-mono truncate">
-                                                {totGenCash.toLocaleString()} <span className="text-[10px] font-bold">ر.س</span>
+                                                {netGenCash.toLocaleString()} <span className="text-[10px] font-bold">ر.س</span>
                                             </div>
-                                            <p className="text-[9px] sm:text-[10px] font-bold text-slate-500 dark:text-slate-400 mt-0.5 flex items-center gap-0.5 group-hover:text-emerald-600 truncate">
-                                                <FileText size={11} />
-                                                التفاصيل وPDF
-                                            </p>
+                                            <div className="text-[9px] sm:text-[10px] text-slate-500 dark:text-slate-400 mt-0.5 flex items-center justify-between gap-1 truncate">
+                                                <span className="group-hover:text-emerald-600 flex items-center gap-0.5">
+                                                    <FileText size={11} />
+                                                    التفاصيل
+                                                </span>
+                                                {totDeductionsGen > 0 && (
+                                                    <span className="text-[9px] font-mono text-rose-500 dark:text-rose-400">
+                                                        مستلم: -{totDeductionsGen.toLocaleString()}
+                                                    </span>
+                                                )}
+                                            </div>
                                         </div>
                                     </button>
 
@@ -2517,12 +2692,19 @@ export default function Employees() {
                                         </div>
                                         <div>
                                             <div className="text-sm sm:text-lg font-black text-indigo-600 dark:text-indigo-400 font-mono truncate">
-                                                {totCardCash.toLocaleString()} <span className="text-[10px] font-bold">ر.ي</span>
+                                                {netCardCash.toLocaleString()} <span className="text-[10px] font-bold">ر.ي</span>
                                             </div>
-                                            <p className="text-[9px] sm:text-[10px] font-bold text-slate-500 dark:text-slate-400 mt-0.5 flex items-center gap-0.5 group-hover:text-indigo-600 truncate">
-                                                <FileText size={11} />
-                                                التفاصيل وPDF
-                                            </p>
+                                            <div className="text-[9px] sm:text-[10px] text-slate-500 dark:text-slate-400 mt-0.5 flex items-center justify-between gap-1 truncate">
+                                                <span className="group-hover:text-indigo-600 flex items-center gap-0.5">
+                                                    <FileText size={11} />
+                                                    التفاصيل
+                                                </span>
+                                                {totDeductionsCard > 0 && (
+                                                    <span className="text-[9px] font-mono text-rose-500 dark:text-rose-400">
+                                                        مستلم: -{totDeductionsCard.toLocaleString()}
+                                                    </span>
+                                                )}
+                                            </div>
                                         </div>
                                     </button>
 
@@ -3127,7 +3309,8 @@ export default function Employees() {
                                         <div className="text-[10px] text-slate-500 space-y-0.5 border-t border-purple-100 dark:border-purple-900/50 pt-2 grid grid-cols-2 gap-1">
                                             <div>إجمالي المبيعات النقدية: <span className="font-bold text-slate-700 dark:text-slate-300">{getEmployeeGeneralCashSalesTotal(selectedEmployee).toLocaleString()}</span></div>
                                             <div>المصروف لموظفين آخرين: <span className="font-bold text-slate-700 dark:text-slate-300">{getEmployeeGeneralFundDisbursedWithdrawalsTotal(selectedEmployee).toLocaleString()}</span></div>
-                                            <div className="col-span-2">المورّد لصندوق المدير: <span className="font-bold text-purple-600 dark:text-purple-400">{getEmployeeGeneralFundClearancesTotal(selectedEmployee).toLocaleString()} ر.س</span></div>
+                                            <div>المورّد لصندوق المدير: <span className="font-bold text-purple-600 dark:text-purple-400">{getEmployeeGeneralFundClearancesTotal(selectedEmployee).toLocaleString()} ر.س</span></div>
+                                            <div>صافي السندات (قبض-صرف): <span className="font-bold text-blue-600 dark:text-blue-400">{getEmployeeVouchersGeneralTotal(selectedEmployee).toLocaleString()} ر.س</span></div>
                                         </div>
                                     </div>
 
@@ -3177,15 +3360,19 @@ export default function Employees() {
                                                         <th className="py-2.5 px-3">المبلغ المستلم</th>
                                                         <th className="py-2.5 px-3">البيان والملاحظات</th>
                                                         <th className="py-2.5 px-3">المستلم (المدير)</th>
-                                                        <th className="py-2.5 px-3 text-center">إجراءات</th>
                                                     </tr>
                                                 </thead>
                                                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-medium">
                                                     {managerClearances
                                                         .filter(c => c.employeeId === selectedEmployee.id)
                                                         .map((c, idx) => (
-                                                            <tr key={c.id} className="hover:bg-slate-50 dark:hover:bg-slate-950/50 whitespace-nowrap">
-                                                                <td className="py-2.5 px-3 font-bold font-mono text-purple-600 dark:text-purple-400 whitespace-nowrap">
+                                                            <tr 
+                                                                key={c.id} 
+                                                                onClick={() => openClearanceModal(c, 'view')}
+                                                                className="hover:bg-purple-50/60 dark:hover:bg-purple-950/40 whitespace-nowrap transition cursor-pointer group"
+                                                                title="انقر لمعاينة وتعديل وإلغاء وطباعة سند التصفية"
+                                                            >
+                                                                <td className="py-2.5 px-3 font-bold font-mono text-purple-600 dark:text-purple-400 whitespace-nowrap group-hover:underline">
                                                                     #{c.clearanceNumber || c.voucherNumber || (idx + 1)}
                                                                 </td>
                                                                 <td className="py-2.5 px-3 font-mono text-slate-500 whitespace-nowrap">
@@ -3208,28 +3395,6 @@ export default function Employees() {
                                                                 </td>
                                                                 <td className="py-2.5 px-3 text-slate-500 text-[11px] whitespace-nowrap">
                                                                     {c.managerName || 'المدير'}
-                                                                </td>
-                                                                <td className="py-2.5 px-3 text-center whitespace-nowrap">
-                                                                    <div className="flex items-center justify-center gap-1 whitespace-nowrap">
-                                                                        <button
-                                                                            type="button"
-                                                                            onClick={() => handlePrintClearanceVoucher(c)}
-                                                                            className="p-1 hover:bg-purple-50 dark:hover:bg-purple-950/50 rounded text-purple-600 transition cursor-pointer"
-                                                                            title="معاينة وطباعة سند التصفية"
-                                                                        >
-                                                                            <Printer size={13} />
-                                                                        </button>
-                                                                        {canViewAllEmployees && (
-                                                                            <button
-                                                                                type="button"
-                                                                                onClick={() => handleDeleteManagerClearance(c)}
-                                                                                className="p-1 hover:bg-red-50 dark:hover:bg-red-950/50 rounded text-slate-400 hover:text-red-600 transition cursor-pointer"
-                                                                                title="حذف سند التصفية"
-                                                                            >
-                                                                                <Trash2 size={13} />
-                                                                            </button>
-                                                                        )}
-                                                                    </div>
                                                                 </td>
                                                             </tr>
                                                         ))}
@@ -3619,11 +3784,33 @@ export default function Employees() {
 
                         switch (activeMetricModal) {
                             case 'gen_cash':
-                                return monthGenSalesList.filter(inv => inv.paymentType !== 'credit' && inv.paymentType !== 'deferred' && inv.paymentType !== 'اجل');
+                                return [
+                                    ...monthGenSalesList.filter(inv => inv.paymentType !== 'credit' && inv.paymentType !== 'deferred' && inv.paymentType !== 'اجل'),
+                                    ...managerClearances
+                                        .filter(c => (c.employeeId === selectedEmployee.id || c.employeeName === selectedEmployee.name || (c as any).targetEmployeeId === selectedEmployee.id) && (c.boxType === 'general_cashbox' || !c.boxType) && matchesMonthFilter(c.date || c.createdAt))
+                                        .map(c => ({ ...c, isClearance: true })),
+                                    ...withdrawals
+                                        .filter(w => (w.withdrawnFromEmployeeId === selectedEmployee.id || (w as any).sourceEmployeeId === selectedEmployee.id) && (w.sourceFund === 'general_cashbox' || !w.sourceFund) && matchesMonthFilter(w.date))
+                                        .map(w => ({ ...w, isWithdrawal: true })),
+                                    ...vouchers
+                                        .filter(v => isVoucherForEmployee(v, selectedEmployee) && !isCardVoucher(v) && matchesMonthFilter(v.date))
+                                        .map(v => ({ ...v, isVoucher: true }))
+                                ].sort((a: any, b: any) => (b.date || b.createdAt || 0) - (a.date || a.createdAt || 0));
                             case 'gen_credit':
                                 return monthGenSalesList.filter(inv => inv.paymentType === 'credit' || inv.paymentType === 'deferred' || inv.paymentType === 'اجل');
                             case 'card_cash':
-                                return monthCardSalesList.filter(cs => cs.saleType !== 'credit' && cs.paymentType !== 'credit' && cs.paymentType !== 'deferred');
+                                return [
+                                    ...monthCardSalesList.filter(cs => cs.saleType !== 'credit' && cs.paymentType !== 'credit' && cs.paymentType !== 'deferred'),
+                                    ...managerClearances
+                                        .filter(c => (c.employeeId === selectedEmployee.id || c.employeeName === selectedEmployee.name || (c as any).targetEmployeeId === selectedEmployee.id) && c.boxType === 'card_cashbox' && matchesMonthFilter(c.date || c.createdAt))
+                                        .map(c => ({ ...c, isClearance: true })),
+                                    ...withdrawals
+                                        .filter(w => (w.withdrawnFromEmployeeId === selectedEmployee.id || (w as any).sourceEmployeeId === selectedEmployee.id) && (w.sourceFund === 'network_cashbox' || (w.sourceFund as string) === 'card_cashbox') && matchesMonthFilter(w.date))
+                                        .map(w => ({ ...w, isWithdrawal: true })),
+                                    ...vouchers
+                                        .filter(v => isVoucherForEmployee(v, selectedEmployee) && isCardVoucher(v) && matchesMonthFilter(v.date))
+                                        .map(v => ({ ...v, isVoucher: true }))
+                                ].sort((a: any, b: any) => (b.date || b.createdAt || 0) - (a.date || a.createdAt || 0));
                             case 'card_credit':
                                 return monthCardSalesList.filter(cs => cs.saleType === 'credit' || cs.paymentType === 'credit' || cs.paymentType === 'deferred');
                             case 'salary_comm':
@@ -3635,19 +3822,31 @@ export default function Employees() {
                         }
                     })()}
                     summaryData={(() => {
-                        const monthGenSalesList = getEmployeeGeneralSales(selectedEmployee).filter(inv => matchesMonthFilter(inv.createdAt || inv.date));
-                        const monthCardSalesList = getEmployeeCardSales(selectedEmployee).filter(cs => matchesMonthFilter(cs.createdAt || (cs.date ? new Date(cs.date).getTime() : 0)));
+                        const dateFilterObj = { month: selectedMonth };
                         const monthWithdrawalsList = getFilteredWithdrawals(selectedEmployee);
+                        const monthCardSalesList = getEmployeeCardSales(selectedEmployee).filter(cs => matchesMonthFilter(cs.createdAt || (cs.date ? new Date(cs.date).getTime() : 0)));
 
-                        const genCashItems = monthGenSalesList.filter(inv => inv.paymentType !== 'credit' && inv.paymentType !== 'deferred' && inv.paymentType !== 'اجل');
-                        const genCreditItems = monthGenSalesList.filter(inv => inv.paymentType === 'credit' || inv.paymentType === 'deferred' || inv.paymentType === 'اجل');
-                        const cardCashItems = monthCardSalesList.filter(cs => cs.saleType !== 'credit' && cs.paymentType !== 'credit' && cs.paymentType !== 'deferred');
-                        const cardCreditItems = monthCardSalesList.filter(cs => cs.saleType === 'credit' || cs.paymentType === 'credit' || cs.paymentType === 'deferred');
+                        const genFundCalc = calculateGeneralFundNetBalance(generalSales, managerClearances, withdrawals, vouchers, {
+                            employee: selectedEmployee,
+                            dateFilter: dateFilterObj
+                        });
+                        const totGenCash = genFundCalc.netBalance;
 
-                        const totGenCash = genCashItems.reduce((sum, inv) => sum + (Number(inv.total) || 0), 0);
-                        const totGenCredit = genCreditItems.reduce((sum, inv) => sum + (Number(inv.total) || 0), 0);
-                        const totCardCash = cardCashItems.reduce((sum, cs) => sum + (Number(cs.totalAmount) || 0), 0);
-                        const totCardCredit = cardCreditItems.reduce((sum, cs) => sum + (Number(cs.totalAmount) || 0), 0);
+                        const totGenCredit = calculateGeneralCreditReceivables(generalSales, {
+                            employee: selectedEmployee,
+                            dateFilter: dateFilterObj
+                        });
+
+                        const cardFundCalc = calculateCardFundNetBalance(cardSales, managerClearances, withdrawals, vouchers, {
+                            employee: selectedEmployee,
+                            dateFilter: dateFilterObj
+                        });
+                        const totCardCash = cardFundCalc.netBalance;
+
+                        const totCardCredit = calculateCardCreditReceivables(cardSales, {
+                            employee: selectedEmployee,
+                            dateFilter: dateFilterObj
+                        });
 
                         const baseSalary = selectedEmployee.salary || 0;
                         const totalCommissions = monthCardSalesList.reduce((sum, cs) => sum + (Number(cs.commissionAmount) || 0), 0);
@@ -3849,91 +4048,268 @@ export default function Employees() {
                 </div>
             )}
 
-            {/* CLEARANCE VOUCHER PREVIEW & PRINT MODAL */}
+            {/* CLEARANCE VOUCHER MODAL (PREVIEW / EDIT / ACTIONS) */}
             {selectedClearanceVoucher && (
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 transition-all">
-                    <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-lg shadow-2xl p-6 border border-slate-200 dark:border-slate-800 space-y-4 animate-in fade-in zoom-in duration-200">
+                    <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-lg shadow-2xl p-5 border border-slate-200 dark:border-slate-800 space-y-4 animate-in fade-in zoom-in duration-200">
+                        {/* Modal Header */}
                         <div className="flex justify-between items-center border-b border-slate-100 dark:border-slate-800 pb-3">
-                            <h3 className="font-bold text-base text-slate-900 dark:text-white flex items-center gap-2">
-                                <Coins size={18} className="text-purple-600 dark:text-purple-400" />
-                                معاينة سند استلام وتصفية صندوق المدير
-                            </h3>
+                            <div className="flex items-center gap-2">
+                                <div className="w-8 h-8 rounded-lg bg-purple-100 dark:bg-purple-950/80 flex items-center justify-center text-purple-600 dark:text-purple-400 font-bold">
+                                    <Coins size={18} />
+                                </div>
+                                <div>
+                                    <h3 className="font-bold text-sm text-slate-900 dark:text-white">
+                                        سند تصفية صندوق المدير #{selectedClearanceVoucher.clearanceNumber || selectedClearanceVoucher.voucherNumber}
+                                    </h3>
+                                    <p className="text-[11px] text-slate-400">
+                                        الموظف: <span className="font-bold text-slate-700 dark:text-slate-300">{selectedClearanceVoucher.employeeName}</span>
+                                    </p>
+                                </div>
+                            </div>
                             <button 
                                 onClick={() => setSelectedClearanceVoucher(null)} 
-                                className="p-1 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 transition cursor-pointer"
+                                className="p-1.5 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 transition cursor-pointer"
+                                title="إغلاق النافذة"
                             >
                                 <X size={18} />
                             </button>
                         </div>
 
-                        <div className="bg-slate-50 dark:bg-slate-950 p-4 rounded-xl border border-slate-200 dark:border-slate-800 space-y-3">
-                            <div className="flex justify-between items-center border-b border-slate-200 dark:border-slate-800 pb-2">
-                                <span className="text-xs text-slate-500 font-bold">رقم السند:</span>
-                                <span className="text-sm font-extrabold font-mono text-purple-600 dark:text-purple-400">
-                                    #{selectedClearanceVoucher.clearanceNumber || selectedClearanceVoucher.voucherNumber}
-                                </span>
+                        {/* Mode Switch Tabs */}
+                        {canViewAllEmployees && (
+                            <div className="flex bg-slate-100 dark:bg-slate-800/70 p-1 rounded-xl gap-1">
+                                <button
+                                    type="button"
+                                    onClick={() => setClearanceModalMode('view')}
+                                    className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                                        clearanceModalMode === 'view'
+                                            ? 'bg-white dark:bg-slate-900 text-purple-700 dark:text-purple-300 shadow-xs'
+                                            : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-100'
+                                    }`}
+                                >
+                                    <Printer size={13} />
+                                    <span>معاينة وطباعة</span>
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setClearanceModalMode('edit')}
+                                    className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                                        clearanceModalMode === 'edit'
+                                            ? 'bg-white dark:bg-slate-900 text-amber-600 dark:text-amber-300 shadow-xs'
+                                            : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-100'
+                                    }`}
+                                >
+                                    <Edit3 size={13} />
+                                    <span>تعديل بيانات السند</span>
+                                </button>
                             </div>
+                        )}
 
-                            <div className="flex justify-between items-center border-b border-slate-200 dark:border-slate-800 pb-2 text-xs">
-                                <span className="text-slate-500 font-bold">التاريخ والوقت:</span>
-                                <span className="font-mono text-slate-800 dark:text-slate-200">
-                                    {selectedClearanceVoucher.date ? format(selectedClearanceVoucher.date, 'yyyy/MM/dd HH:mm') : '-'}
-                                </span>
-                            </div>
+                        {/* VIEW MODE */}
+                        {clearanceModalMode === 'view' && (
+                            <div className="space-y-3.5">
+                                <div className="bg-slate-50 dark:bg-slate-950 p-4 rounded-xl border border-slate-200 dark:border-slate-800 space-y-2.5">
+                                    <div className="flex justify-between items-center border-b border-slate-200 dark:border-slate-800 pb-2">
+                                        <span className="text-xs text-slate-500 font-bold">رقم السند:</span>
+                                        <span className="text-sm font-extrabold font-mono text-purple-600 dark:text-purple-400">
+                                            #{selectedClearanceVoucher.clearanceNumber || selectedClearanceVoucher.voucherNumber}
+                                        </span>
+                                    </div>
 
-                            <div className="flex justify-between items-center border-b border-slate-200 dark:border-slate-800 pb-2 text-xs">
-                                <span className="text-slate-500 font-bold">الموظف المصفى:</span>
-                                <span className="font-extrabold text-slate-900 dark:text-white">
-                                    {selectedClearanceVoucher.employeeName}
-                                </span>
-                            </div>
+                                    <div className="flex justify-between items-center border-b border-slate-200 dark:border-slate-800 pb-2 text-xs">
+                                        <span className="text-slate-500 font-bold">التاريخ والوقت:</span>
+                                        <span className="font-mono text-slate-800 dark:text-slate-200">
+                                            {selectedClearanceVoucher.date ? format(selectedClearanceVoucher.date, 'yyyy/MM/dd HH:mm') : '-'}
+                                        </span>
+                                    </div>
 
-                            <div className="flex justify-between items-center border-b border-slate-200 dark:border-slate-800 pb-2 text-xs">
-                                <span className="text-slate-500 font-bold">الصندوق المخصوم منه:</span>
-                                <span className="font-bold text-slate-800 dark:text-slate-200">
-                                    {selectedClearanceVoucher.boxType === 'card_cashbox' ? 'صندوق الكروت (ر.ي)' : 'صندوق المحل (ر.س)'}
-                                </span>
-                            </div>
+                                    <div className="flex justify-between items-center border-b border-slate-200 dark:border-slate-800 pb-2 text-xs">
+                                        <span className="text-slate-500 font-bold">الموظف المصفى:</span>
+                                        <span className="font-extrabold text-slate-900 dark:text-white">
+                                            {selectedClearanceVoucher.employeeName}
+                                        </span>
+                                    </div>
 
-                            <div className="flex justify-between items-center border-b border-slate-200 dark:border-slate-800 pb-2 text-xs">
-                                <span className="text-slate-500 font-bold">المستلم (المدير):</span>
-                                <span className="font-bold text-slate-800 dark:text-slate-200">
-                                    {selectedClearanceVoucher.managerName}
-                                </span>
-                            </div>
+                                    <div className="flex justify-between items-center border-b border-slate-200 dark:border-slate-800 pb-2 text-xs">
+                                        <span className="text-slate-500 font-bold">الصندوق المخصوم منه:</span>
+                                        <span className="font-bold text-slate-800 dark:text-slate-200">
+                                            {selectedClearanceVoucher.boxType === 'card_cashbox' ? 'صندوق الكروت (ر.ي)' : 'صندوق المحل (ر.س)'}
+                                        </span>
+                                    </div>
 
-                            <div className="bg-purple-100/80 dark:bg-purple-950/60 border border-purple-300 dark:border-purple-800 rounded-xl p-3 text-center">
-                                <div className="text-[11px] font-bold text-purple-800 dark:text-purple-300">المبلغ المستلم والمصفى:</div>
-                                <div className="text-xl font-black font-mono text-purple-900 dark:text-purple-200 mt-1">
-                                    {selectedClearanceVoucher.amount.toLocaleString()} {selectedClearanceVoucher.currency}
+                                    <div className="flex justify-between items-center border-b border-slate-200 dark:border-slate-800 pb-2 text-xs">
+                                        <span className="text-slate-500 font-bold">المستلم (المدير):</span>
+                                        <span className="font-bold text-slate-800 dark:text-slate-200">
+                                            {selectedClearanceVoucher.managerName || 'المدير'}
+                                        </span>
+                                    </div>
+
+                                    <div className="bg-purple-100/80 dark:bg-purple-950/60 border border-purple-300 dark:border-purple-800 rounded-xl p-3 text-center">
+                                        <div className="text-[11px] font-bold text-purple-800 dark:text-purple-300">المبلغ المستلم والمصفى:</div>
+                                        <div className="text-xl font-black font-mono text-purple-900 dark:text-purple-200 mt-1">
+                                            {selectedClearanceVoucher.amount.toLocaleString()} {selectedClearanceVoucher.currency}
+                                        </div>
+                                    </div>
+
+                                    <div className="text-xs">
+                                        <span className="text-slate-500 font-bold block mb-1">البيان والملاحظات:</span>
+                                        <p className="p-2.5 bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 leading-relaxed text-xs">
+                                            {selectedClearanceVoucher.notes || 'سند استلام وتصفية نقدية من صندوق الموظف إلى صندوق المدير'}
+                                        </p>
+                                    </div>
+                                </div>
+
+                                {/* Action Buttons */}
+                                <div className="flex items-center gap-2 pt-1">
+                                    <button
+                                        type="button"
+                                        onClick={() => handlePrintClearanceVoucher(selectedClearanceVoucher)}
+                                        className="flex-1 py-2.5 bg-purple-600 hover:bg-purple-700 text-white font-extrabold text-xs rounded-xl shadow-xs transition flex items-center justify-center gap-1.5 cursor-pointer"
+                                    >
+                                        <Printer size={15} />
+                                        <span>طباعة السند</span>
+                                    </button>
+
+                                    {canViewAllEmployees && (
+                                        <button
+                                            type="button"
+                                            onClick={() => setClearanceModalMode('edit')}
+                                            className="flex-1 py-2.5 px-3 bg-amber-50 dark:bg-amber-950/60 hover:bg-amber-100 dark:hover:bg-amber-900 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-900/60 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1 cursor-pointer"
+                                            title="تعديل تفاصيل السند"
+                                        >
+                                            <Edit3 size={14} />
+                                            <span>تعديل السند</span>
+                                        </button>
+                                    )}
+
+                                    {canViewAllEmployees && (
+                                        <button
+                                            type="button"
+                                            onClick={async () => {
+                                                const voucherToDelete = selectedClearanceVoucher;
+                                                await handleDeleteManagerClearance(voucherToDelete);
+                                            }}
+                                            className="flex-1 py-2.5 px-3 bg-rose-50 dark:bg-rose-950/60 hover:bg-rose-100 dark:hover:bg-rose-900 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-900/60 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1 cursor-pointer"
+                                            title="إلغاء وحذف هذا السند وإعادة المبلغ لصندوق الموظف"
+                                        >
+                                            <Trash2 size={14} />
+                                            <span>حذف السند</span>
+                                        </button>
+                                    )}
                                 </div>
                             </div>
+                        )}
 
-                            <div className="text-xs">
-                                <span className="text-slate-500 font-bold block mb-1">البيان والملاحظات:</span>
-                                <p className="p-2.5 bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 leading-relaxed">
-                                    {selectedClearanceVoucher.notes || 'سند استلام وتصفية نقدية من صندوق الموظف إلى صندوق المدير'}
-                                </p>
-                            </div>
-                        </div>
+                        {/* EDIT MODE */}
+                        {clearanceModalMode === 'edit' && (
+                            <form onSubmit={handleSaveEditClearance} className="space-y-3.5">
+                                {/* Box Type Selector */}
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
+                                        نوع الصندوق المصفى:
+                                    </label>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => setEditClearanceBoxType('general_cashbox')}
+                                            className={`p-2.5 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                                                editClearanceBoxType === 'general_cashbox'
+                                                    ? 'bg-purple-600 text-white border-purple-600 shadow-xs'
+                                                    : 'bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-800 hover:bg-slate-100'
+                                            }`}
+                                        >
+                                            <ShoppingBag size={14} />
+                                            <span>صندوق المحل (ر.س)</span>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setEditClearanceBoxType('card_cashbox')}
+                                            className={`p-2.5 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                                                editClearanceBoxType === 'card_cashbox'
+                                                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                                                    : 'bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-800 hover:bg-slate-100'
+                                            }`}
+                                        >
+                                            <Wifi size={14} />
+                                            <span>صندوق الكروت (ر.ي)</span>
+                                        </button>
+                                    </div>
+                                </div>
 
-                        <div className="flex items-center gap-2">
-                            <button
-                                type="button"
-                                onClick={() => handlePrintClearanceVoucher(selectedClearanceVoucher)}
-                                className="flex-1 py-2.5 bg-purple-600 hover:bg-purple-700 text-white font-extrabold text-xs rounded-xl shadow-xs transition flex items-center justify-center gap-1.5 cursor-pointer"
-                            >
-                                <Printer size={15} />
-                                <span>طباعة سند التصفية</span>
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => setSelectedClearanceVoucher(null)}
-                                className="px-4 py-2.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold text-xs rounded-xl hover:bg-slate-200 dark:hover:bg-slate-700 transition cursor-pointer"
-                            >
-                                إغلاق
-                            </button>
-                        </div>
+                                {/* Clearance Amount */}
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                                        المبلغ المصفى ({editClearanceBoxType === 'card_cashbox' ? 'ر.ي' : 'ر.س'}): <span className="text-red-500">*</span>
+                                    </label>
+                                    <div className="relative">
+                                        <input
+                                            type="number"
+                                            step="any"
+                                            min="0"
+                                            required
+                                            value={editClearanceAmount}
+                                            onChange={(e) => setEditClearanceAmount(e.target.value)}
+                                            placeholder="أدخل المبلغ..."
+                                            className="w-full pl-12 pr-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-bold font-mono text-slate-900 dark:text-slate-100 outline-none focus:border-purple-600"
+                                        />
+                                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">
+                                            {editClearanceBoxType === 'card_cashbox' ? 'ر.ي' : 'ر.س'}
+                                        </span>
+                                    </div>
+                                </div>
+
+                                {/* Date and Time */}
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                                        تاريخ ووقت السند:
+                                    </label>
+                                    <input
+                                        type="datetime-local"
+                                        value={editClearanceDate}
+                                        onChange={(e) => setEditClearanceDate(e.target.value)}
+                                        className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-mono text-slate-900 dark:text-slate-100 outline-none focus:border-purple-600"
+                                    />
+                                </div>
+
+                                {/* Notes */}
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                                        البيان والملاحظات:
+                                    </label>
+                                    <textarea
+                                        rows={2}
+                                        value={editClearanceNotes}
+                                        onChange={(e) => setEditClearanceNotes(e.target.value)}
+                                        placeholder="سبب التصفية أو تفاصيل إضافية..."
+                                        className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-medium text-slate-900 dark:text-slate-100 outline-none focus:border-purple-600"
+                                    />
+                                </div>
+
+                                {/* Action Buttons */}
+                                <div className="flex items-center gap-2 pt-2">
+                                    <button
+                                        type="submit"
+                                        disabled={isSubmittingClearanceEdit}
+                                        className="flex-1 py-2.5 bg-purple-600 hover:bg-purple-700 text-white font-extrabold text-xs rounded-xl shadow-xs transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                                    >
+                                        {isSubmittingClearanceEdit ? (
+                                            <RefreshCw size={14} className="animate-spin" />
+                                        ) : (
+                                            <Save size={14} />
+                                        )}
+                                        <span>حفظ التعديلات</span>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setClearanceModalMode('view')}
+                                        className="px-4 py-2.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold text-xs rounded-xl hover:bg-slate-200 dark:hover:bg-slate-700 transition cursor-pointer"
+                                    >
+                                        إلغاء
+                                    </button>
+                                </div>
+                            </form>
+                        )}
                     </div>
                 </div>
             )}

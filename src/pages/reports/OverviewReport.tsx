@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, onSnapshot, where } from 'firebase/firestore';
+import { collection, query, onSnapshot, where, limit } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../../lib/firebase';
 import { useAuthStore } from '../../store/authStore';
 import { TrendingUp, TrendingDown, Activity, Package } from 'lucide-react';
@@ -69,17 +69,17 @@ export default function OverviewReport({ dateRange }: { dateRange: { startDate: 
         if (!appUser) return;
         const tenantId = appUser.tenantId || 'single_store';
 
-        const unsubSales = onSnapshot(query(collection(db, 'sales'), where('tenantId', '==', tenantId)), (snap) => {
+        const unsubSales = onSnapshot(query(collection(db, 'sales'), where('tenantId', '==', tenantId), limit(1500)), (snap) => {
             salesData = snap.docs.map(doc => doc.data());
             updateData();
         }, (error) => handleFirestoreError(error, OperationType.GET, 'sales'));
 
-        const unsubPurch = onSnapshot(query(collection(db, 'purchases'), where('tenantId', '==', tenantId)), (snap) => {
+        const unsubPurch = onSnapshot(query(collection(db, 'purchases'), where('tenantId', '==', tenantId), limit(1500)), (snap) => {
             purchasesData = snap.docs.map(doc => doc.data());
             updateData();
         }, (error) => handleFirestoreError(error, OperationType.GET, 'purchases'));
 
-        const unsubCash = onSnapshot(query(collection(db, 'cash'), where('tenantId', '==', tenantId)), (snap) => {
+        const unsubCash = onSnapshot(query(collection(db, 'cash'), where('tenantId', '==', tenantId), limit(1500)), (snap) => {
             let total = 0;
             snap.forEach(doc => {
                 const data = doc.data();
@@ -91,7 +91,7 @@ export default function OverviewReport({ dateRange }: { dateRange: { startDate: 
             if(isMounted) setStats({ ...localStats });
         }, (error) => handleFirestoreError(error, OperationType.GET, 'cash'));
 
-        const unsubProd = onSnapshot(query(collection(db, 'products'), where('tenantId', '==', tenantId)), (snap) => {
+        const unsubProd = onSnapshot(query(collection(db, 'products'), where('tenantId', '==', tenantId), limit(1500)), (snap) => {
             localStats.productsCount = snap.size;
             if(isMounted) setStats({ ...localStats });
         }, (error) => handleFirestoreError(error, OperationType.GET, 'products'));

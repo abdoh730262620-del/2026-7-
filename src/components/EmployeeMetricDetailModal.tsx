@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, FileText, Printer, Search, Download, ShoppingBag, CreditCard, Wifi, Wallet, TrendingDown, Eye, CheckCircle2, Banknote, Sparkles, AlertTriangle } from 'lucide-react';
+import { X, FileText, Printer, Search, Download, ShoppingBag, CreditCard, Wifi, Wallet, TrendingDown, Eye, CheckCircle2, Banknote, Sparkles, AlertTriangle, RefreshCw } from 'lucide-react';
 import { format } from 'date-fns';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
@@ -44,14 +44,15 @@ export const EmployeeMetricDetailModal: React.FC<EmployeeMetricDetailModalProps>
     const [searchTerm, setSearchTerm] = useState('');
     const [cardFilterType, setCardFilterType] = useState<'all' | 'retail' | 'wholesale'>('all');
     const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
+    const [visibleCount, setVisibleCount] = useState(5);
 
     if (!isOpen) return null;
 
     const isCardMetric = ['card_cash', 'card_credit', 'salary_comm'].includes(metricType);
 
     // Calculate separated card metrics
-    const retailItemsAll = items.filter(item => item.saleType !== 'wholesale' && item.saleType !== 'distributor' && !item.distributorId);
-    const wholesaleItemsAll = items.filter(item => item.saleType === 'wholesale' || item.saleType === 'distributor' || Boolean(item.distributorId));
+    const retailItemsAll = items.filter(item => !item.isClearance && !item.isWithdrawal && !item.isVoucher && item.saleType !== 'wholesale' && item.saleType !== 'distributor' && !item.distributorId);
+    const wholesaleItemsAll = items.filter(item => !item.isClearance && !item.isWithdrawal && !item.isVoucher && (item.saleType === 'wholesale' || item.saleType === 'distributor' || Boolean(item.distributorId)));
 
     const totRetailAmount = retailItemsAll.reduce((sum, item) => sum + (Number(item.totalAmount) || 0), 0);
     const totRetailQty = retailItemsAll.reduce((sum, item) => sum + (Number(item.quantity) || 1), 0);
@@ -64,7 +65,14 @@ export const EmployeeMetricDetailModal: React.FC<EmployeeMetricDetailModalProps>
 
     const totWholesaleAmount = wholesaleItemsAll.reduce((sum, item) => sum + (Number(item.totalAmount) || 0), 0);
     const totWholesaleQty = wholesaleItemsAll.reduce((sum, item) => sum + (Number(item.quantity) || 1), 0);
-    const grandCardsAmount = totRetailAmount + totWholesaleAmount;
+    
+    const clearancesTotal = items.filter(item => item.isClearance).reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+    const withdrawalsTotal = items.filter(item => item.isWithdrawal).reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+    const vouchersTotal = items.filter(item => item.isVoucher).reduce((sum, item) => {
+        const amt = Number(item.amount) || 0;
+        return item.type === 'receipt' ? sum + amt : sum - amt;
+    }, 0);
+    const grandCardsAmount = Math.max(0, totRetailAmount + totWholesaleAmount - clearancesTotal - withdrawalsTotal - vouchersTotal);
 
     const getMetricConfig = () => {
         switch (metricType) {
@@ -125,6 +133,7 @@ export const EmployeeMetricDetailModal: React.FC<EmployeeMetricDetailModalProps>
     // Filter items based on search term and cardFilterType
     const filteredItems = items.filter(item => {
         if (isCardMetric && cardFilterType !== 'all') {
+            if (item.isClearance || item.isWithdrawal) return false;
             const isWholesale = item.saleType === 'wholesale' || item.saleType === 'distributor' || Boolean(item.distributorId);
             if (cardFilterType === 'wholesale' && !isWholesale) return false;
             if (cardFilterType === 'retail' && isWholesale) return false;
@@ -563,17 +572,43 @@ export const EmployeeMetricDetailModal: React.FC<EmployeeMetricDetailModalProps>
                                         </tr>
                                     </thead>
                                     <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80 font-medium">
-                                        {filteredItems.map((item, index) => {
+                                        {filteredItems.slice(0, visibleCount).map((item, index) => {
                                             const isCard = metricType === 'card_cash' || metricType === 'card_credit' || metricType === 'salary_comm';
-                                            const invNum = item.invoiceNumber || (isCard ? `CARD-${(item.id || '').slice(0, 6)}` : (item.id || `#${index + 1}`));
+                                            let invNum = '';
+                                            if (item.isClearance) {
+                                                invNum = `تصفية #${item.clearanceNumber || item.voucherNumber || 'سند'}`;
+                                            } else if (item.isWithdrawal) {
+                                                invNum = `سحب #${item.withdrawalNumber || item.voucherNumber || 'سند'}`;
+                                            } else if (item.isVoucher) {
+                                                invNum = `سند #${item.voucherNumber || 'سند'}`;
+                                            } else {
+                                                invNum = item.invoiceNumber || (isCard ? `CARD-${(item.id || '').slice(0, 6)}` : (item.id || `#${index + 1}`));
+                                            }
+
                                             const rawDate = item.createdAt || item.date || item.dateTime;
                                             const dateFormatted = rawDate ? (typeof rawDate === 'number' ? format(rawDate, 'yyyy/MM/dd HH:mm') : String(rawDate)) : '-';
-                                            const partyOrCategory = item.categoryName ? `${item.categoryName} (${item.quantity || 1} كرت)` : (item.customerName || item.userName || item.notes || 'عميل عام');
+                                            
+                                            let partyOrCategory = '';
+                                            if (item.isClearance) {
+                                                partyOrCategory = item.notes || 'تصفية صندوق واستلام مبالغ للمدير';
+                                            } else if (item.isWithdrawal) {
+                                                partyOrCategory = item.notes || 'سحب سلفة نقداً للموظف';
+                                            } else if (item.isVoucher) {
+                                                partyOrCategory = `سند ${item.type === 'receipt' ? 'قبض' : 'صرف'} - ${item.partyName}: ${item.description || ''}`;
+                                            } else {
+                                                partyOrCategory = item.categoryName ? `${item.categoryName} (${item.quantity || 1} كرت)` : (item.customerName || item.userName || item.notes || 'عميل عام');
+                                            }
+
                                             const isWholesale = item.saleType === 'wholesale' || item.saleType === 'distributor' || Boolean(item.distributorId);
                                             const cardComm = isWholesale ? 0 : (typeof item.commissionAmount === 'number' ? item.commissionAmount : ((Number(item.totalAmount) || 0) * (typeof item.commissionPercent === 'number' ? item.commissionPercent / 100 : 0.1)));
                                             
                                             let totalVal = 0;
-                                            if (metricType === 'withdrawals') {
+                                            if (item.isClearance || item.isWithdrawal) {
+                                                totalVal = -(Number(item.amount) || 0);
+                                            } else if (item.isVoucher) {
+                                                const amt = Number(item.amount) || 0;
+                                                totalVal = item.type === 'receipt' ? -amt : amt;
+                                            } else if (metricType === 'withdrawals') {
                                                 totalVal = Number(item.amount) || 0;
                                             } else if (isCard) {
                                                 totalVal = Number(item.totalAmount) || 0;
@@ -581,7 +616,7 @@ export const EmployeeMetricDetailModal: React.FC<EmployeeMetricDetailModalProps>
                                                 totalVal = Number(item.total) || 0;
                                             }
 
-                                            const isClickable = Boolean(onPreviewInvoice && metricType !== 'withdrawals' && metricType !== 'salary_comm');
+                                            const isClickable = Boolean(onPreviewInvoice && !item.isClearance && !item.isWithdrawal && metricType !== 'withdrawals' && metricType !== 'salary_comm');
 
                                             return (
                                                 <tr 
@@ -633,19 +668,35 @@ export const EmployeeMetricDetailModal: React.FC<EmployeeMetricDetailModalProps>
                                                     title={isClickable ? 'انقر لمعاينة الفاتورة' : undefined}
                                                 >
                                                     <td className="py-2.5 px-3 font-mono text-slate-400 text-[11px] whitespace-nowrap">{index + 1}</td>
-                                                    <td className="py-2.5 px-3 font-mono font-bold text-indigo-600 dark:text-indigo-400 whitespace-nowrap">
+                                                    <td className={`py-2.5 px-3 font-mono font-bold whitespace-nowrap ${item.isClearance || item.isWithdrawal || (item.isVoucher && item.type === 'payment') ? 'text-rose-600 dark:text-rose-400' : 'text-indigo-600 dark:text-indigo-400'}`}>
                                                         {invNum}
                                                     </td>
                                                     <td className="py-2.5 px-3 font-mono text-slate-500 text-[11px] whitespace-nowrap">
                                                         {dateFormatted}
                                                     </td>
-                                                    <td className="py-2.5 px-3 text-slate-800 dark:text-slate-200 font-extrabold whitespace-nowrap">
+                                                    <td className={`py-2.5 px-3 font-extrabold whitespace-nowrap ${item.isClearance || item.isWithdrawal || (item.isVoucher && item.type === 'payment') ? 'text-rose-700/90 dark:text-rose-300/90' : 'text-slate-800 dark:text-slate-200'}`}>
                                                         {partyOrCategory}
                                                     </td>
 
                                                     {isCardMetric && (
                                                         <td className="py-2.5 px-3 whitespace-nowrap">
-                                                            {isWholesale ? (
+                                                            {item.isClearance ? (
+                                                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 text-[10px] font-black font-sans">
+                                                                    تصفية واستلام (مدير)
+                                                                </span>
+                                                            ) : item.isWithdrawal ? (
+                                                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-red-50 dark:bg-red-950/60 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800 text-[10px] font-black font-sans">
+                                                                    سحب نقدي (سلفة)
+                                                                </span>
+                                                            ) : item.isVoucher ? (
+                                                                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border text-[10px] font-black font-sans ${
+                                                                    item.type === 'receipt' 
+                                                                        ? 'bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-800'
+                                                                        : 'bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800'
+                                                                }`}>
+                                                                    سند {item.type === 'receipt' ? 'قبض' : 'صرف'}
+                                                                </span>
+                                                            ) : isWholesale ? (
                                                                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800 text-[10px] font-black">
                                                                     جملة (بدون عمولة 0%)
                                                                 </span>
@@ -669,7 +720,7 @@ export const EmployeeMetricDetailModal: React.FC<EmployeeMetricDetailModalProps>
                                                         </td>
                                                     )}
 
-                                                    <td className="py-2.5 px-3 font-black font-mono text-slate-900 dark:text-white whitespace-nowrap">
+                                                    <td className={`py-2.5 px-3 font-black font-mono whitespace-nowrap ${item.isClearance || item.isWithdrawal || (item.isVoucher && item.type === 'receipt') ? 'text-rose-600 dark:text-rose-400 font-extrabold' : 'text-slate-900 dark:text-white'}`}>
                                                         {totalVal.toLocaleString()} {['card_cash', 'card_credit', 'salary_comm', 'withdrawals'].includes(metricType) ? 'ر.ي' : 'ر.س'}
                                                     </td>
                                                 </tr>
@@ -677,6 +728,20 @@ export const EmployeeMetricDetailModal: React.FC<EmployeeMetricDetailModalProps>
                                         })}
                                     </tbody>
                                 </table>
+
+                                {/* Pagination: Load More Button */}
+                                {visibleCount < filteredItems.length && (
+                                    <div className="py-4 flex justify-center border-t border-slate-100 dark:border-slate-800 bg-slate-50/30 dark:bg-slate-900/30">
+                                        <button
+                                            type="button"
+                                            onClick={() => setVisibleCount(prev => prev + 10)}
+                                            className="flex items-center gap-2 px-6 py-2 bg-white dark:bg-slate-800 border-2 border-indigo-100 dark:border-slate-700 text-indigo-600 dark:text-indigo-400 rounded-xl text-xs font-black shadow-sm hover:bg-indigo-50 dark:hover:bg-slate-700/80 transition active:scale-95 cursor-pointer"
+                                        >
+                                            <RefreshCw size={14} className="animate-spin-slow" />
+                                            <span>عرض المزيد من السجلات ({filteredItems.length - visibleCount} متبقية)</span>
+                                        </button>
+                                    </div>
+                                )}
                             </div>
                         )}
                     </div>

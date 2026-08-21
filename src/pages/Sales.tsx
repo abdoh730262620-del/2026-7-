@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { collection, query, onSnapshot, getDocs, doc, increment, orderBy, limit, where, writeBatch } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { LocalCache } from '../lib/localCache';
+import { usageMonitor } from '../lib/usageMonitor';
 import { useAuthStore } from '../store/authStore';
 import { useInvoiceStore, CartItem } from '../store/invoiceStore';
 import { useSettingsStore } from '../store/settingsStore';
@@ -267,6 +268,7 @@ export default function Sales() {
         
         if (!providedBatch) {
             await batch.commit();
+            usageMonitor.trackWrite(1);
             await logUserAction(actionType === 'returned' ? 'إرجاع فاتورة مبيعات' : 'إلغاء فاتورة مبيعات', `تم ${actionType === 'returned' ? 'إرجاع' : 'إلغاء'} الفاتورة ${invoice.invoiceNumber}`);
         }
     };
@@ -383,6 +385,7 @@ export default function Sales() {
             }
 
             await batch.commit();
+            usageMonitor.trackWrite(1);
             await logUserAction('استرجاع جزئي لفاتورة مبيعات', `تم استرجاع جزئي بقيمة ${refundValue} للفاتورة ${invoice.invoiceNumber}`);
             setAlertDialog({ isOpen: true, message: 'تم تنفيذ الاسترجاع الجزئي للفاتورة واستعادة المخزون المعني.' });
         } catch (error: any) {
@@ -473,6 +476,7 @@ export default function Sales() {
                     });
 
                     await batch.commit();
+                    usageMonitor.trackWrite(1);
 
                     await logUserAction('سداد سريع من الرصيد', `تم سداد الفاتورة ${invoice.invoiceNumber} بقيمة ${invoiceRemaining.toFixed(2)} ر.س خصماً من رصيد دائن للعميل ${customer.name}`);
                     setAlertDialog({ isOpen: true, message: 'تم تسوية الفاتورة بنجاح مقتطعةً من رصيد العميل الدائن.' });
@@ -1094,6 +1098,7 @@ export default function Sales() {
             });
             
             await batch.commit();
+            usageMonitor.trackWrite(1);
             logUserAction('عملية بيع', `إتمام عملية بيع برقم ${finalInvoiceNum} بقيمة ${total} ر.س. طريقة الدفع: ${paymentMethod}`).catch(() => {});
             
             clearSales();

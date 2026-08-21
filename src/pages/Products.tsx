@@ -9,6 +9,7 @@ import { useNavigate } from 'react-router-dom';
 import { printReport } from '../lib/printHelper';
 import { BarcodeScannerModal } from '../components/BarcodeScannerModal';
 import { LocalCache } from '../lib/localCache';
+import { usageMonitor } from '../lib/usageMonitor';
 
 interface Product {
     id: string;
@@ -250,6 +251,7 @@ export default function Products() {
                 tenantId,
                 createdAt: Date.now()
             });
+            usageMonitor.trackWrite(1);
             await logUserAction('إضافة تصنيف', `تم إضافة تصنيف: ${categoryName} برقم: ${nextNum}`);
             setCategoryNum('');
             setCategoryName('');
@@ -306,11 +308,13 @@ export default function Products() {
 
             if (editingProduct) {
                 await updateDoc(doc(db, 'products', editingProduct.id), productPayload);
+                usageMonitor.trackWrite(1);
                 await LocalCache.updateCachedItem<Product>('products', tenantId, { id: editingProduct.id, ...productPayload });
                 setProducts(prev => prev.map(p => p.id === editingProduct.id ? { ...p, ...productPayload } : p));
                 await logUserAction('تعديل منتج', `تم تعديل منتج: ${name}`);
             } else {
                 await setDoc(doc(db, 'products', productId), productPayload);
+                usageMonitor.trackWrite(1);
                 const newProduct = { id: productId, ...productPayload };
                 await LocalCache.updateCachedItem<Product>('products', tenantId, newProduct);
                 setProducts(prev => [newProduct, ...prev]);

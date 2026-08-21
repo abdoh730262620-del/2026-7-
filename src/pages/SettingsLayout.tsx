@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import { Users, DatabaseZap, ShieldCheck, ChevronLeft, Printer, Smartphone, Cpu, Palette, Terminal, RefreshCw, CheckCircle2 } from 'lucide-react';
 import { LocalCache } from '../lib/localCache';
+import UsageDashboard from '../components/UsageDashboard';
 
 export default function SettingsLayout() {
     const navigate = useNavigate();
@@ -179,6 +180,10 @@ export default function SettingsLayout() {
                         </>
                     )}
                 </button>
+            </div>
+
+            <div className="mt-8">
+                <UsageDashboard />
             </div>
         </div>
     );

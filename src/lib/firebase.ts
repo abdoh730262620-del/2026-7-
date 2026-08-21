@@ -3,12 +3,6 @@ import {
     getFirestore, 
     initializeFirestore, 
     memoryLocalCache, 
-    persistentLocalCache, 
-    persistentMultipleTabManager,
-    CACHE_SIZE_UNLIMITED,
-    onSnapshotsInSync,
-    disableNetwork,
-    enableNetwork,
     terminate
 } from "firebase/firestore";
 import { getAuth, setPersistence, indexedDBLocalPersistence } from "firebase/auth";
@@ -20,40 +14,32 @@ const app = initializeApp(firebaseConfig);
 
 let dbInstance: any;
 
-function setupNetworkSync(dbRef: any) {
-    if (!dbRef) return;
+// Initialize Firestore with a robust configuration for sandboxed/multi-tab environments.
+// We prefer memoryLocalCache() to avoid common IndexedDB assertion failures (ID: ca9 / ID: b815).
+const initFirestore = () => {
+    try {
+        // Check if we should fallback to memory cache via sessionStorage
+        let useMemoryOnly = true; 
+        try {
+            if (sessionStorage.getItem('firestore_use_memory_cache') === 'true') {
+                useMemoryOnly = true;
+            }
+        } catch (e) {}
 
-    const handleNetworkChange = () => {
-        if (window.navigator.onLine) {
-            console.log("App is online. Enabling Firestore network...");
-            enableNetwork(dbRef).catch(err => console.warn("Failed to enable Firestore network:", err));
-        } else {
-            console.log("App is offline. Disabling Firestore network...");
-            disableNetwork(dbRef).catch(err => console.warn("Failed to disable Firestore network:", err));
-        }
-    };
-
-    window.addEventListener('online', handleNetworkChange);
-    window.addEventListener('offline', handleNetworkChange);
-
-    // Initial check on startup
-    if (!window.navigator.onLine) {
-        console.log("App is initially offline. Disabling Firestore network...");
-        disableNetwork(dbRef).catch(err => console.warn("Failed to initially disable Firestore network:", err));
+        const firestore = initializeFirestore(app, {
+            localCache: memoryLocalCache(),
+            ignoreUndefinedProperties: true
+        }, firebaseConfig.firestoreDatabaseId);
+        
+        console.log("Firestore initialized successfully.");
+        return firestore;
+    } catch (e) {
+        console.warn("Failed to initializeFirestore, falling back to getFirestore:", e);
+        return getFirestore(app, firebaseConfig.firestoreDatabaseId);
     }
-}
+};
 
-// We initialize Firestore with memoryLocalCache() to prevent IndexedDB assertion failures
-// (e.g., ID: ca9 / ID: b815) in sandboxed or multi-tab browser environments.
-try {
-    dbInstance = initializeFirestore(app, {
-        localCache: memoryLocalCache()
-    }, firebaseConfig.firestoreDatabaseId);
-    console.log("Firestore initialized safely with memoryLocalCache.");
-} catch (e) {
-    dbInstance = getFirestore(app, firebaseConfig.firestoreDatabaseId);
-}
-setupNetworkSync(dbInstance);
+dbInstance = initFirestore();
 
 export const db = dbInstance;
 export const auth = getAuth(app);
@@ -127,8 +113,12 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   const errorMessage = error instanceof Error ? error.message : String(error);
   const errCode = (error as any)?.code;
 
-  if (errorMessage.includes('INTERNAL ASSERTION FAILED') || errorMessage.includes('Unexpected state') || errorMessage.includes('ca9') || errorMessage.includes('b815')) {
-    console.warn('Firestore Internal Assertion Error safely handled and suppressed:', errorMessage);
+  if (errorMessage.includes('INTERNAL ASSERTION FAILED') || 
+      errorMessage.includes('Unexpected state') || 
+      errorMessage.includes('ca9') || 
+      errorMessage.includes('b815') ||
+      errorMessage.includes('Target ID already exists')) {
+    console.warn('Firestore Internal SDK Error caught and suppressed:', errorMessage);
     return;
   }
 

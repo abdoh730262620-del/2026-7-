@@ -30,6 +30,9 @@ export default function Layout() {
     const { isSalesFocusMode } = useInvoiceStore();
     const showDashboardSearch = useUIStore((s) => s.showDashboardSearch);
     const setShowDashboardSearch = useUIStore((s) => s.setShowDashboardSearch);
+    const dashboardLastUpdated = useUIStore((s) => s.dashboardLastUpdated);
+    const isDashboardRefreshing = useUIStore((s) => s.isDashboardRefreshing);
+    const triggerDashboardRefresh = useUIStore((s) => s.triggerDashboardRefresh);
 
     // Unified Back Action: handles hardware back button, browser back, and header back button
     const handleUnifiedBack = useCallback(() => {
@@ -258,7 +261,7 @@ export default function Layout() {
     );
     const currentPageLabel = currentPageItem?.label;
     const isHome = location.pathname === '/';
-    const headerTitle = isHome ? 'نظام المبيعات المتكامل' : (currentPageLabel || 'نظام المبيعات');
+    const headerTitle = isHome ? 'السعيدة' : (currentPageLabel || 'السعيدة');
 
     const handleLogout = async () => {
         await logout();
@@ -283,6 +286,23 @@ export default function Layout() {
                     </div>
                     
                     <div className="flex items-center gap-2 md:gap-3">
+                        {/* Dashboard Refresh & Last Updated Icon Button */}
+                        {isHome && (
+                            <button
+                                onClick={() => triggerDashboardRefresh()}
+                                disabled={isDashboardRefreshing}
+                                className={`p-2 rounded-xl border shadow-sm transition-all duration-300 relative group flex items-center justify-center cursor-pointer ${
+                                    isDashboardRefreshing
+                                        ? 'bg-indigo-50 dark:bg-indigo-950/40 border-indigo-200 dark:border-indigo-800 text-indigo-600 dark:text-indigo-400'
+                                        : 'bg-white dark:bg-slate-800 border-gray-100 dark:border-slate-700 text-indigo-600 dark:text-indigo-400 hover:scale-105 hover:bg-indigo-50/50'
+                                }`}
+                                title={`آخر تحديث للوحة التحكم: ${dashboardLastUpdated ? new Date(dashboardLastUpdated).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }) : 'مؤخراً'} • اضغط للتحديث الفوري`}
+                            >
+                                <RefreshCw size={20} className={isDashboardRefreshing ? 'animate-spin' : ''} />
+                                <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-indigo-500" />
+                            </button>
+                        )}
+
                         {/* Sync Status Icon Button */}
                         <button
                             onClick={() => {
@@ -296,6 +316,8 @@ export default function Layout() {
                                     ? 'border-red-100 dark:border-red-950/30 text-red-500 dark:text-red-400 bg-red-50/20'
                                     : isSyncing
                                     ? 'border-blue-100 dark:border-blue-950/30 text-blue-500 dark:text-blue-400 bg-blue-50/20'
+                                    : daysNoSync > 0
+                                    ? 'border-amber-100 dark:border-amber-950/30 text-amber-500 dark:text-amber-400 bg-amber-50/20 animate-pulse'
                                     : 'border-emerald-100 dark:border-emerald-950/30 text-emerald-500 dark:text-emerald-400 hover:scale-105 hover:bg-slate-50 dark:hover:bg-slate-700/50'
                             }`}
                             title={
@@ -303,6 +325,8 @@ export default function Layout() {
                                     ? 'وضع الأوفلاين (غير متصل بالسحابة)'
                                     : isSyncing
                                     ? `جاري المزامنة... ${syncProgress}%`
+                                    : daysNoSync > 0
+                                    ? `تنبيه: لم يتم المزامنة منذ ${daysNoSync} يوم • اضغط للمزامنة`
                                     : 'متصل بالسحابة • اضغط للمزامنة اليدوية'
                             }
                         >
@@ -311,12 +335,19 @@ export default function Layout() {
                             ) : !isOnline ? (
                                 <CloudOff size={20} className="animate-pulse" />
                             ) : (
-                                <Cloud size={20} />
+                                <Cloud size={20} className={daysNoSync > 0 ? 'text-amber-500' : ''} />
                             )}
                             {/* Dot Indicator */}
                             <span className={`absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full border border-white dark:border-slate-800 ${
-                                !isOnline ? 'bg-red-500 animate-pulse' : isSyncing ? 'bg-blue-500 animate-bounce' : 'bg-emerald-500'
+                                !isOnline ? 'bg-red-500 animate-pulse' : isSyncing ? 'bg-blue-500 animate-bounce' : daysNoSync > 0 ? 'bg-amber-500' : 'bg-emerald-500'
                             }`} />
+                            
+                            {/* Days Badge */}
+                            {daysNoSync > 0 && !isSyncing && isOnline && (
+                                <span className="absolute -bottom-1 -left-1 bg-amber-600 text-white text-[8px] font-black px-1 rounded-full border border-white dark:border-slate-800">
+                                    {daysNoSync}d
+                                </span>
+                            )}
                         </button>
 
                         {isHome && (
@@ -352,20 +383,7 @@ export default function Layout() {
                 </header>
             )}
 
-            {/* Offline Sync Warning Banner */}
-            {!isSalesFocusMode && daysNoSync > 0 && (
-                <div className="bg-amber-50 dark:bg-amber-900/40 border-b border-amber-200 dark:border-amber-800 px-4 py-2 flex items-center justify-between shrink-0 z-20">
-                    <div className="flex items-center gap-2">
-                        <RefreshCw className="text-amber-600 animate-spin-slow" size={16} />
-                        <span className="text-amber-900 dark:text-amber-100 text-[11px] font-bold">
-                            تنبيه: لم يتم المزامنة مع السحابة منذ ({daysNoSync}) {daysNoSync === 1 ? 'يوم' : 'أيام'}. يرجى السعي للارتباط بالإنترنت لحفظ البيانات سحابياً!
-                        </span>
-                    </div>
-                    {isOnline && (
-                        <span className="text-[10px] font-bold text-amber-700 dark:text-amber-300">جاري المحاولة...</span>
-                    )}
-                </div>
-            )}
+
 
             {/* Overlay */}
             {isMobileMenuOpen && (
